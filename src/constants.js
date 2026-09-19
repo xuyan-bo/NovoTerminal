@@ -7,9 +7,18 @@ export const OS_SVG = {
 
 export const OS_NAME = { win: 'Windows', mac: 'macOS', linux: 'Linux' };
 
+/** Reserved default group: always in the tree, not selectable, not deletable */
+export const UNGROUPED_ID = 'g-ungrouped';
+export const UNGROUPED_NAME = '未分组';
+
+export function isUngroupedGroup(g) {
+  return !!(g && (g.id === UNGROUPED_ID || g.id === 'g-default'));
+}
+
 export const CATALOG = {
   win: [
     { id: 'rdp', name: 'RDP', desc: 'Windows 远程桌面', defaultPort: 3389, rec: true },
+    { id: 'ssh', name: 'SSH', desc: '终端 / 命令行（OpenSSH）', defaultPort: 22, rec: false },
     { id: 'vnc', name: 'VNC', desc: 'VNC Server 兼容', defaultPort: 5900, rec: false },
   ],
   mac: [
@@ -17,8 +26,8 @@ export const CATALOG = {
     { id: 'ssh', name: 'SSH', desc: '终端 / SFTP', defaultPort: 22, rec: false },
   ],
   linux: [
-    { id: 'vnc', name: 'VNC', desc: 'x11vnc / TurboVNC', defaultPort: 5900, rec: true },
-    { id: 'ssh', name: 'SSH', desc: '终端 / SFTP', defaultPort: 22, rec: false },
+    { id: 'ssh', name: 'SSH', desc: '终端 / SFTP', defaultPort: 22, rec: true },
+    { id: 'vnc', name: 'VNC', desc: 'x11vnc / TurboVNC', defaultPort: 5900, rec: false },
     { id: 'rdp', name: 'RDP (xrdp)', desc: '需安装 xrdp', defaultPort: 3389, rec: false },
   ],
 };

@@ -30,6 +30,18 @@ export const api = hasBridge
       async getSettings() {
         return mockState.settings;
       },
+      async exportGroups() {
+        return JSON.stringify(mockState.groups, null, 2);
+      },
+      async importGroups() {
+        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+      },
+      async reorderGroups() {
+        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+      },
+      async reorderAsset() {
+        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+      },
       async sessionCapabilities() {
         return { embeddable: false, resolution: 'partial', colorDepth: true, refreshRate: false, multimon: 'partial', clipboard: true, processTracked: true };
       },
@@ -42,7 +54,28 @@ export const api = hasBridge
       async sessionDisconnect() {
         return { ok: true };
       },
+      async sshConnect() {
+        throw Object.assign(new Error('浏览器预览模式无法 SSH，请用 npm run electron 启动'), { code: 'NO_BRIDGE' });
+      },
+      async sshWrite() {
+        return false;
+      },
+      async sshResize() {
+        return false;
+      },
+      async sshDisconnect() {
+        return { ok: true };
+      },
+      onSshData() {
+        return () => {};
+      },
+      onSshState() {
+        return () => {};
+      },
       onSessionState() {
+        return () => {};
+      },
+      onStoreChanged() {
         return () => {};
       },
       platform: 'browser',

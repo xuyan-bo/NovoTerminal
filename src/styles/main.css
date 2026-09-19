@@ -14,7 +14,7 @@
   --warning: #e6a23c;
   --danger: #f56c6c;
   --win: #3b82f6;
-  --mac: #a78bfa;
+  --mac: #1a1a1a;
   --linux: #34d399;
 }
 
@@ -310,6 +310,24 @@ button {
   color: var(--text);
 }
 
+.group-h[draggable='true'],
+.node[draggable='true'] {
+  cursor: grab;
+}
+
+.group-block.dragging-group > .group-h,
+.node.dragging {
+  opacity: 0.45;
+}
+
+.group-h.drag-over,
+.node.drag-over,
+.group-block.drop-group > .group-h {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+  background: var(--accent-soft);
+}
+
 .node {
   display: flex;
   align-items: center;
@@ -511,15 +529,30 @@ button {
   display: flex;
 }
 
+/* SSH terminal: never auto-scroll the host view — xterm manages its own scroll */
+.view.ssh-view {
+  overflow: hidden !important;
+}
+.view.ssh-view.show {
+  overflow: hidden !important;
+}
+
 .home-scroll {
   flex: 1;
   overflow-y: auto;
   padding: 20px 24px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.home-top {
+  flex: 0 0 auto;
 }
 
 .home-top h2 {
-  font-size: 16px;
-  font-weight: 650;
+  font-size: 18px;
+  margin: 0;
 }
 
 .home-top p {
@@ -530,9 +563,12 @@ button {
 }
 
 .dash-grid {
+  flex: 0 0 auto;
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
+  grid-template-columns: 1fr 1.4fr;
+  grid-template-rows: auto auto;
   gap: 14px;
+  align-items: start;
 }
 
 .dash-card {
@@ -540,9 +576,38 @@ button {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 14px 16px;
-  min-height: 150px;
+  min-height: 120px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+/* left column: assets on top, backup under it */
+.dash-card.dash-assets {
+  grid-column: 1;
+  grid-row: 1;
+  min-height: 336px;
+  height: 336px;
+}
+
+.dash-card.dash-backup {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 200px;
+  height: 200px;
+  align-self: start;
+}
+
+/* right column: recent connections — same height as assets card */
+.dash-card.dash-recent {
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 336px;
+  height: 336px;
+}
+
+.dash-card.dash-top {
+  /* legacy alias */
 }
 
 .dash-card h3 {
@@ -553,6 +618,7 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
 }
 
 .dash-card h3 .tag {
@@ -571,6 +637,7 @@ button {
   align-items: flex-end;
   gap: 12px;
   margin-bottom: 12px;
+  flex: 0 0 auto;
 }
 
 .stat-big .num {
@@ -590,6 +657,8 @@ button {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  flex: 0 0 auto;
+  margin-bottom: 10px;
 }
 
 .chip {
@@ -604,9 +673,31 @@ button {
   color: var(--text-2);
 }
 
+.chip.os-chip .os-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.chip.os-chip .os-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
 .chip b {
   color: var(--text);
   font-family: Consolas, monospace;
+}
+
+.pie-wrap {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.os-pie-chart {
+  width: 100%;
+  height: 100%;
+  min-height: 140px;
 }
 
 .recent-list {
@@ -942,7 +1033,7 @@ button {
 .method-row {
   display: grid;
   grid-template-columns: auto 1fr auto auto auto;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
   padding: 10px 12px;
   border: 1px solid var(--border);

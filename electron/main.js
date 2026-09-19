@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { AssetStore } = require('./store/assetStore');
 const { SessionManager } = require('./session/SessionManager');
+const { SshSessionManager } = require('./ssh/SshSessionManager');
 
 /** Advanced defaults mirrored from renderer constants — used when method.advanced is missing */
 const ADVANCED_DEFAULTS = {
@@ -108,6 +109,7 @@ function mapRdpRedirect(advanced) {
 let win = null;
 let store = null;
 let sessions = null;
+let sshSessions = null;
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
@@ -173,6 +175,8 @@ function registerIpc() {
   handle('store:snapshot', () => store.snapshot());
   handle('store:create-group', (p) => unwrap(store.createGroup(p)));
   handle('store:update-group', (gid, p) => unwrap(store.updateGroup(gid, p)));
+  handle('store:reorder-groups', (p) => unwrap(store.reorderGroups(p && p.fromId, p && p.toId)));
+  handle('store:reorder-asset', (p) => unwrap(store.reorderAsset(p)));
   handle('store:delete-group', (gid) => unwrap(store.deleteGroup(gid)));
   handle('store:create-asset', (gid, p) => unwrap(store.createAsset(gid, p)));
   handle('store:update-asset', (aid, p) => unwrap(store.updateAsset(aid, p)));
@@ -219,11 +223,39 @@ function registerIpc() {
   });
   handle('session:disconnect', (sid) => sessions.disconnect(sid));
   handle('session:list', () => sessions.listActive());
+
+  // ---- SSH terminal ----
+  handle('ssh:connect', async (req) => {
+    const hit = store.findAsset(req.assetId);
+    if (!hit) throw new Error('asset not found');
+    const method = hit.asset.methods && hit.asset.methods[req.methodId];
+    if (!method || !method.enabled) throw new Error('method not enabled');
+    const result = await sshSessions.connect({
+      assetId: hit.asset.id,
+      asset: { host: hit.asset.host, user: hit.asset.user, pass: hit.asset.pass },
+      method: { id: req.methodId, port: method.port || 22, advanced: method.advanced },
+      advanced: method.advanced,
+      cols: req.cols,
+      rows: req.rows,
+    });
+    store.pushRecent(hit.asset, {
+      id: 'ssh',
+      proto: 'SSH',
+      port: method.port || 22,
+    });
+    send('store:changed', { reason: 'recent' });
+    return result;
+  });
+  handle('ssh:write', (sessionId, data) => sshSessions.write(sessionId, data));
+  handle('ssh:resize', (sessionId, cols, rows) => sshSessions.resize(sessionId, cols, rows));
+  handle('ssh:disconnect', (sid) => sshSessions.disconnect(sid));
+  handle('ssh:list', () => sshSessions.list());
 }
 
 app.whenReady().then(() => {
   store = new AssetStore();
   sessions = new SessionManager({ store, send });
+  sshSessions = new SshSessionManager({ send });
   registerIpc();
   createWindow();
 

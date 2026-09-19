@@ -75,7 +75,7 @@
 </template>
 
 <script>
-import { store, findAsset, enabledMethods, api, unwrap, openMethodAdvanced } from '../store';
+import { store, findAsset, enabledMethods, api, unwrap, openMethodAdvanced, openSshSession, refresh } from '../store';
 import { OS_SVG, OS_NAME, methodPillClass } from '../constants';
 import { t } from '../i18n';
 
@@ -153,12 +153,23 @@ export default {
       this.loadingId = m.id;
       this.sessionNote = '';
       try {
+        if (m.id === 'ssh') {
+          openSshSession({
+            assetId: this.assetId,
+            assetName: this.asset && this.asset.name,
+            host: this.asset && this.asset.host,
+            port: m.port,
+            methodId: 'ssh',
+          });
+          return;
+        }
         unwrap(
           await api.sessionConnect({
             assetId: this.assetId,
             methodId: m.id,
           })
         );
+        refresh().catch(() => {});
         if (m.id === 'rdp') {
           // mstsc launched — no toast
         } else {

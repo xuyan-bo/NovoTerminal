@@ -7,12 +7,28 @@
     <div class="side-search">
       <el-input v-model="filter" size="mini" :placeholder="$t('sidebar.search')" clearable />
     </div>
-    <div class="tree" @contextmenu.prevent="onBlankCtx">
-      <div v-for="g in filteredGroups" :key="g.id" class="group-block">
+    <div class="tree" @contextmenu.prevent="onBlankCtx" @dragend="onDragEnd" @drop="onTreeDrop">
+      <div
+        v-for="g in filteredGroups"
+        :key="g.id"
+        class="group-block"
+        :class="{
+          'dragging-group': drag.type === 'group' && drag.id === g.id,
+          'drop-group': dropKey === 'g:' + g.id,
+        }"
+        @dragover.prevent="onGroupBlockOver($event, g)"
+        @drop.prevent.stop="onGroupBlockDrop($event, g)"
+      >
         <div
           class="group-h"
+          :draggable="canDrag"
+          :class="{ 'drag-over': dropKey === 'g:' + g.id }"
           @click="toggleGroup(g)"
           @contextmenu.prevent.stop="onGroupCtx($event, g)"
+          @dragstart="onGroupDragStart($event, g)"
+          @dragover.prevent="onGroupHeadOver($event, g)"
+          @dragleave="onDragLeave($event, 'g:' + g.id)"
+          @drop.prevent.stop="onGroupHeadDrop($event, g)"
         >
           <span :style="{ transform: g.open ? '' : 'rotate(-90deg)', display: 'inline-block', fontSize: '10px' }">▾</span>
           <span :style="{ width: '8px', height: '8px', borderRadius: '2px', background: g.color, display: 'inline-block' }"></span>
@@ -24,10 +40,19 @@
             v-for="n in g.nodes"
             :key="n.id"
             class="node"
-            :class="{ active: activeAssetId === n.id }"
+            :class="{
+              active: activeAssetId === n.id,
+              dragging: drag.type === 'asset' && drag.id === n.id,
+              'drag-over': dropKey === 'n:' + n.id,
+            }"
+            :draggable="canDrag"
             @click="onClickNode(n)"
             @dblclick="onDbl(n)"
             @contextmenu.prevent.stop="onNodeCtx($event, g, n)"
+            @dragstart="onAssetDragStart($event, g, n)"
+            @dragover.prevent.stop="onAssetOver($event, g, n)"
+            @dragleave="onDragLeave($event, 'n:' + n.id)"
+            @drop.prevent.stop="onAssetDrop($event, g, n)"
           >
             <span class="os-icon" :class="'os-' + n.os" v-html="osSvg(n.os)"></span>
             <div class="node-meta">
@@ -71,14 +96,22 @@ import {
   api,
   unwrap,
   refresh,
+  openSshSession,
+  reorderGroups,
+  reorderAsset,
 } from '../store';
-import { OS_SVG, methodPillClass } from '../constants';
+import { OS_SVG, methodPillClass, isUngroupedGroup, UNGROUPED_ID } from '../constants';
 import { t } from '../i18n';
 
 export default {
   name: 'SideBar',
   data() {
-    return { filter: '' };
+    return {
+      filter: '',
+      drag: { type: null, id: null, fromGid: null },
+      dropKey: '',
+      dragging: false,
+    };
   },
   computed: {
     groups() {
@@ -86,6 +119,9 @@ export default {
     },
     activeAssetId() {
       return store.activeAssetId;
+    },
+    canDrag() {
+      return !this.filter.trim();
     },
     filteredGroups() {
       const q = this.filter.trim().toLowerCase();
@@ -133,6 +169,133 @@ export default {
     shortProto(id) {
       return id === 'rdp' ? 'RDP' : id === 'vnc' ? 'VNC' : 'SSH';
     },
+
+    // ---------- drag & drop ----------
+    onGroupDragStart(e, g) {
+      if (!this.canDrag) {
+        e.preventDefault();
+        return;
+      }
+      this.drag = { type: 'group', id: g.id, fromGid: null };
+      this.dragging = true;
+      try {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', 'group:' + g.id);
+      } catch (_) {}
+    },
+    onAssetDragStart(e, g, n) {
+      if (!this.canDrag) {
+        e.preventDefault();
+        return;
+      }
+      this.drag = { type: 'asset', id: n.id, fromGid: g.id };
+      this.dragging = true;
+      try {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', 'asset:' + n.id);
+      } catch (_) {}
+    },
+    onDragEnd() {
+      this.clearDrag();
+    },
+    onTreeDrop() {
+      this.clearDrag();
+    },
+    onDragLeave(e, key) {
+      if (this.dropKey === key && !e.currentTarget.contains(e.relatedTarget)) {
+        this.dropKey = '';
+      }
+    },
+    clearDrag() {
+      this.drag = { type: null, id: null, fromGid: null };
+      this.dropKey = '';
+      this.dragging = false;
+    },
+
+    onGroupHeadOver(e, g) {
+      if (!this.drag.type) return;
+      e.dataTransfer.dropEffect = 'move';
+      this.dropKey = 'g:' + g.id;
+    },
+    onGroupBlockOver(e, g) {
+      if (!this.drag.type) return;
+      e.dataTransfer.dropEffect = 'move';
+      if (!this.dropKey) this.dropKey = 'g:' + g.id;
+    },
+    onAssetOver(e, g, n) {
+      if (!this.drag.type) return;
+      e.dataTransfer.dropEffect = 'move';
+      this.dropKey = 'n:' + n.id;
+    },
+
+    async onGroupHeadDrop(e, g) {
+      const drag = { ...this.drag };
+      this.clearDrag();
+      if (!drag.type || !this.canDrag) return;
+      try {
+        if (drag.type === 'group') {
+          if (drag.id === g.id) return;
+          await reorderGroups(drag.id, g.id);
+        } else if (drag.type === 'asset') {
+          // drop on group header → move into that group (end)
+          await reorderAsset({
+            assetId: drag.id,
+            fromGid: drag.fromGid,
+            toGid: g.id,
+            beforeAssetId: null,
+          });
+        }
+      } catch (err) {
+        this.$message.error(err.message || String(err));
+      }
+    },
+
+    async onGroupBlockDrop(e, g) {
+      // empty area under group header
+      const drag = { ...this.drag };
+      this.clearDrag();
+      if (!drag.type || !this.canDrag) return;
+      if (drag.type === 'group') {
+        // only reorder when targeting a different group header; block body is for assets
+        return;
+      }
+      try {
+        if (drag.type === 'asset') {
+          await reorderAsset({
+            assetId: drag.id,
+            fromGid: drag.fromGid,
+            toGid: g.id,
+            beforeAssetId: null,
+          });
+        }
+      } catch (err) {
+        this.$message.error(err.message || String(err));
+      }
+    },
+
+    async onAssetDrop(e, targetG, targetN) {
+      const drag = { ...this.drag };
+      this.clearDrag();
+      if (!drag.type || !this.canDrag) return;
+      try {
+        if (drag.type === 'asset') {
+          if (drag.id === targetN.id) return;
+          await reorderAsset({
+            assetId: drag.id,
+            fromGid: drag.fromGid,
+            toGid: targetG.id,
+            beforeAssetId: targetN.id,
+          });
+        } else if (drag.type === 'group') {
+          // dropping a group onto an asset → reorder groups to that asset's group
+          if (drag.id === targetG.id) return;
+          await reorderGroups(drag.id, targetG.id);
+        }
+      } catch (err) {
+        this.$message.error(err.message || String(err));
+      }
+    },
+
     toggleGroup(g) {
       g.open = !g.open;
       api.updateGroup(g.id, { open: g.open }).catch(() => {});
@@ -146,10 +309,16 @@ export default {
       openAssetDetail(n);
     },
     onNewAsset() {
+      // group is optional; keep empty unless a non-default group is active
+      const active = this.groups.find((g) => g.id === store.activeGroupId);
+      const gid =
+        active && !isUngroupedGroup(active)
+          ? active.id
+          : store.assetDialog.gid || '';
       store.assetDialog = {
         visible: true,
         editId: null,
-        gid: store.activeGroupId || (this.groups[0] || {}).id,
+        gid,
       };
     },
     onNewGroup() {
@@ -162,6 +331,15 @@ export default {
       ]);
     },
     onGroupCtx(e, g) {
+      const ungrouped = isUngroupedGroup(g);
+      if (ungrouped) {
+        this.showMenu(e, [
+          { label: `分组 · ${g.name}`, title: true },
+          { label: t('ctx.inGroupNew'), act: 'new-asset-g', gid: g.id },
+          { label: t('ctx.editGroup'), act: 'edit-group', gid: g.id },
+        ]);
+        return;
+      }
       this.showMenu(e, [
         { label: `分组 · ${g.name}`, title: true },
         { label: t('ctx.inGroupNew'), act: 'new-asset-g', gid: g.id },
@@ -210,11 +388,10 @@ export default {
     async handleCtx(it) {
       try {
         if (it.act === 'new-asset') {
-          store.assetDialog = {
-            visible: true,
-            editId: null,
-            gid: store.activeGroupId || (this.groups[0] || {}).id,
-          };
+          const active = this.groups.find((g) => g.id === store.activeGroupId);
+          const gid =
+            active && !isUngroupedGroup(active) ? active.id : '';
+          store.assetDialog = { visible: true, editId: null, gid };
         } else if (it.act === 'new-asset-g') {
           store.assetDialog = { visible: true, editId: null, gid: it.gid };
         } else if (it.act === 'new-group') {
@@ -245,6 +422,16 @@ export default {
     async connect(asset, method) {
       if (!method) return;
       try {
+        if (method.id === 'ssh') {
+          openSshSession({
+            assetId: asset.id,
+            assetName: asset.name,
+            host: asset.host,
+            port: method.port,
+            methodId: 'ssh',
+          });
+          return;
+        }
         unwrap(
           await api.sessionConnect({
             assetId: asset.id,

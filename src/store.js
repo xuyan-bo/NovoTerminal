@@ -63,6 +63,31 @@ export async function updateGroup(gid, payload) {
   await refresh();
 }
 
+export async function reorderGroups(fromId, toId) {
+  if (api.reorderGroups) {
+    unwrap(await api.reorderGroups({ fromId, toId }));
+  } else {
+    // browser mock: local array swap
+    const gs = store.snapshot.groups || [];
+    const from = gs.findIndex((g) => g.id === fromId);
+    const to = gs.findIndex((g) => g.id === toId);
+    if (from >= 0 && to >= 0 && from !== to) {
+      const list = gs.slice();
+      const [item] = list.splice(from, 1);
+      list.splice(to, 0, item);
+      store.snapshot = { ...store.snapshot, groups: list };
+    }
+  }
+  await refresh();
+}
+
+export async function reorderAsset({ assetId, fromGid, toGid, beforeAssetId }) {
+  if (api.reorderAsset) {
+    unwrap(await api.reorderAsset({ assetId, fromGid, toGid, beforeAssetId }));
+  }
+  await refresh();
+}
+
 export async function deleteGroup(gid) {
   unwrap(await api.deleteGroup(gid));
   await refresh();
@@ -101,6 +126,7 @@ export function enabledMethods(asset) {
   const catalog = {
     win: [
       { id: 'rdp', name: 'RDP', proto: 'RDP', defaultPort: 3389, rec: true },
+      { id: 'ssh', name: 'SSH', proto: 'SSH', defaultPort: 22, rec: false },
       { id: 'vnc', name: 'VNC', proto: 'VNC', defaultPort: 5900, rec: false },
     ],
     mac: [
@@ -108,8 +134,8 @@ export function enabledMethods(asset) {
       { id: 'ssh', name: 'SSH', proto: 'SSH', defaultPort: 22, rec: false },
     ],
     linux: [
-      { id: 'vnc', name: 'VNC', proto: 'VNC', defaultPort: 5900, rec: true },
-      { id: 'ssh', name: 'SSH', proto: 'SSH', defaultPort: 22, rec: false },
+      { id: 'ssh', name: 'SSH', proto: 'SSH', defaultPort: 22, rec: true },
+      { id: 'vnc', name: 'VNC', proto: 'VNC', defaultPort: 5900, rec: false },
       { id: 'rdp', name: 'RDP (xrdp)', proto: 'RDP', defaultPort: 3389, rec: false },
     ],
   };
@@ -153,6 +179,31 @@ export function openAssetDetail(asset) {
     os: asset.os,
     assetId: asset.id,
   });
+}
+
+/** Open an embedded SSH terminal tab (Xshell-style) */
+export function openSshSession({ assetId, assetName, host, port, methodId }) {
+  const mid = methodId || 'ssh';
+  const id = `ssh-${assetId}-${mid}`;
+  const existing = store.tabs.find((t) => t.id === id);
+  if (existing) {
+    store.activeTab = id;
+    return id;
+  }
+  store.tabs.push({
+    id,
+    title: `SSH · ${assetName || host || assetId}`,
+    closable: true,
+    icon: '⌘',
+    kind: 'ssh',
+    assetId,
+    methodId: mid,
+    host: host || '',
+    port: port || 22,
+    assetName: assetName || host || assetId,
+  });
+  store.activeTab = id;
+  return id;
 }
 
 export function removeTabView(id) {

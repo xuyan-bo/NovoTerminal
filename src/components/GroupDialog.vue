@@ -17,11 +17,13 @@
       <el-form-item :label="$t('group.name')" prop="name">
         <el-input
           v-model="form.name"
-          :placeholder="$t('group.namePh')"
+          :placeholder="isUngrouped ? $t('group.ungroupedLocked') : $t('group.namePh')"
           maxlength="64"
           clearable
+          :disabled="isUngrouped"
           @keyup.enter.native="save"
         />
+        <div v-if="isUngrouped" class="hint" style="margin-top:4px">{{ $t('group.ungroupedHint') }}</div>
       </el-form-item>
       <el-form-item :label="$t('group.color')" prop="color">
         <div class="color-row">
@@ -53,6 +55,7 @@
 <script>
 import { store, api, unwrap, refresh } from '../store';
 import { t } from '../i18n';
+import { UNGROUPED_ID, isUngroupedGroup } from '../constants';
 
 const HEX_RE = /^#[0-9A-Fa-f]{6}$/;
 
@@ -131,6 +134,13 @@ export default {
     isEdit() {
       return !!store.groupDialog.editId;
     },
+    isUngrouped() {
+      const id = store.groupDialog.editId;
+      if (!id) return false;
+      if (id === UNGROUPED_ID || id === 'g-default') return true;
+      const g = (store.snapshot.groups || []).find((x) => x.id === id);
+      return isUngroupedGroup(g);
+    },
   },
   watch: {
     visible(v) {
@@ -144,6 +154,7 @@ export default {
         );
         this.form.name = g ? g.name : '';
         this.form.color = normalizeHex(g && g.color);
+        if (this.isUngrouped) this.form.name = this.form.name || '未分组';
       } else {
         this.form.name = '';
         this.form.color = '#409EFF';
@@ -165,7 +176,7 @@ export default {
         if (!valid) return;
         this.saving = true;
         try {
-          const name = this.form.name.trim();
+          const name = this.isUngrouped ? '未分组' : this.form.name.trim();
           const color = normalizeHex(this.form.color);
           if (this.isEdit) {
             unwrap(

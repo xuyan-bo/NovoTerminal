@@ -2,18 +2,28 @@ const fs = require('fs');
 const path = require('path');
 const { app, safeStorage } = require('electron');
 
+const UNGROUPED_ID = 'g-ungrouped';
+const UNGROUPED_NAME = '未分组';
+
+function isUngroupedGroup(g) {
+  return !!(g && (g.id === UNGROUPED_ID || g.id === 'g-default'));
+}
+
+function ungroupedGroup() {
+  return {
+    id: UNGROUPED_ID,
+    name: UNGROUPED_NAME,
+    color: '#909399',
+    open: true,
+    nodes: [],
+    locked: true,
+  };
+}
+
 function defaultData() {
   return {
     version: 1,
-    groups: [
-      {
-        id: 'g-default',
-        name: '未分组',
-        color: '#409EFF',
-        open: true,
-        nodes: [],
-      },
-    ],
+    groups: [ungroupedGroup()],
     recent: [],
     settings: {
       theme: 'dark',
@@ -49,6 +59,8 @@ class AssetStore {
   load() {
     try {
       if (!fs.existsSync(this.file)) {
+        this.data = defaultData();
+        this.ensureUngrouped();
         this.persist();
         return;
       }
@@ -66,6 +78,7 @@ class AssetStore {
       if (!this.data.groups || !this.data.groups.length) {
         this.data.groups = defaultData().groups;
       }
+      this.ensureUngrouped();
       this.data.settings.dataPath = path.dirname(this.file);
     } catch (e) {
       console.error('[store] load failed', e);
@@ -76,7 +89,32 @@ class AssetStore {
       } catch (_) {
         this.data = defaultData();
       }
+      this.ensureUngrouped();
     }
+  }
+
+  /** Keep a reserved ungrouped bucket in the tree; migrate legacy g-default */
+  ensureUngrouped() {
+    if (!Array.isArray(this.data.groups)) this.data.groups = [];
+    let ug = this.data.groups.find((g) => g.id === UNGROUPED_ID);
+    const legacy = this.data.groups.find((g) => g.id === 'g-default');
+    if (!ug && legacy) {
+      legacy.id = UNGROUPED_ID;
+      legacy.name = UNGROUPED_NAME;
+      legacy.locked = true;
+      ug = legacy;
+    }
+    if (!ug) {
+      ug = ungroupedGroup();
+      this.data.groups.push(ug);
+    } else {
+      ug.name = UNGROUPED_NAME;
+      ug.locked = true;
+      if (!ug.color) ug.color = '#909399';
+      if (!Array.isArray(ug.nodes)) ug.nodes = [];
+    }
+    // assets that somehow lost their group land here
+    return ug;
   }
 
   persist() {
@@ -101,6 +139,7 @@ class AssetStore {
   }
 
   snapshot() {
+    this.ensureUngrouped();
     this.data.settings.dataPath = path.dirname(this.file);
     return JSON.parse(JSON.stringify(this.data));
   }
@@ -137,6 +176,14 @@ class AssetStore {
   updateGroup(gid, payload) {
     const g = this.findGroup(gid);
     if (!g) throw new Error('group not found');
+    if (isUngroupedGroup(g)) {
+      // default group: only color is mutable
+      if (payload.color) g.color = payload.color;
+      if (typeof payload.open === 'boolean') g.open = payload.open;
+      g.name = UNGROUPED_NAME;
+      this.persist();
+      return this.snapshot();
+    }
     if (payload.name) g.name = payload.name;
     if (payload.color) g.color = payload.color;
     if (typeof payload.open === 'boolean') g.open = payload.open;
@@ -144,20 +191,84 @@ class AssetStore {
     return this.snapshot();
   }
 
+  /** Drag-sort groups: move fromId to toId's position */
+  reorderGroups(fromId, toId) {
+    if (!fromId || !toId || fromId === toId) return this.snapshot();
+    const groups = this.data.groups;
+    const from = groups.findIndex((g) => g.id === fromId);
+    const to = groups.findIndex((g) => g.id === toId);
+    if (from < 0 || to < 0) throw new Error('group not found');
+    const [item] = groups.splice(from, 1);
+    groups.splice(to, 0, item);
+    this.persist();
+    return this.snapshot();
+  }
+
+  /**
+   * Drag-sort assets.
+   * @param {object} p { assetId, fromGid, toGid, beforeAssetId? }
+   *   beforeAssetId null/absent → append to end of target group
+   */
+  reorderAsset(p) {
+    const assetId = p && p.assetId;
+    if (!assetId) throw new Error('asset not found');
+    const hit = this.findAsset(assetId);
+    if (!hit) throw new Error('asset not found');
+    const fromG = hit.group;
+    const asset = hit.asset;
+    const toG = (p.toGid && this.findGroup(p.toGid)) || fromG;
+    if (!toG) throw new Error('group not found');
+
+    fromG.nodes = fromG.nodes.filter((n) => n.id !== assetId);
+    let insertAt = toG.nodes.length;
+    if (p.beforeAssetId) {
+      const bi = toG.nodes.findIndex((n) => n.id === p.beforeAssetId);
+      if (bi >= 0) insertAt = bi;
+    }
+    // clamp when moving within same list after removal shifted indices
+    if (insertAt > toG.nodes.length) insertAt = toG.nodes.length;
+    toG.nodes.splice(insertAt, 0, asset);
+    toG.open = true;
+    this.persist();
+    return this.snapshot();
+  }
+
   deleteGroup(gid) {
     const i = this.data.groups.findIndex((g) => g.id === gid);
     if (i < 0) throw new Error('group not found');
+    const g = this.data.groups[i];
+    if (isUngroupedGroup(g)) {
+      throw new Error('默认分组「未分组」不可删除');
+    }
     if (this.data.groups.length <= 1) {
       throw new Error('至少保留一个分组');
     }
+    const ug = this.ensureUngrouped();
+    // move assets into ungrouped instead of dropping them
+    if (ug && ug.id !== g.id && Array.isArray(g.nodes) && g.nodes.length) {
+      ug.nodes = ug.nodes.concat(g.nodes);
+      ug.open = true;
+    }
     this.data.groups.splice(i, 1);
+    this.ensureUngrouped();
     this.persist();
     return this.snapshot();
   }
 
   createAsset(gid, payload) {
-    const g = this.findGroup(gid) || this.data.groups[0];
-    if (!g) throw new Error('no group');
+    this.ensureUngrouped();
+    let g = null;
+    if (gid) g = this.findGroup(gid);
+    if (!g) {
+      g =
+        this.data.groups.find((x) => x.id === UNGROUPED_ID) ||
+        this.data.groups.find((x) => !isUngroupedGroup(x)) ||
+        this.data.groups[0];
+    }
+    if (!g) {
+      g = ungroupedGroup();
+      this.data.groups.push(g);
+    }
     const asset = {
       id: 'a-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
       name: payload.name || '未命名资产',
@@ -198,6 +309,7 @@ class AssetStore {
       if (ng) {
         group.nodes = group.nodes.filter((n) => n.id !== aid);
         ng.nodes.push(asset);
+        if (isUngroupedGroup(ng)) ng.open = true;
         group = ng;
       }
     }
@@ -225,19 +337,28 @@ class AssetStore {
   }
 
   pushRecent(asset, method) {
+    if (!asset || !asset.id) return this.snapshot();
+    const mid = (method && (method.id || method.protocol)) || 'rdp';
+    const proto =
+      (method && (method.proto || method.protocol)) ||
+      String(mid).toUpperCase();
+    const defaultPort = mid === 'ssh' ? 22 : mid === 'vnc' ? 5900 : 3389;
     const item = {
       id: asset.id,
       name: asset.name,
       os: asset.os,
       host: asset.host,
-      method: method.id,
-      proto: method.proto,
-      port: method.port,
+      method: mid,
+      proto: String(proto).toUpperCase(),
+      port: (method && method.port) || defaultPort,
       time: Date.now(),
     };
-    this.data.recent = (this.data.recent || []).filter((r) => r.id !== asset.id);
+    // One entry per asset+method so SSH/RDP on the same host can both appear
+    this.data.recent = (this.data.recent || []).filter(
+      (r) => !(r.id === asset.id && r.method === item.method)
+    );
     this.data.recent.unshift(item);
-    this.data.recent = this.data.recent.slice(0, 8);
+    this.data.recent = this.data.recent.slice(0, 12);
     this.persist();
     return this.snapshot();
   }

@@ -38,14 +38,21 @@
         <el-input v-model="form.name" :placeholder="$t('asset.namePh')" maxlength="128" clearable />
       </el-form-item>
       <el-form-item :label="$t('asset.group')" prop="gid">
-        <el-select v-model="form.gid" style="width:100%">
+        <el-select
+          v-model="form.gid"
+          style="width:100%"
+          clearable
+          :placeholder="$t('asset.groupPh')"
+        >
           <el-option
-            v-for="g in groups"
+            v-for="g in groupOptions"
             :key="g.id"
             :label="g.name"
             :value="g.id"
+            :disabled="!!g.disabled"
           />
         </el-select>
+        <div class="hint" style="margin-top:4px">{{ $t('asset.groupOptional') }}</div>
       </el-form-item>
       <el-form-item :label="$t('asset.host')" prop="host">
         <el-input v-model="form.host" :placeholder="$t('asset.hostPh')" clearable />
@@ -108,19 +115,35 @@
               :disabled="!draftRow(m.id).enabled"
               @change="syncPrimary"
             >主</el-radio>
-            <el-tooltip :content="$t('adv.gearTip')" placement="top">
-              <button
-                type="button"
-                class="gear-icon-btn"
-                :disabled="!draftRow(m.id).enabled"
-                :class="{ customized: hasCustomAdv(m.id) }"
-                @click="openAdvanced(m)"
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                  <path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96a7.05 7.05 0 00-1.62-.94l-.36-2.54a.48.48 0 00-.48-.41h-3.84a.48.48 0 00-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87a.48.48 0 00.12.61l2.03 1.58c-.05.3-.07.63-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 00-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.6 3.6 0 0112 15.6z"/>
-                </svg>
-              </button>
-            </el-tooltip>
+            <div class="method-icon-actions">
+              <el-tooltip :content="$t('adv.gearTip')" placement="top">
+                <button
+                  type="button"
+                  class="gear-icon-btn"
+                  :disabled="!draftRow(m.id).enabled"
+                  :class="{ customized: hasCustomAdv(m.id) }"
+                  @click="openAdvanced(m)"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                    <path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96a7.05 7.05 0 00-1.62-.94l-.36-2.54a.48.48 0 00-.48-.41h-3.84a.48.48 0 00-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87a.48.48 0 00.12.61l2.03 1.58c-.05.3-.07.63-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 00-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.6 3.6 0 0112 15.6z"/>
+                  </svg>
+                </button>
+              </el-tooltip>
+              <el-tooltip :content="$t('asset.test')" placement="top">
+                <button
+                  type="button"
+                  class="gear-icon-btn"
+                  :disabled="!draftRow(m.id).enabled || !!testing"
+                  :class="{ spinning: testingId === m.id }"
+                  @click="testMethod(m)"
+                >
+                  <!-- plug / connection test icon -->
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                    <path d="M7 7V3a1 1 0 012 0v4h2V2a1 1 0 012 0v5h2V4a1 1 0 012 0v3.2c1.8.4 3 1.9 3 3.8 0 1.5-.8 2.8-2 3.4V19a2 2 0 01-2 2h-2v-3h-2v3H9a2 2 0 01-2-2v-4.6c-1.2-.6-2-1.9-2-3.4 0-1.9 1.2-3.4 3-3.8V7h-1z"/>
+                  </svg>
+                </button>
+              </el-tooltip>
+            </div>
           </div>
         </div>
       </el-form-item>
@@ -129,9 +152,8 @@
     <template #footer>
       <span style="float:left;color:var(--text-3);font-size:11px;line-height:28px">{{ summary }}</span>
       <el-button size="mini" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
-      <el-button size="mini" :loading="testing" @click="test">{{ $t('asset.test') }}</el-button>
       <el-button size="mini" type="primary" :loading="saving" @click="save">
-        {{ isEdit ? $t('asset.save') : $t('asset.saveConnect') }}
+        {{ $t('asset.save') }}
       </el-button>
     </template>
   </el-dialog>
@@ -147,7 +169,7 @@ import {
   openAssetDetail,
   openMethodAdvanced,
 } from '../store';
-import { OS_SVG, OS_NAME, CATALOG } from '../constants';
+import { OS_SVG, OS_NAME, CATALOG, UNGROUPED_ID, isUngroupedGroup } from '../constants';
 import { t } from '../i18n';
 
 const HOST_RE =
@@ -159,8 +181,9 @@ export default {
     return {
       saving: false,
       testing: false,
+      testingId: null,
       types: [
-        { id: 'win', label: 'Windows', sub: 'RDP / VNC 可选' },
+        { id: 'win', label: 'Windows', sub: 'RDP / SSH / VNC 可选' },
         { id: 'mac', label: 'macOS', sub: 'VNC / SSH 可选' },
         { id: 'linux', label: 'Linux', sub: 'VNC / SSH / xrdp' },
       ],
@@ -201,9 +224,10 @@ export default {
         ],
         gid: [
           {
-            required: true,
+            required: false,
             validator(rule, value, cb) {
-              if (!value) cb(new Error(t('msg.groupSelect')));
+              // optional — empty means default ungrouped bucket
+              if (!value) cb();
               else cb();
             },
             trigger: 'change',
@@ -263,7 +287,25 @@ export default {
       return !!store.assetDialog.editId;
     },
     groups() {
-      return store.snapshot.groups || [];
+      return (store.snapshot.groups || []).filter((g) => !isUngroupedGroup(g));
+    },
+    groupOptions() {
+      const list = this.groups.slice();
+      const onUngrouped =
+        this.form.gid === UNGROUPED_ID ||
+        this.form.gid === 'g-default' ||
+        (store.snapshot.groups || []).some(
+          (g) => g.id === this.form.gid && isUngroupedGroup(g)
+        );
+      if (onUngrouped) {
+        const ug = (store.snapshot.groups || []).find((g) => isUngroupedGroup(g));
+        list.unshift({
+          id: this.form.gid || UNGROUPED_ID,
+          name: (ug && ug.name) || '未分组',
+          disabled: true,
+        });
+      }
+      return list;
     },
     catalog() {
       return CATALOG[this.form.os] || CATALOG.win;
@@ -371,7 +413,9 @@ export default {
     },
     async load() {
       const editId = store.assetDialog.editId;
-      const gid = store.assetDialog.gid || (this.groups[0] || {}).id;
+      const selectable = (store.snapshot.groups || []).filter((g) => !isUngroupedGroup(g));
+      // new assets: leave group empty by default → ungrouped on save
+      const fallbackGid = store.assetDialog.gid || '';
       if (editId) {
         const hit = findAsset(editId);
         if (!hit) return;
@@ -395,7 +439,7 @@ export default {
         this.form = {
           name: '',
           os: 'win',
-          gid,
+          gid: fallbackGid,
           host: '',
           user: '',
           pass: '',
@@ -409,9 +453,9 @@ export default {
         if (this.$refs.form) this.$refs.form.clearValidate();
       });
     },
-    async test() {
-      // Element UI validateField fires the callback once per field;
-      // await all of them so the probe runs a single time.
+    async testMethod(m) {
+      const row = this.draftRow(m.id);
+      if (!row || !row.enabled || this.testing) return;
       const results = await Promise.all(
         ['name', 'host', 'user'].map(
           (prop) =>
@@ -421,26 +465,21 @@ export default {
         )
       );
       if (!results.every(Boolean)) return;
-      const methodId = Object.keys(this.draft).find(
-        (k) => this.draft[k] && this.draft[k].enabled
-      );
-      if (!methodId) {
-        this.validateMethods();
-        return;
-      }
       this.testing = true;
+      this.testingId = m.id;
       try {
         const r = await api.sessionTest({
           asset: { host: this.form.host },
-          method: { protocol: methodId, port: this.draft[methodId].port },
+          method: { protocol: m.id, port: row.port },
         });
         if (r && r.ok)
-          this.$message.success(`测试通过 · ${r.latencyMs ?? '-'} ms`);
+          this.$message.success(`${m.name} · ${r.latencyMs ?? '-'} ms`);
         else this.$message.error(r.error || r.__error || '测试失败');
       } catch (e) {
         this.$message.error(e.message);
       } finally {
         this.testing = false;
+        this.testingId = null;
       }
     },
     save() {
@@ -476,7 +515,8 @@ export default {
             note: this.form.note,
             methods,
             display: { layout: 'extend' },
-            gid: this.form.gid,
+            // empty → store layer puts the asset under 未分组
+            gid: this.form.gid || UNGROUPED_ID,
           };
           if (this.isEdit) {
             unwrap(
@@ -485,7 +525,7 @@ export default {
             await refresh();
             this.$message.success(t('msg.assetUpdated'));
           } else {
-            unwrap(await api.createAsset(this.form.gid, payload));
+            unwrap(await api.createAsset(payload.gid, payload));
             await refresh();
             const snap = store.snapshot;
             let created = null;
@@ -584,6 +624,16 @@ export default {
   width: 80px;
   flex-shrink: 0;
 }
+/* primary radio + gear/test icons — keep tight */
+.method-row .el-radio {
+  margin-right: 0 !important;
+}
+.method-icon-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
 .gear-icon-btn {
   display: inline-flex;
   align-items: center;
@@ -609,5 +659,9 @@ export default {
 .gear-icon-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+.gear-icon-btn.spinning {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 </style>

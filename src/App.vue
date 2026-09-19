@@ -39,6 +39,22 @@
           >
             <asset-detail-view :asset-id="t.assetId" />
           </div>
+          <div
+            v-for="t in sshTabs"
+            :key="t.id"
+            class="view ssh-view"
+            :class="{ show: activeTab === t.id }"
+          >
+            <!-- v-show keeps the xterm instance (and SSH session) alive across tab switches -->
+            <terminal-view
+              v-show="activeTab === t.id"
+              :session-id="t.id"
+              :asset-id="t.assetId"
+              :method-id="t.methodId || 'ssh'"
+              :title="(t.host || '') + (t.port ? ':' + t.port : '')"
+              :active="activeTab === t.id"
+            />
+          </div>
         </div>
 
         <div class="statusbar">
@@ -67,6 +83,7 @@ import SettingsDialog from './components/SettingsDialog.vue';
 import AssetDialog from './components/AssetDialog.vue';
 import GroupDialog from './components/GroupDialog.vue';
 import MethodAdvancedDialog from './components/MethodAdvancedDialog.vue';
+import TerminalView from './components/TerminalView.vue';
 import { store, closeTab, api, refresh } from './store';
 import { t, applySettings } from './i18n';
 import { OS_SVG } from './constants';
@@ -81,6 +98,7 @@ export default {
     AssetDialog,
     GroupDialog,
     MethodAdvancedDialog,
+    TerminalView,
   },
   data() {
     return {
@@ -96,7 +114,10 @@ export default {
       return store.activeTab;
     },
     assetTabs() {
-      return store.tabs.filter((t) => t.assetId);
+      return store.tabs.filter((t) => t.assetId && t.kind !== 'ssh');
+    },
+    sshTabs() {
+      return store.tabs.filter((t) => t.kind === 'ssh');
     },
     assetCount() {
       return (store.snapshot.groups || []).reduce((s, g) => s + g.nodes.length, 0);
@@ -110,6 +131,11 @@ export default {
     this.tick();
     this._timer = setInterval(this.tick, 20000);
     this._off = api.onSessionState && api.onSessionState((payload) => this.onSession(payload));
+    this._offStore =
+      api.onStoreChanged &&
+      api.onStoreChanged(() => {
+        refresh().catch(() => {});
+      });
     if (window.matchMedia) {
       const mq = window.matchMedia('(prefers-color-scheme: light)');
       const onChange = () => {
@@ -124,6 +150,7 @@ export default {
   beforeDestroy() {
     clearInterval(this._timer);
     if (this._off) this._off();
+    if (this._offStore) this._offStore();
     if (this._mq && this._mqHandler && this._mq.removeEventListener) {
       this._mq.removeEventListener('change', this._mqHandler);
     }
@@ -134,13 +161,17 @@ export default {
       return OS_SVG[os] || '';
     },
     tabTitle(tab) {
-      return tab.id === 'home' ? t('nav.home') : tab.title;
+      // touch localeTick so the home tab label follows language switches
+      void this.localeTick;
+      if (tab.id === 'home') return this.$t('nav.home');
+      return tab.title;
     },
     onTabClick(tab) {
       store.activeTab = tab.id;
     },
     closeTabById(id) {
       closeTab(id);
+      // TerminalView beforeDestroy handles ssh disconnect
     },
     tick() {
       const d = new Date();

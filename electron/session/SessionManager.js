@@ -84,7 +84,12 @@ class SessionManager {
 
       const hit = this.store.findAsset(req.assetId);
       if (hit && adapter.id === 'rdp-windows-mstsc') {
-        this.store.pushRecent(hit.asset, req.method);
+        this.store.pushRecent(hit.asset, {
+          id: (req.method && req.method.id) || 'rdp',
+          proto: 'RDP',
+          port: (req.method && req.method.port) || 3389,
+        });
+        this.send('store:changed', { reason: 'recent' });
       }
 
       return { sessionId, ...result, embeddable: false };
