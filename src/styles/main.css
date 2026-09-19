@@ -220,6 +220,11 @@ button {
   background: var(--bg-app);
 }
 
+.app-root.is-sftp {
+  height: 100%;
+  overflow: hidden;
+}
+
 /* gear — matches sidebar theme */
 .gear-btn {
   width: 32px;

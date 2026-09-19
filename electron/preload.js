@@ -1,6 +1,19 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const api = {
+  /** Electron 32+: File.path may be empty; use webUtils.getPathForFile */
+  getPathForFile: (file) => {
+    try {
+      if (file && webUtils && typeof webUtils.getPathForFile === 'function') {
+        return webUtils.getPathForFile(file) || '';
+      }
+    } catch (_) {}
+    try {
+      return (file && file.path) || '';
+    } catch (_) {
+      return '';
+    }
+  },
   getSnapshot: () => ipcRenderer.invoke('store:snapshot'),
   createGroup: (payload) => ipcRenderer.invoke('store:create-group', payload),
   updateGroup: (gid, payload) => ipcRenderer.invoke('store:update-group', gid, payload),
@@ -39,6 +52,44 @@ const api = {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('ssh:state', handler);
     return () => ipcRenderer.removeListener('ssh:state', handler);
+  },
+
+  // SFTP
+  sftpOpenWindow: (req) => ipcRenderer.invoke('sftp:open-window', req),
+  sftpOpen: (req) => ipcRenderer.invoke('sftp:open', req),
+  sftpList: (connId, remotePath) => ipcRenderer.invoke('sftp:list', connId, remotePath),
+  sftpStat: (connId, remotePath) => ipcRenderer.invoke('sftp:stat', connId, remotePath),
+  sftpLocalExists: (p) => ipcRenderer.invoke('sftp:local-exists', p),
+  sftpLocalList: (p) => ipcRenderer.invoke('sftp:local-list', p),
+  sftpMkdir: (connId, remotePath) => ipcRenderer.invoke('sftp:mkdir', connId, remotePath),
+  sftpRename: (connId, oldPath, newPath) => ipcRenderer.invoke('sftp:rename', connId, oldPath, newPath),
+  sftpUnlink: (connId, remotePath, isDir) => ipcRenderer.invoke('sftp:unlink', connId, remotePath, isDir),
+  sftpLocalMkdir: (dirPath, name) => ipcRenderer.invoke('sftp:local-mkdir', dirPath, name),
+  sftpLocalRename: (oldPath, newPath) => ipcRenderer.invoke('sftp:local-rename', oldPath, newPath),
+  sftpLocalUnlink: (p, isDir) => ipcRenderer.invoke('sftp:local-unlink', p, isDir),
+  sftpWalkLocal: (localDir, remoteDir) => ipcRenderer.invoke('sftp:walk-local', localDir, remoteDir),
+  sftpUpload: (req) => ipcRenderer.invoke('sftp:upload', req),
+  sftpDownload: (req) => ipcRenderer.invoke('sftp:download', req),
+  sftpPause: (taskId, pause) => ipcRenderer.invoke('sftp:pause', taskId, pause),
+  sftpCancel: (taskId) => ipcRenderer.invoke('sftp:cancel', taskId),
+  sftpTasks: () => ipcRenderer.invoke('sftp:tasks'),
+  sftpClose: (connId) => ipcRenderer.invoke('sftp:close', connId),
+  sftpPickLocalFiles: () => ipcRenderer.invoke('sftp:pick-local-files'),
+  sftpPickLocalDir: () => ipcRenderer.invoke('sftp:pick-local-dir'),
+  sftpLocalHome: () => ipcRenderer.invoke('sftp:local-home'),
+  sftpClipboardFiles: () => ipcRenderer.invoke('sftp:clipboard-files'),
+  sftpLocalCopy: (src, destDir) => ipcRenderer.invoke('sftp:local-copy', src, destDir),
+  /** Native drag out to Explorer: main downloads remote → temp then startDrag */
+  sftpStartDrag: (payload) => ipcRenderer.send('sftp:start-drag', payload),
+  onSftpDragReady: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('sftp:drag-ready', handler);
+    return () => ipcRenderer.removeListener('sftp:drag-ready', handler);
+  },
+  onSftpProgress: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('sftp:progress', handler);
+    return () => ipcRenderer.removeListener('sftp:progress', handler);
   },
 
   onSessionState: (cb) => {

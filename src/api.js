@@ -24,6 +24,9 @@ async function local(method, ...args) {
 export const api = hasBridge
   ? window.omniDesk
   : {
+      getPathForFile(file) {
+        return (file && file.path) || '';
+      },
       async getSnapshot() {
         return JSON.parse(JSON.stringify(mockState));
       },
@@ -70,6 +73,31 @@ export const api = hasBridge
         return () => {};
       },
       onSshState() {
+        return () => {};
+      },
+      async sftpOpenWindow() {
+        throw Object.assign(new Error('浏览器预览模式无法打开 SFTP'), { code: 'NO_BRIDGE' });
+      },
+      async sftpOpen() {
+        throw Object.assign(new Error('浏览器预览模式'), { code: 'NO_BRIDGE' });
+      },
+      async sftpList() {
+        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+      },
+      async sftpLocalExists() {
+        return { exists: false };
+      },
+      async sftpLocalCopy() {
+        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+      },
+      sftpStartDrag() {},
+      onSftpDragReady() {
+        return () => {};
+      },
+      async sftpLocalList() {
+        return { path: '', items: [], home: '' };
+      },
+      onSftpProgress() {
         return () => {};
       },
       onSessionState() {

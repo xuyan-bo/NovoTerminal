@@ -4,6 +4,19 @@
       <span class="pill ssh">{{ shortLabel }}</span>
       <span class="ssh-meta">{{ title }}</span>
       <span class="ssh-status" :class="status">{{ statusText }}</span>
+      <el-tooltip :content="$t('sftp.openTip')" placement="top">
+        <button
+          type="button"
+          class="gear-icon-btn"
+          :disabled="!assetId"
+          @click="openSftp"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/>
+            <path d="M12 10v6m0-6l-2.5 2.5M12 10l2.5 2.5" fill="none" stroke="#0f1419" stroke-width="1.4"/>
+          </svg>
+        </button>
+      </el-tooltip>
       <el-button size="mini" @click="reconnect" :disabled="status === 'connecting'">
         {{ $t('ssh.reconnect') }}
       </el-button>
@@ -306,6 +319,22 @@ export default {
     /** Toolbar click — never pass the MouseEvent as `silent` */
     onDisconnectClick() {
       this.disconnectNow(false);
+    },
+
+    async openSftp() {
+      if (!api.sftpOpenWindow) {
+        this.$message.error(t('msg.needElectron'));
+        return;
+      }
+      try {
+        unwrap(
+          await api.sftpOpenWindow({
+            assetId: this.assetId,
+          })
+        );
+      } catch (e) {
+        this.$message.error(e.message || String(e));
+      }
     },
 
     disconnectNow(silent) {

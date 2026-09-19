@@ -1,5 +1,13 @@
 <template>
-  <div class="app-root">
+  <div class="app-root" :class="{ 'is-sftp': isSftpRoute }">
+    <sftp-page
+      v-if="isSftpRoute"
+      :asset-id="sftpQuery.assetId || ''"
+      :host="sftpQuery.host || ''"
+      :port="Number(sftpQuery.port) || 22"
+      :asset-name="sftpQuery.name || ''"
+    />
+    <template v-else>
     <div class="body-row">
       <side-bar />
       <section class="main">
@@ -72,6 +80,7 @@
     <group-dialog />
     <method-advanced-dialog />
     <div class="ctx-menu" ref="ctxRoot"></div>
+    </template>
   </div>
 </template>
 
@@ -84,9 +93,24 @@ import AssetDialog from './components/AssetDialog.vue';
 import GroupDialog from './components/GroupDialog.vue';
 import MethodAdvancedDialog from './components/MethodAdvancedDialog.vue';
 import TerminalView from './components/TerminalView.vue';
+import SftpPage from './components/SftpPage.vue';
 import { store, closeTab, api, refresh } from './store';
 import { t, applySettings } from './i18n';
 import { OS_SVG } from './constants';
+
+function parseSftpHash() {
+  const h = String((typeof location !== 'undefined' && location.hash) || '').replace(/^#\/?/, '');
+  if (!h.startsWith('sftp')) return null;
+  const qIdx = h.indexOf('?');
+  const qs = qIdx >= 0 ? h.slice(qIdx + 1) : '';
+  const out = {};
+  qs.split('&').forEach((pair) => {
+    if (!pair) return;
+    const [k, v] = pair.split('=');
+    out[decodeURIComponent(k || '')] = decodeURIComponent(v || '');
+  });
+  return out;
+}
 
 export default {
   name: 'App',
@@ -99,11 +123,14 @@ export default {
     GroupDialog,
     MethodAdvancedDialog,
     TerminalView,
+    SftpPage,
   },
   data() {
     return {
       clock: '',
       platformLabel: (api && api.platform) || 'browser',
+      sftpQuery: parseSftpHash() || {},
+      isSftpRoute: !!parseSftpHash(),
     };
   },
   computed: {
@@ -127,15 +154,23 @@ export default {
     },
   },
   created() {
-    if (store.snapshot.settings) applySettings(store.snapshot.settings);
-    this.tick();
-    this._timer = setInterval(this.tick, 20000);
-    this._off = api.onSessionState && api.onSessionState((payload) => this.onSession(payload));
-    this._offStore =
-      api.onStoreChanged &&
-      api.onStoreChanged(() => {
-        refresh().catch(() => {});
-      });
+    this._onHash = () => {
+      const q = parseSftpHash();
+      this.sftpQuery = q || {};
+      this.isSftpRoute = !!q;
+    };
+    window.addEventListener('hashchange', this._onHash);
+    if (!this.isSftpRoute) {
+      if (store.snapshot.settings) applySettings(store.snapshot.settings);
+      this.tick();
+      this._timer = setInterval(this.tick, 20000);
+      this._off = api.onSessionState && api.onSessionState((payload) => this.onSession(payload));
+      this._offStore =
+        api.onStoreChanged &&
+        api.onStoreChanged(() => {
+          refresh().catch(() => {});
+        });
+    }
     if (window.matchMedia) {
       const mq = window.matchMedia('(prefers-color-scheme: light)');
       const onChange = () => {
@@ -148,7 +183,8 @@ export default {
     }
   },
   beforeDestroy() {
-    clearInterval(this._timer);
+    if (this._onHash) window.removeEventListener('hashchange', this._onHash);
+    if (this._timer) clearInterval(this._timer);
     if (this._off) this._off();
     if (this._offStore) this._offStore();
     if (this._mq && this._mqHandler && this._mq.removeEventListener) {

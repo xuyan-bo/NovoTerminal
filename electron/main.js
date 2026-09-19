@@ -1,8 +1,13 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard } = require('electron');
 const path = require('path');
+const os = require('os');
+const fs = require('fs');
+/** Bump when shipping renderer changes — shown in every window title */
+const APP_BUILD = 'rd2-1647';
 const { AssetStore } = require('./store/assetStore');
 const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
+const { SftpManager } = require('./sftp/SftpManager');
 
 /** Advanced defaults mirrored from renderer constants — used when method.advanced is missing */
 const ADVANCED_DEFAULTS = {
@@ -110,13 +115,16 @@ let win = null;
 let store = null;
 let sessions = null;
 let sshSessions = null;
+let sftpManager = null;
+const sftpWindows = new Map(); // assetId -> BrowserWindow
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
 function send(channel, payload) {
-  if (win && !win.isDestroyed()) {
-    win.webContents.send(channel, payload);
-  }
+  // Broadcast to all windows so SFTP child windows receive progress events
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
+  });
 }
 
 function createWindow() {
@@ -125,7 +133,7 @@ function createWindow() {
     height: 800,
     minWidth: 960,
     minHeight: 600,
-    title: 'OmniDesk',
+    title: `OmniDesk ${APP_BUILD}`,
     backgroundColor: '#0f1419',
     icon: path.join(__dirname, 'assets', 'icon.png'),
     autoHideMenuBar: true,
@@ -148,7 +156,8 @@ function createWindow() {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
     win.webContents.openDevTools({ mode: 'detach' });
   } else {
-    win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+    const htmlPath = path.join(__dirname, '..', 'dist', 'index.html');
+    win.loadURL('file://' + htmlPath.replace(/\\/g, '/') + '?t=' + Date.now());
   }
 }
 
@@ -250,12 +259,212 @@ function registerIpc() {
   handle('ssh:resize', (sessionId, cols, rows) => sshSessions.resize(sessionId, cols, rows));
   handle('ssh:disconnect', (sid) => sshSessions.disconnect(sid));
   handle('ssh:list', () => sshSessions.list());
+
+  // ---- SFTP window & transfers ----
+  handle('sftp:open-window', async (req) => {
+    const assetId = req && req.assetId;
+    if (!assetId) throw new Error('assetId required');
+    const hit = store.findAsset(assetId);
+    if (!hit) throw new Error('asset not found');
+    const host = hit.asset.host || '';
+    const port =
+      (hit.asset.methods && hit.asset.methods.ssh && hit.asset.methods.ssh.port) || 22;
+
+    const existing = sftpWindows.get(assetId);
+    const hash = `sftp?assetId=${encodeURIComponent(assetId)}&host=${encodeURIComponent(host)}&port=${port}&name=${encodeURIComponent(hit.asset.name || '')}`;
+    const htmlPath = path.join(__dirname, '..', 'dist', 'index.html');
+    const cacheQs = `t=${Date.now()}`;
+
+    const loadSftp = async (winRef) => {
+      // bust HTTP/file cache so a rebuild is always picked up
+      try {
+        await winRef.webContents.session.clearCache();
+      } catch (_) {}
+      if (isDev && process.env.VITE_DEV_SERVER_URL) {
+        await winRef.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${cacheQs}#/${hash}`);
+      } else {
+        await winRef.loadURL(
+          'file://' + htmlPath.replace(/\\/g, '/') + '?' + cacheQs + '#' + hash
+        );
+      }
+    };
+
+    if (existing && !existing.isDestroyed()) {
+      await loadSftp(existing);
+      existing.focus();
+      existing.setTitle(`${hit.asset.name || host} · SFTP · ${host}:${port}`);
+      return { ok: true, reused: true };
+    }
+
+    const sftpWin = new BrowserWindow({
+      width: 1100,
+      height: 720,
+      minWidth: 800,
+      minHeight: 520,
+      title: `${hit.asset.name || host} · SFTP · ${host}:${port}`,
+      icon: path.join(__dirname, 'assets', 'icon.png'),
+      backgroundColor: '#0f1419',
+      autoHideMenuBar: true,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+      },
+    });
+    await loadSftp(sftpWin);
+    sftpWindows.set(assetId, sftpWin);
+    sftpWin.on('page-title-updated', (e) => {
+      e.preventDefault();
+    });
+    sftpWin.setTitle(`${hit.asset.name || host} · SFTP · ${host}:${port}`);
+    sftpWin.on('closed', () => {
+      sftpWindows.delete(assetId);
+    });
+    return { ok: true, reused: false };
+  });
+
+  handle('sftp:open', (req) => sftpManager.openSession(req));
+  handle('sftp:list', (connId, remotePath) => sftpManager.list(connId, remotePath));
+  handle('sftp:stat', (connId, remotePath) => sftpManager.stat(connId, remotePath));
+  handle('sftp:local-exists', (p) => sftpManager.localExists(p));
+  handle('sftp:local-list', (p) => sftpManager.localList(p));
+  handle('sftp:mkdir', (connId, remotePath) => sftpManager.mkdir(connId, remotePath));
+  handle('sftp:rename', (connId, oldPath, newPath) => sftpManager.rename(connId, oldPath, newPath));
+  handle('sftp:unlink', (connId, remotePath, isDir) =>
+    sftpManager.unlink(connId, remotePath, !!isDir)
+  );
+  handle('sftp:local-mkdir', (dirPath, name) => sftpManager.localMkdir(dirPath, name));
+  handle('sftp:local-rename', (oldPath, newPath) => sftpManager.localRename(oldPath, newPath));
+  handle('sftp:local-unlink', (p, isDir) => sftpManager.localUnlink(p, !!isDir));
+  handle('sftp:local-copy', (src, destDir) => {
+    if (!src || !destDir) throw new Error('copy path required');
+    const name = path.basename(src);
+    const dest = path.join(destDir, name);
+    const st = fs.statSync(src);
+    if (st.isDirectory()) {
+      fs.cpSync(src, dest, { recursive: true, force: true });
+    } else {
+      fs.copyFileSync(src, dest);
+    }
+    return { ok: true, path: dest };
+  });
+  handle('sftp:walk-local', (localDir, remoteDir) => sftpManager.walkLocal(localDir, remoteDir));
+  handle('sftp:upload', async (req) => {
+    const r = await sftpManager.upload(req);
+    console.log('[sftp] upload start', req && req.localPath, '->', req && req.remotePath, r);
+    return r;
+  });
+  handle('sftp:download', async (req) => {
+    const r = await sftpManager.download(req);
+    console.log('[sftp] download start', req && req.remotePath, '->', req && req.localPath, r);
+    return r;
+  });
+  handle('sftp:pause', (taskId, pause) => sftpManager.pauseTask(taskId, !!pause));
+  handle('sftp:cancel', (taskId) => sftpManager.cancelTask(taskId));
+  handle('sftp:tasks', () => sftpManager.listTasks());
+  handle('sftp:close', (connId) => sftpManager.closeSession(connId));
+  handle('sftp:pick-local-files', async () => {
+    const r = await dialog.showOpenDialog(win || BrowserWindow.getFocusedWindow(), {
+      properties: ['openFile', 'multiSelections'],
+      title: '选择要上传的文件',
+    });
+    return r.canceled ? [] : r.filePaths;
+  });
+  handle('sftp:clipboard-files', () => {
+    const out = [];
+    try {
+      const w = clipboard.readBuffer('FileNameW');
+      if (w && w.length >= 2) {
+        const p = w.toString('ucs2').replace(/\0.*$/, '').trim();
+        if (p && fs.existsSync(p)) out.push(p);
+      }
+    } catch (_) {}
+    if (!out.length) {
+      try {
+        const a = clipboard.readBuffer('FileName');
+        if (a && a.length >= 1) {
+          const p = a.toString('utf8').replace(/\0.*$/, '').trim();
+          if (p && fs.existsSync(p)) out.push(p);
+        }
+      } catch (_) {}
+    }
+    if (!out.length) {
+      try {
+        const buf = clipboard.readBuffer('CF_HDROP');
+        if (buf && buf.length > 20) {
+          const pFiles = buf.readUInt32LE(0);
+          const fWide = buf.readUInt32LE(16);
+          let offset = pFiles;
+          if (fWide) {
+            while (offset + 2 <= buf.length) {
+              let end = offset;
+              while (end + 1 < buf.length && !(buf[end] === 0 && buf[end + 1] === 0)) end += 2;
+              const s = buf.toString('ucs2', offset, end);
+              offset = end + 2;
+              if (!s) break;
+              if (fs.existsSync(s)) out.push(s);
+            }
+          } else {
+            while (offset < buf.length) {
+              let end = offset;
+              while (end < buf.length && buf[end] !== 0) end += 1;
+              const s = buf.toString('utf8', offset, end);
+              offset = end + 1;
+              if (!s) break;
+              if (fs.existsSync(s)) out.push(s);
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    return out;
+  });
+  handle('sftp:pick-local-dir', async () => {
+    const r = await dialog.showOpenDialog(win || BrowserWindow.getFocusedWindow(), {
+      properties: ['openDirectory', 'createDirectory'],
+      title: '选择保存目录',
+    });
+    return r.canceled ? null : r.filePaths[0];
+  });
+  handle('sftp:local-home', () => os.homedir());
+
+  // Native OS drag-out: download remote → temp, then startDrag (Explorer / local folders)
+  ipcMain.on('sftp:start-drag', async (event, req) => {
+    try {
+      if (!req || !req.connId || !req.remotePath) return;
+      send('sftp:state', { type: 'drag-preparing', message: req.name || req.remotePath });
+      const prepared = await sftpManager.prepareDragOut({
+        connId: req.connId,
+        remotePath: req.remotePath,
+        isDir: !!req.isDir,
+        name: req.name,
+      });
+      const iconPath = path.join(__dirname, 'assets', 'icon.png');
+      let icon;
+      try {
+        icon = require('electron').nativeImage.createFromPath(iconPath);
+      } catch (_) {
+        icon = null;
+      }
+      if (event.sender.isDestroyed()) return;
+      event.sender.startDrag({
+        file: prepared.localPath,
+        icon: icon && !icon.isEmpty() ? icon : undefined,
+      });
+      send('sftp:drag-ready', prepared);
+    } catch (e) {
+      console.error('[sftp] start-drag failed', e);
+      send('sftp:state', { type: 'drag-error', message: e.message || String(e) });
+    }
+  });
 }
 
 app.whenReady().then(() => {
   store = new AssetStore();
   sessions = new SessionManager({ store, send });
   sshSessions = new SshSessionManager({ send });
+  sftpManager = new SftpManager({ send, store });
   registerIpc();
   createWindow();
 
