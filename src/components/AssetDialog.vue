@@ -63,10 +63,24 @@
       <el-form-item :label="$t('asset.pass')" prop="pass">
         <el-input
           v-model="form.pass"
-          type="password"
-          show-password
+          :type="passVisible ? 'text' : 'password'"
           :placeholder="$t('asset.passPh')"
-        />
+        >
+          <button
+            slot="append"
+            type="button"
+            class="pass-reveal-btn"
+            :disabled="authChecking"
+            :title="authChecking ? $t('auth.verifying') : (passVisible ? $t('auth.hidePass') : $t('auth.revealPass'))"
+            @click="onTogglePassVisible"
+          >
+            <svg v-if="authChecking" class="spin-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
+            </svg>
+            <img v-else-if="!passVisible" src="/icons/eye-open.svg" alt="" width="20" height="20" aria-hidden="true">
+            <img v-else src="/icons/eye-closed.svg" alt="" width="20" height="20" aria-hidden="true">
+          </button>
+        </el-input>
       </el-form-item>
       <el-form-item :label="$t('asset.tags')" prop="tags">
         <el-input v-model="form.tags" :placeholder="$t('asset.tagsPh')" />
@@ -202,6 +216,8 @@ export default {
         vnc: { enabled: false, port: 5900, primary: false },
         ssh: { enabled: false, port: 22, primary: false },
       },
+      passVisible: false,
+      authChecking: false,
       primaryId: 'rdp',
       rules: {
         name: [
@@ -250,6 +266,16 @@ export default {
             required: true,
             validator(rule, value, cb) {
               if (!String(value || '').trim()) cb(new Error(t('msg.userRequired')));
+              else cb();
+            },
+            trigger: 'blur',
+          },
+        ],
+        pass: [
+          {
+            required: true,
+            validator(rule, value, cb) {
+              if (!String(value || '').trim()) cb(new Error(t('msg.passRequired')));
               else cb();
             },
             trigger: 'blur',
@@ -328,6 +354,7 @@ export default {
   watch: {
     visible(v) {
       if (v) this.load();
+      else this.passVisible = false;
     },
     methodAdvancedResult(r) {
       if (!r || !this.visible) return;
@@ -411,7 +438,46 @@ export default {
       if (!this.$refs.form) return;
       this.$refs.form.validateField('methods');
     },
+    /** Chrome-style: system identity check before revealing saved password */
+    async onTogglePassVisible() {
+      if (this.authChecking) return;
+      if (this.passVisible) {
+        this.passVisible = false;
+        return;
+      }
+      if (!this.isEdit) {
+        this.passVisible = true;
+        return;
+      }
+      if (!api.verifySystemAuth) {
+        this.$message.error(t('auth.needElectron'));
+        return;
+      }
+      this.authChecking = true;
+      try {
+        const r = unwrap(await api.verifySystemAuth(t('auth.viewPassReason')));
+        if (r && r.ok) {
+          this.passVisible = true;
+        } else {
+          const code = (r && r.code) || '';
+          let msg = t('auth.failed');
+          if (/Canceled|UserCanceled/i.test(code)) msg = t('auth.canceled');
+          else if (/NotConfigured/i.test(code)) msg = t('auth.notConfigured');
+          else if (r && r.message) msg = r.message;
+          this.$message.error(msg);
+        }
+      } catch (e) {
+        const code = e.code || '';
+        let msg = e.message || t('auth.failed');
+        if (/Canceled|UserCanceled/i.test(code)) msg = t('auth.canceled');
+        else if (/NotConfigured/i.test(code)) msg = t('auth.notConfigured');
+        this.$message.error(msg);
+      } finally {
+        this.authChecking = false;
+      }
+    },
     async load() {
+      this.passVisible = false;
       const editId = store.assetDialog.editId;
       const selectable = (store.snapshot.groups || []).filter((g) => !isUngroupedGroup(g));
       // new assets: leave group empty by default → ungrouped on save
@@ -633,6 +699,35 @@ export default {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+.pass-reveal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 100%;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-2, #9aa7b8);
+  cursor: pointer;
+}
+.pass-reveal-btn img {
+  pointer-events: none;
+}
+.pass-reveal-btn:hover:not(:disabled) {
+  color: var(--accent, #409eff);
+}
+.pass-reveal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.spin-icon {
+  animation: auth-spin 0.8s linear infinite;
+}
+@keyframes auth-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 .gear-icon-btn {
   display: inline-flex;

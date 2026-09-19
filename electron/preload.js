@@ -28,6 +28,7 @@ const api = {
   updateSettings: (patch) => ipcRenderer.invoke('store:update-settings', patch),
   exportGroups: () => ipcRenderer.invoke('store:export'),
   importGroups: (json) => ipcRenderer.invoke('store:import', json),
+  verifySystemAuth: (reason) => ipcRenderer.invoke('app:verify-system-auth', reason),
   browseDataPath: () => ipcRenderer.invoke('app:browse-data-path'),
   clipboardReadText: () => ipcRenderer.invoke('clipboard:read-text'),
   clipboardWriteText: (text) => ipcRenderer.invoke('clipboard:write-text', text),

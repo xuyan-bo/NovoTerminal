@@ -784,6 +784,13 @@ button {
   background: var(--accent-soft);
 }
 
+.btn-icon {
+  width: 16px;
+  height: 16px;
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+
 /* asset detail view */
 .asset-detail-view {
   flex: 1;

@@ -66,7 +66,7 @@
         </div>
 
         <div class="statusbar">
-          <span>{{ $t('status.assets') }} <b>{{ assetCount }}</b> · {{ platformLabel }}</span>
+          <span>Hello OmniDesk</span>
           <span class="sp">
             <span>{{ clock }}</span>
             <span>v0.1.0</span>
@@ -128,7 +128,6 @@ export default {
   data() {
     return {
       clock: '',
-      platformLabel: (api && api.platform) || 'browser',
       sftpQuery: parseSftpHash() || {},
       isSftpRoute: !!parseSftpHash(),
     };
@@ -146,9 +145,6 @@ export default {
     sshTabs() {
       return store.tabs.filter((t) => t.kind === 'ssh');
     },
-    assetCount() {
-      return (store.snapshot.groups || []).reduce((s, g) => s + g.nodes.length, 0);
-    },
     localeTick() {
       return store.localeTick;
     },
@@ -163,7 +159,7 @@ export default {
     if (!this.isSftpRoute) {
       if (store.snapshot.settings) applySettings(store.snapshot.settings);
       this.tick();
-      this._timer = setInterval(this.tick, 20000);
+      this._timer = setInterval(this.tick, 1000);
       this._off = api.onSessionState && api.onSessionState((payload) => this.onSession(payload));
       this._offStore =
         api.onStoreChanged &&
@@ -212,7 +208,7 @@ export default {
     tick() {
       const d = new Date();
       const p = (n) => String(n).padStart(2, '0');
-      this.clock = `${p(d.getHours())}:${p(d.getMinutes())}`;
+      this.clock = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
     },
     async onSession(payload) {
       if (payload && payload.type === 'ended') {

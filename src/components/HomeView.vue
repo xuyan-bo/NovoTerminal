@@ -35,8 +35,8 @@
       <div class="dash-card dash-backup">
         <h3>{{ $t('home.quick') }}</h3>
         <div class="quick-grid">
-          <button class="quick-btn" @click="exportJson">⇪ {{ $t('home.exportCfg') }}</button>
-          <button class="quick-btn" @click="importJson">⇩ {{ $t('home.importCfg') }}</button>
+          <button class="quick-btn" @click="exportJson"><img src="/icons/export.svg" class="btn-icon" /> {{ $t('home.exportCfg') }}</button>
+          <button class="quick-btn" @click="importJson"><img src="/icons/import.svg" class="btn-icon" /> {{ $t('home.importCfg') }}</button>
         </div>
       </div>
 
@@ -209,7 +209,7 @@ export default {
           { name: names.mac, value: this.osCount.mac, itemStyle: { color: th.mac } },
           { name: names.linux, value: this.osCount.linux, itemStyle: { color: th.linux } },
         ];
-        const data = total
+        const pieData = total
           ? raw.filter((x) => x.value > 0)
           : [{ name: '—', value: 1, itemStyle: { color: th.track } }];
 
@@ -248,7 +248,6 @@ export default {
                 center: ['50%', '42%'],
                 minAngle: 6,
                 avoidLabelOverlap: true,
-                // center label follows pie center — stays centered in the donut hole
                 label: {
                   show: true,
                   position: 'center',
@@ -272,14 +271,13 @@ export default {
                 emphasis: {
                   scale: true,
                   scaleSize: 3,
-                  label: { show: true, position: 'center' },
                   itemStyle: { shadowBlur: 8, shadowColor: 'rgba(0,0,0,0.25)' },
                 },
-                data,
+                data: pieData,
               },
             ],
           },
-          true
+          true,
         );
         this._pie.resize({ width: size, height: size });
       });
@@ -305,7 +303,8 @@ export default {
     },
     async exportJson() {
       try {
-        const text = await api.exportGroups();
+        // OS identity is enforced in main (store:export); surface friendly errors here
+        const text = unwrap(await api.exportGroups());
         const blob = new Blob([text], { type: 'application/json' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
@@ -313,7 +312,14 @@ export default {
         a.click();
         URL.revokeObjectURL(a.href);
       } catch (e) {
-        this.$message.error(e.message);
+        const code = (e && e.code) || '';
+        let msg = e.message || String(e);
+        if (/Canceled|UserCanceled/i.test(code) || /已取消|Canceled/i.test(msg)) {
+          msg = t('auth.canceled');
+        } else if (/NotConfigured/i.test(code) || /未配置身份验证|Hello/i.test(msg)) {
+          msg = t('auth.notConfigured');
+        }
+        this.$message.error(msg);
       }
     },
     importJson() {
@@ -326,6 +332,7 @@ export default {
         try {
           const text = await file.text();
           if (api.importGroups) {
+            // OS identity is enforced in main (store:import); surface friendly errors here
             unwrap(await api.importGroups(text));
           } else {
             throw new Error(t('msg.needElectron'));
@@ -333,7 +340,14 @@ export default {
           await refresh();
           this.$message.success(t('home.importDone'));
         } catch (e) {
-          this.$message.error(e.message || String(e));
+          const code = (e && e.code) || '';
+          let msg = e.message || String(e);
+          if (/Canceled|UserCanceled/i.test(code) || /已取消|Canceled/i.test(msg)) {
+            msg = t('auth.canceled');
+          } else if (/NotConfigured/i.test(code) || /未配置身份验证|Hello/i.test(msg)) {
+            msg = t('auth.notConfigured');
+          }
+          this.$message.error(msg);
         }
       };
       input.click();

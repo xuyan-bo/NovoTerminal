@@ -8,6 +8,7 @@ const { AssetStore } = require('./store/assetStore');
 const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
 const { SftpManager } = require('./sftp/SftpManager');
+const { verifySystemAuth, resetAuthCache } = require('./auth/systemAuth');
 
 /** Advanced defaults mirrored from renderer constants — used when method.advanced is missing */
 const ADVANCED_DEFAULTS = {
@@ -208,8 +209,27 @@ function registerIpc() {
   handle('store:clone-asset', (aid) => unwrap(store.cloneAsset(aid)));
   handle('store:settings', () => store.getSettings());
   handle('store:update-settings', (patch) => unwrap(store.updateSettings(patch)));
-  handle('store:export', () => store.exportJson());
-  handle('store:import', (text) => unwrap(store.importGroups(text)));
+  handle('app:verify-system-auth', async (reason) => verifySystemAuth(reason));
+  handle('store:export', async () => {
+    // sensitive: require OS identity verification like Chrome password export
+    const auth = await verifySystemAuth('导出 OmniDesk 配置（包含敏感信息）');
+    if (!auth.ok) {
+      const e = new Error(auth.message || '系统身份验证失败');
+      e.code = auth.code || 'AUTH_FAILED';
+      throw e;
+    }
+    return store.exportJson();
+  });
+  handle('store:import', async (text) => {
+    // sensitive: require OS identity verification like export (overwrites data)
+    const auth = await verifySystemAuth('导入 OmniDesk 配置（将覆盖当前数据）');
+    if (!auth.ok) {
+      const e = new Error(auth.message || '系统身份验证失败');
+      e.code = auth.code || 'AUTH_FAILED';
+      throw e;
+    }
+    return unwrap(store.importGroups(text));
+  });
   handle('app:browse-data-path', async () => {
     const r = await dialog.showOpenDialog(win, {
       properties: ['openDirectory', 'createDirectory'],
@@ -483,6 +503,15 @@ app.whenReady().then(() => {
   sftpManager = new SftpManager({ send, store });
   registerIpc();
   createWindow();
+
+  // Reset auth cache on screen lock / suspend (Chrome-style: re-verify after lock)
+  if (process.platform === 'win32') {
+    try {
+      const { powerMonitor } = require('electron');
+      powerMonitor.on('lock-screen', resetAuthCache);
+      powerMonitor.on('suspend', resetAuthCache);
+    } catch (_) {}
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

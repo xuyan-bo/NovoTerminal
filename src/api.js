@@ -42,6 +42,9 @@ export const api = hasBridge
       async exportGroups() {
         return JSON.stringify(mockState.groups, null, 2);
       },
+      async verifySystemAuth() {
+        return { ok: false, code: 'NO_BRIDGE', message: '需要在 Electron 中运行以使用系统身份验证' };
+      },
       async importGroups() {
         return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
       },
