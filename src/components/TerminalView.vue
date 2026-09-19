@@ -17,12 +17,22 @@
           </svg>
         </button>
       </el-tooltip>
-      <el-button size="mini" @click="reconnect" :disabled="status === 'connecting'">
-        {{ $t('ssh.reconnect') }}
-      </el-button>
-      <el-button size="mini" type="danger" plain @click="onDisconnectClick">
-        {{ $t('ssh.disconnect') }}
-      </el-button>
+      <el-tooltip :content="connToggleTip" placement="top">
+        <button
+          type="button"
+          class="gear-icon-btn"
+          :class="{ 'is-danger': !isDisconnected }"
+          @click="onConnToggle"
+        >
+          <!-- disconnected → reconnect (link); connecting/ready → disconnect (broken link) -->
+          <svg v-if="isDisconnected" viewBox="0 0 1024 1024" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path d="M454.6048 328.8576a25.344 25.344 0 1 1-35.84-35.84l203.8784-203.9808c82.1248-82.176 212.992-84.992 292.352-5.632 79.36 79.4112 76.544 210.432-5.632 292.5568l-203.8272 203.9808c-82.1248 82.1248-212.992 84.992-292.352 5.632a25.344 25.344 0 0 1 35.84-35.8912c59.1872 59.2384 158.0032 57.088 220.672-5.632l203.8784-203.9808c62.6176-62.6688 64.8192-161.536 5.632-220.7744-59.2384-59.2384-158.0544-57.088-220.7232 5.632L454.6048 328.8064z m114.7904 366.2848a25.344 25.344 0 1 1 35.84 35.84L401.408 934.9632c-82.1248 82.176-212.992 84.992-292.352 5.632-79.36-79.4112-76.544-210.432 5.632-292.5568L318.464 444.0576c82.1248-82.1248 212.992-84.992 292.352-5.632a25.344 25.344 0 0 1-35.84 35.8912c-59.1872-59.2384-158.0032-57.088-220.672 5.632l-203.8784 203.9808c-62.6176 62.6688-64.8192 161.536-5.632 220.7744 59.2384 59.2384 158.0544 57.088 220.7232-5.632l203.8784-203.9296z"/>
+          </svg>
+          <svg v-else viewBox="0 0 1024 1024" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path d="M465.0496 349.93664a25.344 25.344 0 1 1-35.84-35.84l203.8784-203.9808c82.1248-82.176 212.992-84.992 292.352-5.632 79.36 79.4112 76.544 210.432-5.632 292.5568l-185.9072 186.04032a25.33376 25.33376 0 0 1-35.82464 0.01536l-0.02048-0.02048a25.38496 25.38496 0 0 1 0.01024-35.88096l185.94816-186.04544c62.6176-62.6688 64.8192-161.536 5.632-220.7744-59.2384-59.2384-158.0544-57.088-220.7232 5.632l-203.8784 203.8784v0.0512z m129.1264 339.0464a25.344 25.344 0 0 1 11.264 42.5984l-203.8272 203.9808c-82.1248 82.176-212.992 84.992-292.352 5.632-79.36-79.4112-76.544-210.432 5.632-292.5568l185.84576-186.04032a25.32864 25.32864 0 0 1 35.82464-0.01536l0.02048 0.02048a25.38496 25.38496 0 0 1-0.01024 35.88608L150.6304 684.52864c-62.6176 62.6688-64.8192 161.536-5.632 220.7744 59.2384 59.2384 158.0544 57.088 220.7232-5.632l203.8784-203.9296a25.344 25.344 0 0 1 24.576-6.7584zM403.15904 249.46688a23.04 23.04 0 0 1-45.2352-8.79616l19.53792-100.51584a23.04 23.04 0 0 1 45.2352 8.79104l-19.53792 100.52096zM143.33952 391.95136a23.04 23.04 0 1 1 8.79616-45.2352l100.51584 19.54304a23.04 23.04 0 1 1-8.79104 45.23008l-100.52096-19.53792z m54.3232-178.176a23.04 23.04 0 1 1 34.77504-30.2336l67.17952 77.28128a23.04 23.04 0 1 1-34.77504 30.22848L197.66272 213.77024zM659.4048 789.0432a23.04 23.04 0 0 1 45.73696 5.61664l-12.48256 101.632a23.04 23.04 0 0 1-45.73696-5.61152l12.48256-101.63712z m249.24672-160.256a23.04 23.04 0 0 1-5.61152 45.73184l-101.63712-12.47744a23.04 23.04 0 0 1 5.61664-45.73696l101.632 12.48256z m-43.27424 185.14944a23.04 23.04 0 0 1-34.77504 30.22848l-67.17952-77.28128a23.04 23.04 0 0 1 34.77504-30.2336l67.17952 77.2864z"/>
+          </svg>
+        </button>
+      </el-tooltip>
     </div>
     <div ref="termEl" class="ssh-term"></div>
   </div>
@@ -73,6 +83,13 @@ export default {
         error: t('ssh.status.error'),
       };
       return (map[this.status] || this.status) + (this.statusDetail ? ' · ' + this.statusDetail : '');
+    },
+    /** ended/error → show reconnect; connecting/ready/idle → show disconnect */
+    isDisconnected() {
+      return this.status === 'ended' || this.status === 'error';
+    },
+    connToggleTip() {
+      return this.isDisconnected ? t('ssh.reconnect') : t('ssh.disconnect');
     },
   },
   watch: {
@@ -416,9 +433,13 @@ export default {
       this.connect();
     },
 
-    /** Toolbar click — never pass the MouseEvent as `silent` */
-    onDisconnectClick() {
-      this.disconnectNow(false);
+    /** Single toggle: disconnected → reconnect; otherwise disconnect */
+    onConnToggle() {
+      if (this.isDisconnected) {
+        this.reconnect();
+      } else {
+        this.disconnectNow(false);
+      }
     },
 
     async openSftp() {
@@ -487,6 +508,14 @@ export default {
 /* Element UI adds margin-left between sibling buttons; keep only flex gap */
 .ssh-toolbar .el-button + .el-button {
   margin-left: 0;
+}
+.gear-icon-btn.is-danger {
+  color: #f56c6c;
+  border-color: rgba(245, 108, 108, 0.55);
+}
+.gear-icon-btn.is-danger:hover:not(:disabled) {
+  color: #f56c6c;
+  border-color: #f56c6c;
 }
 .ssh-meta {
   font-family: Consolas, monospace;
