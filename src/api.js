@@ -27,6 +27,12 @@ export const api = hasBridge
       getPathForFile(file) {
         return (file && file.path) || '';
       },
+      async clipboardReadText() {
+        return '';
+      },
+      async clipboardWriteText() {
+        return false;
+      },
       async getSnapshot() {
         return JSON.parse(JSON.stringify(mockState));
       },

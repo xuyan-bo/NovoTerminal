@@ -45,10 +45,6 @@
           <span class="c-time">{{ $t('sftp.colTime') }}</span>
         </div>
         <div
-          v-loading="localLoading"
-          element-loading-text="加载中…"
-          element-loading-spinner="el-icon-loading"
-          element-loading-background="rgba(15, 20, 25, 0.55)"
           class="file-list"
           data-side="local"
           @contextmenu.prevent="onBlankCtx($event, 'local')"
@@ -125,10 +121,6 @@
           <span class="c-time">{{ $t('sftp.colTime') }}</span>
         </div>
         <div
-          v-loading="remoteLoading"
-          element-loading-text="加载中…"
-          element-loading-spinner="el-icon-loading"
-          element-loading-background="rgba(15, 20, 25, 0.55)"
           class="file-list"
           data-side="remote"
           @contextmenu.prevent="onBlankCtx($event, 'remote')"
@@ -168,10 +160,31 @@
     <div class="sftp-tasks" :style="{ height: (100 - topPct) + '%' }">
       <div class="tasks-head"><span>{{ $t('sftp.tasks') }}</span></div>
       <div class="tasks-table-wrap">
-        <el-table :data="tasks" size="mini" height="100%" border stripe empty-text="" class="sftp-el-table">
-          <el-table-column prop="name" :label="$t('sftp.colName')" min-width="110" show-overflow-tooltip />
+        <el-table
+          :data="tasks"
+          size="mini"
+          height="100%"
+          border
+          stripe
+          row-key="taskId"
+          :tree-props="{ children: 'children' }"
+          :expand-row-keys="expandedKeys"
+          empty-text=""
+          class="sftp-el-table"
+          @expand-change="onExpandChange"
+        >
+          <el-table-column prop="name" :label="$t('sftp.colName')" min-width="140" show-overflow-tooltip>
+            <template slot-scope="scope">
+              <span v-if="scope.row.isFolder" class="folder-tag">📁</span>
+              <span v-else-if="scope.row.isDir" class="folder-tag">📁</span>
+              {{ scope.row.name }}
+              <span v-if="scope.row.isFolder" class="folder-count">
+                ({{ folderDone(scope.row) }}/{{ folderFileCount(scope.row) }})
+              </span>
+            </template>
+          </el-table-column>
           <el-table-column prop="sizeText" :label="$t('sftp.colSize')" width="80" />
-          <el-table-column :label="$t('sftp.colProgress')" min-width="180">
+          <el-table-column :label="$t('sftp.colProgress')" min-width="160">
             <template slot-scope="scope">
               <div class="prog-line">
                 <div class="prog-wrap">
@@ -185,26 +198,28 @@
             </template>
           </el-table-column>
           <el-table-column prop="speedText" :label="$t('sftp.colSpeed')" width="90" />
-          <el-table-column prop="sourcePath" :label="$t('sftp.colSource')" min-width="140" show-overflow-tooltip />
-          <el-table-column prop="targetPath" :label="$t('sftp.colTarget')" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="sourcePath" :label="$t('sftp.colSource')" min-width="120" show-overflow-tooltip />
+          <el-table-column prop="targetPath" :label="$t('sftp.colTarget')" min-width="120" show-overflow-tooltip />
           <el-table-column :label="$t('sftp.colAction')" width="100" align="center">
             <template slot-scope="scope">
-              <el-tooltip :content="scope.row.status === 'paused' ? $t('sftp.resume') : $t('sftp.pause')" placement="top">
-                <button
-                  type="button"
-                  class="op-icon-btn"
-                  :disabled="isTaskFinished(scope.row)"
-                  @click.stop="togglePause(scope.row)"
-                >
-                  <svg v-if="scope.row.status !== 'paused'" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
-                  <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-                </button>
-              </el-tooltip>
-              <el-tooltip :content="$t('sftp.removeTask')" placement="top">
-                <button type="button" class="op-icon-btn danger" @click.stop="removeTask(scope.row)">
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 7h12l-1 14H7L6 7zm3-3h6l1 2H8l1-2z"/></svg>
-                </button>
-              </el-tooltip>
+              <template v-if="!scope.row.isDir">
+                <el-tooltip :content="scope.row.status === 'paused' ? $t('sftp.resume') : $t('sftp.pause')" placement="top">
+                  <button
+                    type="button"
+                    class="op-icon-btn"
+                    :disabled="isTaskFinished(scope.row)"
+                    @click.stop="togglePause(scope.row)"
+                  >
+                    <svg v-if="scope.row.status !== 'paused'" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
+                    <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                  </button>
+                </el-tooltip>
+                <el-tooltip :content="$t('sftp.removeTask')" placement="top">
+                  <button type="button" class="op-icon-btn danger" @click.stop="removeTask(scope.row)">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 7h12l-1 14H7L6 7zm3-3h6l1 2H8l1-2z"/></svg>
+                  </button>
+                </el-tooltip>
+              </template>
             </template>
           </el-table-column>
         </el-table>
@@ -228,6 +243,14 @@ import { api, unwrap } from '../store';
 import { t } from '../i18n';
 
 const PARENT_ROW = { name: '..', isDir: true, isParent: true, sizeText: '—', mtime: '' };
+
+function formatSize(n) {
+  const num = Number(n) || 0;
+  if (num < 1024) return `${num} B`;
+  if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`;
+  if (num < 1024 * 1024 * 1024) return `${(num / 1024 / 1024).toFixed(1)} MB`;
+  return `${(num / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
 
 function joinRemote(dir, name) {
   if (!dir || dir === '/') return '/' + name;
@@ -292,6 +315,8 @@ export default {
       _pollTimer: null,
       _dropLock: {},
       _lastDrag: null,
+      taskTableKey: 0,
+      expandedKeys: [],
     };
   },
   computed: {
@@ -423,6 +448,14 @@ export default {
       // debug only — no on-screen overlay
       console.log('[sftp]', new Date().toLocaleTimeString(), this.buildTag, msg);
     },
+    folderFileCount(row) {
+      if (!row || !row.children) return 0;
+      return row.children.filter((c) => !c.isDir).length;
+    },
+    folderDone(row) {
+      if (!row || !row.children) return 0;
+      return row.children.filter((c) => !c.isDir && c.status === 'done').length;
+    },
     isTaskFinished(row) {
       return row.status === 'done' || row.status === 'error' || row.status === 'canceled';
     },
@@ -433,10 +466,119 @@ export default {
       const e = String(row.error || '传输失败');
       return e.length > 48 ? e.slice(0, 48) + '…' : e;
     },
+    recalcFolder(parent) {
+      if (!parent || !parent.isFolder) return parent;
+      const files = (parent.children || []).filter((c) => !c.isDir);
+      let size = 0;
+      let transferred = 0;
+      let speed = 0;
+      let hasRun = false;
+      let anyErr = false;
+      let anyPause = false;
+      files.forEach((c) => {
+        size += Number(c.size) || 0;
+        transferred += Number(c.transferred) || 0;
+        if (c.status === 'running') {
+          hasRun = true;
+          speed += Number(c.speed) || 0;
+        } else if (c.status === 'error') anyErr = true;
+        else if (c.status === 'paused') anyPause = true;
+      });
+      const allSettled =
+        files.length > 0 &&
+        files.every((c) => c.status === 'done' || c.status === 'error' || c.status === 'canceled');
+      parent.size = size;
+      parent.transferred = transferred;
+      parent.percent =
+        size > 0 ? Math.min(100, Math.round((transferred / size) * 100)) : allSettled ? 100 : 0;
+      parent.sizeText = formatSize(size);
+      parent.speedText = hasRun && speed > 0 ? `${formatSize(speed)}/s` : '—';
+      if (allSettled) parent.status = anyErr ? 'error' : 'done';
+      else if (anyPause && !hasRun) parent.status = 'paused';
+      else parent.status = 'running';
+      return parent;
+    },
+    /** Remember expand state; new folders expand once, manual collapse sticks */
+    onExpandChange(row, expandedRows) {
+      if (Array.isArray(expandedRows)) {
+        this.expandedKeys = expandedRows
+          .map((r) => (r && r.taskId) || null)
+          .filter(Boolean);
+        return;
+      }
+      if (!row || !row.taskId) return;
+      const id = row.taskId;
+      if (this.expandedKeys.indexOf(id) >= 0) {
+        this.expandedKeys = this.expandedKeys.filter((k) => k !== id);
+      } else {
+        this.expandedKeys = [...this.expandedKeys, id];
+      }
+    },
+    expandFolder(taskId) {
+      if (!taskId) return;
+      if (this.expandedKeys.indexOf(taskId) < 0) {
+        this.expandedKeys = [...this.expandedKeys, taskId];
+      }
+    },
+    collapseFolder(taskId) {
+      if (!taskId) return;
+      this.expandedKeys = this.expandedKeys.filter((k) => k !== taskId);
+    },
+    /** Collect ids/keys of files that belong under a folder task */
+    folderChildIndex() {
+      const ids = new Set();
+      const keys = new Set();
+      this.tasks.forEach((row) => {
+        if (!row || !row.isFolder || !row.children) return;
+        row.children.forEach((c) => {
+          if (!c) return;
+          if (c.taskId) ids.add(c.taskId);
+          keys.add(`${c.sourcePath || ''}|${c.targetPath || ''}`);
+        });
+      });
+      return { ids, keys };
+    },
+    childKey(row) {
+      return `${(row && row.sourcePath) || ''}|${(row && row.targetPath) || ''}`;
+    },
+    findFolderChild(taskId, sourcePath, targetPath) {
+      const key = `${sourcePath || ''}|${targetPath || ''}`;
+      for (let i = 0; i < this.tasks.length; i++) {
+        const parent = this.tasks[i];
+        if (!parent || !parent.isFolder || !parent.children) continue;
+        let ci = -1;
+        if (taskId) ci = parent.children.findIndex((c) => c.taskId === taskId);
+        if (ci < 0 && key !== '|') {
+          ci = parent.children.findIndex((c) => `${c.sourcePath || ''}|${c.targetPath || ''}` === key);
+        }
+        if (ci >= 0) return { parent, index: ci };
+      }
+      return null;
+    },
     mergeTask(p) {
+      if (!p || !p.taskId) return;
+      const hit = this.findFolderChild(p.taskId, p.sourcePath, p.targetPath);
+      if (hit) {
+        const parent = hit.parent;
+        const merged = { ...parent.children[hit.index], ...p, parentId: parent.taskId, isFolder: false };
+        const next = parent.children.slice();
+        next.splice(hit.index, 1, merged);
+        this.$set(parent, 'children', next);
+        this.recalcFolder(parent);
+        return;
+      }
+      const { ids, keys } = this.folderChildIndex();
+      // progress for a known folder file — never promote to top-level
+      if (ids.has(p.taskId) || keys.has(this.childKey(p))) return;
       const i = this.tasks.findIndex((x) => x.taskId === p.taskId);
       const prev = i >= 0 ? this.tasks[i] : null;
       const merged = i >= 0 ? { ...this.tasks[i], ...p } : { ...p };
+      if (merged.isFolder && merged.children) {
+        if (i >= 0) this.$set(this.tasks, i, merged);
+        else this.tasks.unshift(merged);
+        this.recalcFolder(merged);
+        return;
+      }
       if (i >= 0) this.$set(this.tasks, i, merged);
       else this.tasks.unshift(merged);
       if (merged.status === 'error' && (!prev || prev.status !== 'error')) {
@@ -463,14 +605,41 @@ export default {
         const list = unwrap(await api.sftpTasks());
         if (!Array.isArray(list)) return;
         const map = {};
+        const keyMap = {};
         list.forEach((x) => {
+          if (!x || !x.taskId) return;
           map[x.taskId] = x;
+          keyMap[this.childKey(x)] = x;
         });
-        const merged = this.tasks.filter((x) => map[x.taskId]).map((x) => ({ ...x, ...map[x.taskId] }));
-        list.forEach((x) => {
-          if (!merged.find((m) => m.taskId === x.taskId)) merged.push(x);
+        const childIds = new Set();
+        const childKeys = new Set();
+        const next = [];
+        this.tasks.forEach((row) => {
+          if (row && row.isFolder && row.children) {
+            const kids = row.children.map((c) => {
+              const m = map[c.taskId] || keyMap[this.childKey(c)] || null;
+              const merged = m ? { ...c, ...m, parentId: row.taskId, isFolder: false } : { ...c, parentId: row.taskId };
+              if (merged.taskId) childIds.add(merged.taskId);
+              childKeys.add(this.childKey(merged));
+              return merged;
+            });
+            const folder = { ...row, children: kids, isFolder: true };
+            this.recalcFolder(folder);
+            if (folder.status !== 'done') next.push(folder);
+            return;
+          }
         });
-        this.tasks = merged.filter((x) => x.status !== 'done');
+        // top-level: only non-child, non-done rows
+        this.tasks.forEach((row) => {
+          if (!row || row.isFolder) return;
+          if (childIds.has(row.taskId) || childKeys.has(this.childKey(row))) return;
+          if (row.status === 'done') return;
+          next.push(row);
+        });
+        this.tasks = next.filter((row) => {
+          if (row.isFolder) return row.status !== 'done';
+          return row.status !== 'done' && !childIds.has(row.taskId) && !childKeys.has(this.childKey(row));
+        });
       } catch (_) {}
     },
     onUnload() {
@@ -526,19 +695,11 @@ export default {
       this.ctx.visible = false;
     },
 
-    /** keep loading visible long enough for the user to see the animation */
-    async minLoading(ms) {
-      await new Promise((resolve) => setTimeout(resolve, ms || 320));
-    },
-
     async goLocal(p) {
       if (this.localLoading) return;
-      const t0 = Date.now();
       this.localLoading = true;
       try {
         const r = unwrap(await api.sftpLocalList(p));
-        const cost = Date.now() - t0;
-        if (cost < 320) await this.minLoading(320 - cost);
         this.localPath = r.path;
         this.localPathInput = r.path;
         if (r.home) this.localHome = r.home;
@@ -554,12 +715,9 @@ export default {
     async goRemote(p) {
       if (!this.connId || this.remoteLoading) return;
       const target = p || '/';
-      const t0 = Date.now();
       this.remoteLoading = true;
       try {
         const r = unwrap(await api.sftpList(this.connId, target));
-        const cost = Date.now() - t0;
-        if (cost < 320) await this.minLoading(320 - cost);
         this.remotePath = r.path || target;
         this.remotePathInput = this.remotePath;
         const items = (r.items || []).filter((x) => x.name !== '.' && x.name !== '..');
@@ -600,7 +758,14 @@ export default {
         { act: 'rename', label: t('sftp.rename') },
         { act: 'delete', label: t('sftp.delete'), danger: true },
       ];
-      if (side === 'remote' && !f.isParent) {
+      if (!f.isParent && f.isDir) {
+        if (side === 'remote') {
+          items.unshift({ act: 'download-folder', label: t('sftp.downloadFolder') });
+        } else {
+          items.unshift({ act: 'upload-folder', label: t('sftp.uploadFolder') });
+        }
+      }
+      if (side === 'remote' && !f.isParent && !f.isDir) {
         items.unshift({ act: 'download-here', label: t('sftp.downloadHere') });
         items.unshift({ act: 'download-to', label: t('sftp.downloadTo') });
       }
@@ -610,6 +775,16 @@ export default {
       const { side, item } = this.ctx;
       this.closeCtx();
       try {
+        if (it.act === 'upload-folder' && item && item.isDir) {
+          const localDir = joinLocal(this.localPath, item.name);
+          await this.transferFolderUpload(localDir, this.remotePath);
+          return;
+        }
+        if (it.act === 'download-folder' && item && item.isDir) {
+          const remoteDir = joinRemote(this.remotePath, item.name);
+          await this.transferFolderDownload(remoteDir, this.localPath);
+          return;
+        }
         if (it.act === 'download-here' && item) {
           const remotePath = joinRemote(this.remotePath, item.name);
           if (item.isDir) {
@@ -780,11 +955,20 @@ export default {
       e.preventDefault();
       e.stopPropagation();
       const payload = this._lastDrag || this.dragPayload;
+      const external = this.collectExternalPaths(e);
       this.pushDlog(
-        `zone-drop ${zoneSide} p=${payload ? payload.side : 'null'} conn=${this.connId || 'null'} isDir=${payload ? !!payload.isDir : '-'}`
+        `zone-drop ${zoneSide} p=${payload ? payload.side : 'null'} ext=${external.length} conn=${this.connId || 'null'}`
       );
 
-      // Common case: remote file → local panel (do not go through runDrop maze)
+      // OS files from Explorer / Desktop
+      if (external.length) {
+        this._lastDrag = null;
+        this.dragPayload = null;
+        this.handleExternalDrop(external, zoneSide, e);
+        return;
+      }
+
+      // Common case: remote file → local panel
       if (
         payload &&
         zoneSide === 'local' &&
@@ -808,6 +992,40 @@ export default {
             this.pushDlog('zone-drop DIRECT fail ' + (err && err.message));
             this.$message.error(err.message || String(err));
           });
+        return;
+      }
+
+      // Remote folder → local panel
+      if (
+        payload &&
+        zoneSide === 'local' &&
+        payload.side === 'remote' &&
+        payload.isDir &&
+        this.connId
+      ) {
+        this.pushDlog(`zone-drop DIRECT folder download ${payload.path}`);
+        this._lastDrag = null;
+        this.dragPayload = null;
+        this.transferFolderDownload(payload.path, this.localPath).catch((err) => {
+          this.$message.error(err.message || String(err));
+        });
+        return;
+      }
+
+      // Local folder → remote panel
+      if (
+        payload &&
+        zoneSide === 'remote' &&
+        payload.side === 'local' &&
+        payload.isDir &&
+        this.connId
+      ) {
+        this.pushDlog(`zone-drop DIRECT folder upload ${payload.path}`);
+        this._lastDrag = null;
+        this.dragPayload = null;
+        this.transferFolderUpload(payload.path, this.remotePath).catch((err) => {
+          this.$message.error(err.message || String(err));
+        });
         return;
       }
 
@@ -843,9 +1061,24 @@ export default {
     onRootDragOver() {},
     /** Single drop path used by panel zones (and rare document fallback) */
     async runDrop(e, zoneSide) {
+      if (e && e._omniHandled) return;
+      if (e) e._omniHandled = true;
       this.dropHi = '';
       const payload = this._lastDrag || this.dragPayload;
-      this.pushDlog(`*** RUNDROP *** zone=${zoneSide || '-'} payload=${payload ? payload.side + ':' + payload.path : 'null'}`);
+      const external = this.collectExternalPaths(e);
+      this.pushDlog(
+        `runDrop zone=${zoneSide || '-'} payload=${payload ? payload.side + ':' + payload.path : 'null'} ext=${external.length}`
+      );
+      if (external.length) {
+        this._lastDrag = null;
+        this.dragPayload = null;
+        await this.handleExternalDrop(external, zoneSide || 'remote', e);
+        return;
+      }
+      if (!payload) {
+        this.$message.warning('未识别到拖拽内容，请从列表按住文件拖入');
+        return;
+      }
 
       const dest =
         zoneSide === 'remote' ? this.remotePath : zoneSide === 'local' ? this.localPath : null;
@@ -1277,29 +1510,346 @@ export default {
       }
     },
 
+    /** Upload OS files into remote / copy into local folder */
+    async handleExternalDrop(external, zoneSide, e) {
+      let dest =
+        zoneSide === 'remote' ? this.remotePath : this.localPath;
+      const rowEl = e && e.target && e.target.closest ? e.target.closest('.file-row') : null;
+      if (
+        rowEl &&
+        rowEl.getAttribute('data-isdir') === '1' &&
+        rowEl.getAttribute('data-parent') !== '1'
+      ) {
+        const name = rowEl.getAttribute('data-name');
+        if (name) {
+          dest =
+            zoneSide === 'remote'
+              ? joinRemote(this.remotePath, name)
+              : joinLocal(this.localPath, name);
+        }
+      }
+      this.pushDlog(`external drop → ${zoneSide}:${dest} n=${external.length}`);
+      if (zoneSide === 'remote') {
+        if (!this.connId) {
+          this.$message.error(t('sftp.status.idle'));
+          return;
+        }
+        let ok = 0;
+        for (const item of external) {
+          try {
+            let isDir = !!item.isDir;
+            if (api.sftpLocalExists) {
+              try {
+                const st = unwrap(await api.sftpLocalExists(item.path));
+                if (st && st.exists) isDir = !!st.isDir;
+              } catch (_) {}
+            }
+            if (isDir) {
+              await this.transferFolderUpload(item.path, dest);
+            } else {
+              await this.startUpload(item.path, joinRemote(dest, item.name));
+            }
+            ok += 1;
+          } catch (err) {
+            this.$message.error(`${item.name}: ${err.message || err}`);
+          }
+        }
+        if (ok) {
+          this.$message.success(t('sftp.taskQueued'));
+          setTimeout(() => this.goRemote(dest), 400);
+          this.syncTasks();
+        }
+        return;
+      }
+      // drop into local panel: copy local files into current folder
+      let ok = 0;
+      for (const item of external) {
+        try {
+          if (api.sftpLocalCopy) {
+            unwrap(await api.sftpLocalCopy(item.path, dest));
+          } else {
+            this.$message.error('本地复制不可用');
+          }
+          ok += 1;
+        } catch (err) {
+          this.$message.error(`${item.name}: ${err.message || err}`);
+        }
+      }
+      if (ok) {
+        this.$message.success(t('sftp.downloadDone'));
+        setTimeout(() => this.goLocal(dest), 400);
+      }
+    },
+
     async uploadLocalPayload(payload, remoteDir) {
       if (!this.connId) return;
       if (!payload.isDir) {
         await this.uploadPaths([payload.path], remoteDir);
         return;
       }
+      await this.transferFolderUpload(payload.path, remoteDir);
+    },
+    async downloadRemotePayload(payload, localDir) {
+      if (!this.connId) return;
+      if (!payload.isDir) {
+        await this.downloadPaths([payload.path], localDir);
+        return;
+      }
+      await this.transferFolderDownload(payload.path, localDir);
+    },
+
+    /** Folder upload → one expandable parent task + child file tasks */
+    async transferFolderUpload(localDir, remoteDir) {
+      if (!this.connId) return;
+      const folderName = String(localDir).split(/[\\/]/).filter(Boolean).pop() || 'folder';
+      const remoteRoot = joinRemote(remoteDir, folderName);
+      let walk = [];
       try {
-        const walk = unwrap(await api.sftpWalkLocal(payload.path, joinRemote(remoteDir, payload.name)));
-        for (const node of walk) {
-          if (node.type === 'dir') {
-            try {
-              await api.sftpMkdir(this.connId, node.remotePath);
-            } catch (_) {}
-          } else {
-            await this.startUpload(node.localPath, node.remotePath);
-          }
-        }
-        this.$message.success(t('sftp.taskQueued'));
-        setTimeout(() => this.goRemote(this.remotePath), 400);
-        this.syncTasks();
+        walk = unwrap(await api.sftpWalkLocal(localDir, remoteRoot)) || [];
       } catch (e) {
         this.$message.error(e.message);
+        return;
       }
+      const parentId = `folder-${Date.now().toString(36)}`;
+      const parent = {
+        taskId: parentId,
+        name: folderName,
+        isFolder: true,
+        direction: 'upload',
+        status: 'running',
+        percent: 0,
+        size: 0,
+        transferred: 0,
+        sizeText: '—',
+        speedText: '—',
+        sourcePath: localDir,
+        targetPath: remoteRoot,
+        error: '',
+        children: [],
+      };
+      // create remote root folder first — otherwise child uploads ENOENT
+      try {
+        if (api.sftpMkdirp) unwrap(await api.sftpMkdirp(this.connId, remoteRoot));
+        else if (api.sftpMkdir) unwrap(await api.sftpMkdir(this.connId, remoteRoot));
+      } catch (_) {}
+      this.tasks = [parent, ...this.tasks];
+      this.expandFolder(parentId);
+      this.$message.success(`${t('sftp.taskQueued')}: ${folderName}`);
+      for (const node of walk) {
+        if (node.type === 'dir') {
+          try {
+            await api.sftpMkdir(this.connId, node.remotePath);
+          } catch (_) {}
+          parent.children.push({
+            taskId: `${parentId}:d:${node.remotePath}`,
+            parentId,
+            name: node.name,
+            isDir: true,
+            status: 'done',
+            percent: 100,
+            size: 0,
+            transferred: 0,
+            sizeText: '—',
+            speedText: '—',
+            sourcePath: node.localPath,
+            targetPath: node.remotePath,
+          });
+        } else if (node.type === 'file') {
+          const child = {
+            taskId: `${parentId}:c:${node.remotePath}`,
+            parentId,
+            name: node.name,
+            isDir: false,
+            status: 'running',
+            percent: 0,
+            size: Number(node.size) || 0,
+            transferred: 0,
+            sizeText: formatSize(node.size),
+            speedText: '—',
+            sourcePath: node.localPath,
+            targetPath: node.remotePath,
+            error: '',
+          };
+          parent.children.push(child);
+          try {
+            const r = unwrap(
+              await api.sftpUpload({
+                connId: this.connId,
+                localPath: node.localPath,
+                remotePath: node.remotePath,
+              })
+            );
+            if (r && r.taskId) child.taskId = r.taskId;
+          } catch (e) {
+            child.status = 'error';
+            child.error = e.message || String(e);
+          }
+        } else if (!node.type && node.localPath) {
+          // unknown node — only upload if it is a regular file
+          try {
+            const st = unwrap(await api.sftpLocalExists(node.localPath));
+            if (!st || !st.exists || st.isDir) continue;
+          } catch (_) {
+            continue;
+          }
+          try {
+            const r = unwrap(
+              await api.sftpUpload({
+                connId: this.connId,
+                localPath: node.localPath,
+                remotePath: node.remotePath,
+              })
+            );
+            parent.children.push({
+              taskId: (r && r.taskId) || `${parentId}:c:${node.remotePath}`,
+              parentId,
+              name: node.name,
+              isDir: false,
+              status: 'running',
+              percent: 0,
+              size: Number(node.size) || 0,
+              transferred: 0,
+              sizeText: formatSize(node.size),
+              speedText: '—',
+              sourcePath: node.localPath,
+              targetPath: node.remotePath,
+            });
+          } catch (e) {
+            this.pushDlog('folder child skip ' + (e && e.message));
+          }
+        }
+        this.$set(parent, 'children', parent.children.slice());
+        this.recalcFolder(parent);
+      }
+      this.recalcFolder(parent);
+      this.syncTasks();
+      setTimeout(() => this.goRemote(remoteDir), 400);
+    },
+
+    async walkRemoteNodes(connId, remoteDir, localDir) {
+      const listing = unwrap(await api.sftpList(connId, remoteDir));
+      const items = (listing.items || []).filter(
+        (x) => !x.isParent && x.name !== '.' && x.name !== '..'
+      );
+      const nodes = [];
+      for (const it of items) {
+        const rp = joinRemote(remoteDir, it.name);
+        const lp = joinLocal(localDir, it.name);
+        if (it.isDir) {
+          nodes.push({ type: 'dir', name: it.name, remotePath: rp, localPath: lp, size: 0 });
+          const sub = await this.walkRemoteNodes(connId, rp, lp);
+          nodes.push(...sub);
+        } else {
+          nodes.push({
+            type: 'file',
+            name: it.name,
+            remotePath: rp,
+            localPath: lp,
+            size: Number(it.size) || 0,
+          });
+        }
+      }
+      return nodes;
+    },
+
+    /** Folder download → expandable parent + children */
+    async transferFolderDownload(remoteDir, localDir) {
+      if (!this.connId) return;
+      const folderName = String(remoteDir).split('/').filter(Boolean).pop() || 'folder';
+      const localRoot = joinLocal(localDir, folderName);
+      let walk = [];
+      try {
+        walk = await this.walkRemoteNodes(this.connId, remoteDir, localRoot);
+      } catch (e) {
+        this.$message.error(e.message);
+        return;
+      }
+      try {
+        await api.sftpLocalMkdir(localDir, folderName);
+      } catch (_) {}
+      const parentId = `folder-${Date.now().toString(36)}`;
+      const parent = {
+        taskId: parentId,
+        name: folderName,
+        isFolder: true,
+        direction: 'download',
+        status: 'running',
+        percent: 0,
+        size: 0,
+        transferred: 0,
+        sizeText: '—',
+        speedText: '—',
+        sourcePath: remoteDir,
+        targetPath: localRoot,
+        error: '',
+        children: [],
+      };
+      this.tasks = [parent, ...this.tasks];
+      this.expandFolder(parentId);
+      this.$message.success(`${t('sftp.taskQueued')}: ${folderName}`);
+      for (const node of walk) {
+        if (node.type === 'dir') {
+          try {
+            await api.sftpLocalMkdir(localDir === parent.targetPath ? localDir : parentLocal(node.localPath), node.name);
+          } catch (_) {}
+          // ensure nested dir path exists
+          try {
+            await api.sftpLocalMkdir(parentLocal(node.localPath), node.name);
+          } catch (_) {}
+          parent.children.push({
+            taskId: `${parentId}:d:${node.remotePath}`,
+            parentId,
+            name: node.name,
+            isDir: true,
+            status: 'done',
+            percent: 100,
+            size: 0,
+            transferred: 0,
+            sizeText: '—',
+            speedText: '—',
+            sourcePath: node.remotePath,
+            targetPath: node.localPath,
+          });
+        } else {
+          try {
+            await api.sftpLocalMkdir(parentLocal(node.localPath), '.');
+          } catch (_) {}
+          const child = {
+            taskId: `${parentId}:c:${node.remotePath}`,
+            parentId,
+            name: node.name,
+            isDir: false,
+            status: 'running',
+            percent: 0,
+            size: Number(node.size) || 0,
+            transferred: 0,
+            sizeText: formatSize(node.size),
+            speedText: '—',
+            sourcePath: node.remotePath,
+            targetPath: node.localPath,
+            error: '',
+          };
+          parent.children.push(child);
+          try {
+            const r = unwrap(
+              await api.sftpDownload({
+                connId: this.connId,
+                remotePath: node.remotePath,
+                localPath: node.localPath,
+              })
+            );
+            if (r && r.taskId) child.taskId = r.taskId;
+          } catch (e) {
+            child.status = 'error';
+            child.error = e.message || String(e);
+          }
+        }
+        this.$set(parent, 'children', parent.children.slice());
+        this.recalcFolder(parent);
+      }
+      this.recalcFolder(parent);
+      this.syncTasks();
+      setTimeout(() => this.goLocal(localDir), 400);
     },
     async downloadRemotePayload(payload, localDir) {
       if (!this.connId) return;
@@ -1335,6 +1885,18 @@ export default {
       }
     },
     async startUpload(localPath, remotePath) {
+      // Folder path must not go through file upload (EISDIR)
+      if (api.sftpLocalExists) {
+        try {
+          const lst = unwrap(await api.sftpLocalExists(localPath));
+          if (lst && lst.exists && lst.isDir) {
+            const remoteDir = parentRemote(remotePath) || this.remotePath;
+            this.pushDlog(`startUpload dir→folder ${localPath} => ${remoteDir}`);
+            await this.transferFolderUpload(localPath, remoteDir);
+            return;
+          }
+        } catch (_) {}
+      }
       const dup = this.tasks.find(
         (x) =>
           x.sourcePath === localPath &&
@@ -1444,6 +2006,19 @@ export default {
       if (this.isTaskFinished(task)) return;
       const pause = task.status !== 'paused';
       try {
+        if (task.isFolder && task.children && task.children.length) {
+          for (const c of task.children) {
+            if (c.isDir || !c.taskId) continue;
+            try {
+              unwrap(await api.sftpPause(c.taskId, pause));
+              c.status = pause ? 'paused' : 'running';
+            } catch (_) {}
+          }
+          this.$set(task, 'status', pause ? 'paused' : 'running');
+          this.recalcFolder(task);
+          this.syncTasks();
+          return;
+        }
         unwrap(await api.sftpPause(task.taskId, pause));
         this.mergeTask({ ...task, status: pause ? 'paused' : 'running' });
         this.syncTasks();
@@ -1451,10 +2026,58 @@ export default {
         this.$message.error(e.message);
       }
     },
+    async refreshListsAfterTaskRemove(task) {
+      const dir = task && task.direction;
+      const target = task && task.targetPath;
+      if (dir === 'upload') {
+        const pdir = target ? parentRemote(target) : this.remotePath;
+        if (pdir === this.remotePath || (task && task.isFolder)) {
+          if (this.connId) await this.goRemote(this.remotePath);
+        }
+      } else if (dir === 'download') {
+        const pdir = target ? parentLocal(target) : this.localPath;
+        if (pdir === this.localPath || (task && task.isFolder)) {
+          await this.goLocal(this.localPath);
+        }
+      } else {
+        await this.goLocal(this.localPath);
+        if (this.connId) await this.goRemote(this.remotePath);
+      }
+    },
     async removeTask(task) {
       try {
+        const unfinished = (row) => row && (row.status === 'running' || row.status === 'paused');
+        if (task.isFolder && task.children && task.children.length) {
+          for (const c of task.children) {
+            if (c.isDir || !c.taskId) continue;
+            try { unwrap(await api.sftpCancel(c.taskId)); } catch (_) {}
+          }
+          for (const c of task.children) {
+            if (c.isDir || !c.targetPath) continue;
+            if (!unfinished(c)) continue;
+            if (c.direction === 'download' && api.sftpLocalUnlink) {
+              try { await api.sftpLocalUnlink(c.targetPath, false); } catch (_) {}
+            } else if (c.direction === 'upload' && this.connId && api.sftpUnlink) {
+              try { await api.sftpUnlink(this.connId, c.targetPath, false); } catch (_) {}
+            }
+          }
+          this.tasks = this.tasks.filter((x) => x.taskId !== task.taskId);
+          this.collapseFolder(task.taskId);
+          await this.refreshListsAfterTaskRemove(task);
+          this.syncTasks();
+          return;
+        }
+        const wasUnfinished = unfinished(task);
         unwrap(await api.sftpCancel(task.taskId));
+        if (wasUnfinished && task.targetPath) {
+          if (task.direction === 'download' && api.sftpLocalUnlink) {
+            try { await api.sftpLocalUnlink(task.targetPath, false); } catch (_) {}
+          } else if (task.direction === 'upload' && this.connId && api.sftpUnlink) {
+            try { await api.sftpUnlink(this.connId, task.targetPath, false); } catch (_) {}
+          }
+        }
         this.tasks = this.tasks.filter((x) => x.taskId !== task.taskId);
+        if (wasUnfinished) await this.refreshListsAfterTaskRemove(task);
         this.syncTasks();
       } catch (e) {
         this.$message.error(e.message);
@@ -1615,19 +2238,6 @@ export default {
   overflow: auto;
   position: relative;
 }
-.file-list /deep/ .el-loading-mask {
-  background-color: rgba(15, 20, 25, 0.55) !important;
-  z-index: 5;
-}
-.file-list /deep/ .el-loading-spinner .el-loading-text {
-  color: var(--text-2, #8b9bb0);
-  margin: 8px 0 0;
-}
-.file-list /deep/ .el-loading-spinner svg path,
-.file-list /deep/ .el-loading-spinner i {
-  color: var(--accent, #409eff);
-  font-size: 22px;
-}
 .file-row {
   cursor: default;
   color: var(--text-2);
@@ -1700,6 +2310,13 @@ export default {
 }
 .sftp-el-table /deep/ .el-table__body tr:hover > td {
   background: var(--bg-hover) !important;
+}
+.folder-tag {
+  margin-right: 4px;
+}
+.folder-count {
+  color: var(--text-3);
+  font-size: 10px;
 }
 .prog-line {
   display: flex;

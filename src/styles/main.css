@@ -697,12 +697,18 @@ button {
   flex: 1;
   min-height: 0;
   width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 4px 0 2px;
 }
 
 .os-pie-chart {
-  width: 100%;
-  height: 100%;
-  min-height: 140px;
+  width: 168px;
+  height: 168px;
+  max-width: 100%;
+  flex: 0 0 auto;
 }
 
 .recent-list {

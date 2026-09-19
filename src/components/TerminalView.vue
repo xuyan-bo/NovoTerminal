@@ -138,11 +138,104 @@ export default {
         api.sshWrite && api.sshWrite(this.liveSessionId, data);
       });
 
+      // Xshell-style right click: copy selection, or paste if none
+      this._onTermCtx = (e) => this.onTermContextmenu(e);
+      const termEl = this.$refs.termEl;
+      if (termEl) {
+        termEl.addEventListener('contextmenu', this._onTermCtx);
+      }
+
       // Observe the outer wrap (stable flex box), not the xterm DOM
       if (window.ResizeObserver) {
         this.ro = new ResizeObserver(() => this.scheduleFit());
         const target = this.$refs.wrapEl || this.$refs.termEl;
         if (target) this.ro.observe(target);
+      }
+    },
+
+    onTermContextmenu(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const term = this.term;
+      if (!term) return;
+      let selected = '';
+      try {
+        selected = term.hasSelection && term.hasSelection() ? term.getSelection() : '';
+      } catch (_) {
+        selected = '';
+      }
+      if (selected && String(selected).length) {
+        this.copySelection(selected);
+      } else {
+        this.pasteFromClipboard();
+      }
+    },
+    async copySelection(text) {
+      const value = String(text || '');
+      if (!value) return;
+      try {
+        if (api.clipboardWriteText) {
+          const ok = await api.clipboardWriteText(value);
+          if (ok) {
+            this.$message.success('已复制');
+            return;
+          }
+        }
+      } catch (_) {}
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(value);
+          this.$message.success('已复制');
+          return;
+        }
+      } catch (_) {}
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        this.$message.success('已复制');
+      } catch (err) {
+        this.$message.error('复制失败');
+      }
+    },
+    async pasteFromClipboard() {
+      let text = '';
+      try {
+        if (api.clipboardReadText) {
+          text = await api.clipboardReadText();
+        }
+      } catch (_) {
+        text = '';
+      }
+      if (!text) {
+        try {
+          if (navigator.clipboard && navigator.clipboard.readText) {
+            text = await navigator.clipboard.readText();
+          }
+        } catch (_) {
+          text = '';
+        }
+      }
+      if (!text) {
+        this.$message.warning('剪贴板为空');
+        return;
+      }
+      const term = this.term;
+      if (!term) return;
+      // Prefer term.paste (handles \n → CR for shell)
+      try {
+        if (typeof term.paste === 'function') {
+          term.paste(text);
+        } else if (this.liveSessionId && api.sshWrite) {
+          api.sshWrite(this.liveSessionId, text.replace(/\r?\n/g, '\r'));
+        }
+      } catch (err) {
+        this.$message.error('粘贴失败');
       }
     },
 
@@ -210,6 +303,13 @@ export default {
         } catch (_) {}
         this.ro = null;
       }
+      const termEl = this.$refs.termEl;
+      if (termEl && this._onTermCtx) {
+        try {
+          termEl.removeEventListener('contextmenu', this._onTermCtx);
+        } catch (_) {}
+      }
+      this._onTermCtx = null;
       if (this.term) {
         try {
           this.term.dispose();

@@ -182,6 +182,21 @@ function unwrap(result) {
 
 function registerIpc() {
   handle('store:snapshot', () => store.snapshot());
+  handle('clipboard:read-text', () => {
+    try {
+      return clipboard.readText() || '';
+    } catch (_) {
+      return '';
+    }
+  });
+  handle('clipboard:write-text', (text) => {
+    try {
+      clipboard.writeText(text == null ? '' : String(text));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  });
   handle('store:create-group', (p) => unwrap(store.createGroup(p)));
   handle('store:update-group', (gid, p) => unwrap(store.updateGroup(gid, p)));
   handle('store:reorder-groups', (p) => unwrap(store.reorderGroups(p && p.fromId, p && p.toId)));
@@ -330,6 +345,7 @@ function registerIpc() {
   handle('sftp:local-exists', (p) => sftpManager.localExists(p));
   handle('sftp:local-list', (p) => sftpManager.localList(p));
   handle('sftp:mkdir', (connId, remotePath) => sftpManager.mkdir(connId, remotePath));
+  handle('sftp:mkdirp', (connId, remotePath) => sftpManager.mkdirp(connId, remotePath));
   handle('sftp:rename', (connId, oldPath, newPath) => sftpManager.rename(connId, oldPath, newPath));
   handle('sftp:unlink', (connId, remotePath, isDir) =>
     sftpManager.unlink(connId, remotePath, !!isDir)
@@ -361,7 +377,7 @@ function registerIpc() {
     return r;
   });
   handle('sftp:pause', (taskId, pause) => sftpManager.pauseTask(taskId, !!pause));
-  handle('sftp:cancel', (taskId) => sftpManager.cancelTask(taskId));
+  handle('sftp:cancel', async (taskId) => sftpManager.cancelTask(taskId));
   handle('sftp:tasks', () => sftpManager.listTasks());
   handle('sftp:close', (connId) => sftpManager.closeSession(connId));
   handle('sftp:pick-local-files', async () => {

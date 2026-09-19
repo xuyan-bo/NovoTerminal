@@ -263,6 +263,31 @@ class SftpManager {
     });
   }
 
+  /** mkdir -p on remote; ignore "already exists" */
+  mkdirp(connId, remoteDir) {
+    return new Promise((resolve) => {
+      try {
+        const c = this.conns.get(connId);
+        if (!c || !c.sftp || !remoteDir || remoteDir === '/') return resolve({ ok: true });
+        const parts = String(remoteDir).split('/').filter(Boolean);
+        let cur = '';
+        let i = 0;
+        const step = () => {
+          if (i >= parts.length) return resolve({ ok: true });
+          cur += '/' + parts[i++];
+          try {
+            c.sftp.mkdir(cur, () => step());
+          } catch (_) {
+            step();
+          }
+        };
+        step();
+      } catch (_) {
+        resolve({ ok: true });
+      }
+    });
+  }
+
   rename(connId, oldPath, newPath) {
     return new Promise((resolve, reject) => {
       const c = this._conn(connId);
@@ -393,6 +418,11 @@ class SftpManager {
       let probeFd = null;
       try {
         const st = fs.statSync(localPath);
+        if (st.isDirectory()) {
+          return reject(
+            Object.assign(new Error('路径是文件夹，请使用文件夹传输'), { code: 'EISDIR' })
+          );
+        }
         size = st.size;
         probeFd = fs.openSync(localPath, 'r');
         const probeBuf = Buffer.alloc(1);
@@ -428,17 +458,29 @@ class SftpManager {
       const buf = Buffer.alloc(CHUNK);
       let pos = 0;
 
+      const release = () => {
+        try {
+          if (localFd != null) {
+            fs.closeSync(localFd);
+            localFd = null;
+          }
+        } catch (_) {}
+        try {
+          if (handle != null) {
+            const h = handle;
+            handle = null;
+            sftp.close(h, () => {});
+          }
+        } catch (_) {}
+      };
+      task._release = release;
+
       const fail = (err) => {
         task.status = 'error';
         task.error = (err && (err.message || err.code)) || String(err);
         console.error('[sftp] transfer error', task.direction, task.sourcePath, task.error);
         this._progress(task);
-        try {
-          if (localFd != null) fs.closeSync(localFd);
-        } catch (_) {}
-        try {
-          if (handle != null) sftp.close(handle, () => {});
-        } catch (_) {}
+        release();
       };
 
       try {
@@ -447,59 +489,64 @@ class SftpManager {
         return fail(e);
       }
 
-      sftp.open(remotePath, 'w', (err, h) => {
-        if (err) return fail(err);
-        handle = h;
+      // ensure remote parent directory exists (avoid ENOENT / "No such file")
+      const remoteParent = String(remotePath).replace(/\/[^/]*$/, '');
+      const startOpen = () => {
+        sftp.open(remotePath, 'w', (err, h) => {
+          if (err) return fail(err);
+          handle = h;
 
-        const pump = () => {
-          if (task.status === 'canceled') {
+          const pump = () => {
+            if (task.status === 'canceled') {
+              release();
+              return;
+            }
+            if (task.paused) {
+              task._resume = pump;
+              return;
+            }
+            let n = 0;
             try {
-              fs.closeSync(localFd);
-            } catch (_) {}
-            try {
-              sftp.close(handle, () => {});
-            } catch (_) {}
-            return;
-          }
-          if (task.paused) {
-            task._resume = pump;
-            return;
-          }
-          let n = 0;
-          try {
-            n = fs.readSync(localFd, buf, 0, CHUNK, pos);
-          } catch (e) {
-            return fail(e);
-          }
-          if (n <= 0) {
-            try {
-              fs.closeSync(localFd);
-            } catch (_) {}
-            sftp.close(handle, (ce) => {
-              handle = null;
-              if (ce) return fail(ce);
-              task.transferred = size || pos;
-              if (task.status !== 'canceled' && task.status !== 'error') {
-                task.status = 'done';
-                task.speed = 0;
-                this._progress(task);
-              }
+              n = fs.readSync(localFd, buf, 0, CHUNK, pos);
+            } catch (e) {
+              return fail(e);
+            }
+            if (n <= 0) {
+              try {
+                fs.closeSync(localFd);
+              } catch (_) {}
+              sftp.close(handle, (ce) => {
+                handle = null;
+                if (ce) return fail(ce);
+                task.transferred = size || pos;
+                if (task.status !== 'canceled' && task.status !== 'error') {
+                  task.status = 'done';
+                  task.speed = 0;
+                  this._progress(task);
+                }
+              });
+              return;
+            }
+            const slice = n === CHUNK ? buf : buf.slice(0, n);
+            const curPos = pos;
+            sftp.write(handle, slice, 0, n, curPos, (werr) => {
+              if (werr) return fail(werr);
+              pos += n;
+              task.transferred = pos;
+              if (!task.size) task.size = pos;
+              this._progress(task);
+              setImmediate(pump);
             });
-            return;
-          }
-          const slice = n === CHUNK ? buf : buf.slice(0, n);
-          const curPos = pos;
-          sftp.write(handle, slice, 0, n, curPos, (werr) => {
-            if (werr) return fail(werr);
-            pos += n;
-            task.transferred = pos;
-            if (!task.size) task.size = pos;
-            this._progress(task);
-            setImmediate(pump);
-          });
-        };
-        pump();
-      });
+          };
+          pump();
+        });
+      };
+
+      if (remoteParent && remoteParent !== remotePath) {
+        this.mkdirp(connId, remoteParent).then(startOpen).catch(startOpen);
+      } else {
+        startOpen();
+      }
     });
   }
 
@@ -534,17 +581,29 @@ class SftpManager {
         let handle = null;
         let outFd = null;
 
+        const release = () => {
+          try {
+            if (outFd != null) {
+              fs.closeSync(outFd);
+              outFd = null;
+            }
+          } catch (_) {}
+          try {
+            if (handle != null) {
+              const h = handle;
+              handle = null;
+              sftp.close(h, () => {});
+            }
+          } catch (_) {}
+        };
+        task._release = release;
+
         const fail = (err) => {
           task.status = 'error';
           task.error = (err && (err.message || err.code)) || String(err);
           console.error('[sftp] transfer error', task.direction, task.sourcePath, task.error);
           this._progress(task);
-          try {
-            if (outFd != null) fs.closeSync(outFd);
-          } catch (_) {}
-          try {
-            if (handle != null) sftp.close(handle, () => {});
-          } catch (_) {}
+          release();
         };
 
         try {
@@ -558,12 +617,7 @@ class SftpManager {
           handle = h;
           const pump = () => {
             if (task.status === 'canceled') {
-              try {
-                fs.closeSync(outFd);
-              } catch (_) {}
-              try {
-                sftp.close(handle, () => {});
-              } catch (_) {}
+              release();
               return;
             }
             if (task.paused) {
@@ -651,15 +705,66 @@ class SftpManager {
     );
   }
 
-  cancelTask(taskId) {
+  /** Close fds first (Windows lock), then delete incomplete target file */
+  async cleanupPartialTarget(task) {
+    if (!task) return;
+    try {
+      if (typeof task._release === 'function') task._release();
+    } catch (_) {}
+    // give Windows a moment to drop the handle lock
+    await new Promise((r) => setTimeout(r, 40));
+    if (!task.targetPath) return;
+    if (task.direction === 'download') {
+      const p = task.targetPath;
+      for (let i = 0; i < 6; i++) {
+        try {
+          if (!fs.existsSync(p)) return;
+          fs.unlinkSync(p);
+          console.log('[sftp] removed partial local file', p);
+          return;
+        } catch (e) {
+          try {
+            if (typeof task._release === 'function') task._release();
+          } catch (_) {}
+          await new Promise((r) => setTimeout(r, 60 * (i + 1)));
+        }
+      }
+      console.warn('[sftp] could not delete partial local file', p);
+    } else if (task.direction === 'upload') {
+      const c = this.conns.get(task.connId);
+      if (c && c.sftp) {
+        await new Promise((resolve) => {
+          try {
+            c.sftp.unlink(task.targetPath, (err) => {
+              if (err) console.warn('[sftp] unlink remote partial failed', err.message);
+              else console.log('[sftp] removed partial remote file', task.targetPath);
+              resolve();
+            });
+          } catch (_) {
+            resolve();
+          }
+        });
+      }
+    }
+  }
+
+  async cancelTask(taskId) {
     const task = this.tasks.get(taskId);
     if (!task) return { ok: true };
+    const wasUnfinished = task.status === 'running' || task.status === 'paused';
     task.status = 'canceled';
     task.paused = false;
     task._resume = null;
+    // release file handles before delete (Windows cannot unlink while fd is open)
+    try {
+      if (typeof task._release === 'function') task._release();
+    } catch (_) {}
     this._progress(task);
+    if (wasUnfinished) {
+      await this.cleanupPartialTarget(task);
+    }
     this.tasks.delete(taskId);
-    return { ok: true };
+    return { ok: true, cleaned: wasUnfinished, targetPath: wasUnfinished ? task.targetPath : null };
   }
 
   listTasks() {

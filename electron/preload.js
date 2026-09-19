@@ -29,6 +29,8 @@ const api = {
   exportGroups: () => ipcRenderer.invoke('store:export'),
   importGroups: (json) => ipcRenderer.invoke('store:import', json),
   browseDataPath: () => ipcRenderer.invoke('app:browse-data-path'),
+  clipboardReadText: () => ipcRenderer.invoke('clipboard:read-text'),
+  clipboardWriteText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
 
   sessionCapabilities: (protocol) => ipcRenderer.invoke('session:capabilities', protocol),
   sessionTest: (req) => ipcRenderer.invoke('session:test', req),
@@ -62,6 +64,7 @@ const api = {
   sftpLocalExists: (p) => ipcRenderer.invoke('sftp:local-exists', p),
   sftpLocalList: (p) => ipcRenderer.invoke('sftp:local-list', p),
   sftpMkdir: (connId, remotePath) => ipcRenderer.invoke('sftp:mkdir', connId, remotePath),
+  sftpMkdirp: (connId, remotePath) => ipcRenderer.invoke('sftp:mkdirp', connId, remotePath),
   sftpRename: (connId, oldPath, newPath) => ipcRenderer.invoke('sftp:rename', connId, oldPath, newPath),
   sftpUnlink: (connId, remotePath, isDir) => ipcRenderer.invoke('sftp:unlink', connId, remotePath, isDir),
   sftpLocalMkdir: (dirPath, name) => ipcRenderer.invoke('sftp:local-mkdir', dirPath, name),

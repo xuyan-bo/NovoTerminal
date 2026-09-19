@@ -125,6 +125,12 @@ export default {
   },
   beforeDestroy() {
     window.removeEventListener('resize', this.resizePie);
+    if (this._pieRO) {
+      try {
+        this._pieRO.disconnect();
+      } catch (_) {}
+      this._pieRO = null;
+    }
     if (this._pie) {
       try {
         this._pie.dispose();
@@ -161,8 +167,28 @@ export default {
           this._pie.dispose();
         } catch (_) {}
       }
+      this.fitPieSquare();
       this._pie = echarts.init(el);
       this.renderPie();
+      if (window.ResizeObserver) {
+        try {
+          if (this._pieRO) this._pieRO.disconnect();
+        } catch (_) {}
+        this._pieRO = new ResizeObserver(() => this.resizePie());
+        this._pieRO.observe(el.parentElement || el);
+      }
+    },
+    /** Force a square plot box so the donut never stretches into an ellipse */
+    fitPieSquare() {
+      const el = this.$refs.pieEl;
+      if (!el) return 168;
+      const host = el.parentElement || el;
+      const availW = host.clientWidth || 200;
+      const availH = host.clientHeight || 200;
+      const size = Math.max(140, Math.min(200, Math.min(availW, availH)));
+      el.style.width = `${size}px`;
+      el.style.height = `${size}px`;
+      return size;
     },
     renderPie() {
       this.$nextTick(() => {
@@ -187,6 +213,8 @@ export default {
           ? raw.filter((x) => x.value > 0)
           : [{ name: '—', value: 1, itemStyle: { color: th.track } }];
 
+        const size = this.fitPieSquare();
+        this._pie.resize({ width: size, height: size });
         this._pie.setOption(
           {
             backgroundColor: 'transparent',
@@ -206,36 +234,45 @@ export default {
               icon: 'circle',
               itemWidth: 8,
               itemHeight: 8,
-              itemGap: 12,
-              textStyle: { color: th.text2, fontSize: 11 },
+              itemGap: 10,
+              itemMargin: 0,
+              padding: [0, 0, 0, 0],
+              textStyle: { color: th.text2, fontSize: 10 },
               data: [names.win, names.mac, names.linux],
             },
-            title: {
-              text: String(total),
-              subtext: assetsLabel,
-              left: 'center',
-              top: '32%',
-              itemGap: 2,
-              textStyle: {
-                color: th.text,
-                fontSize: 20,
-                fontWeight: 700,
-                fontFamily: 'Consolas, monospace',
-              },
-              subtextStyle: { color: th.text3, fontSize: 10 },
-            },
+            title: { show: false },
             series: [
               {
                 type: 'pie',
-                radius: ['52%', '74%'],
-                center: ['50%', '44%'],
+                radius: ['48%', '68%'],
+                center: ['50%', '42%'],
                 minAngle: 6,
                 avoidLabelOverlap: true,
-                label: { show: false },
+                // center label follows pie center — stays centered in the donut hole
+                label: {
+                  show: true,
+                  position: 'center',
+                  formatter: `{a|${total}}\n{b|${assetsLabel}}`,
+                  rich: {
+                    a: {
+                      fontSize: 18,
+                      fontWeight: 700,
+                      color: th.text,
+                      fontFamily: 'Consolas, monospace',
+                      lineHeight: 22,
+                    },
+                    b: {
+                      fontSize: 10,
+                      color: th.text3,
+                      lineHeight: 14,
+                    },
+                  },
+                },
                 labelLine: { show: false },
                 emphasis: {
                   scale: true,
-                  scaleSize: 4,
+                  scaleSize: 3,
+                  label: { show: true, position: 'center' },
                   itemStyle: { shadowBlur: 8, shadowColor: 'rgba(0,0,0,0.25)' },
                 },
                 data,
@@ -244,11 +281,12 @@ export default {
           },
           true
         );
-        this._pie.resize();
+        this._pie.resize({ width: size, height: size });
       });
     },
     resizePie() {
-      if (this._pie) this._pie.resize();
+      const size = this.fitPieSquare();
+      if (this._pie) this._pie.resize({ width: size, height: size });
     },
     openRecent(r) {
       const hit = findAsset(r.id);
