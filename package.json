@@ -1,0 +1,51 @@
+{
+  "name": "omnidesk",
+  "version": "0.1.0",
+  "description": "OmniDesk — local-first remote desktop client (Windows first)",
+  "main": "electron/main.js",
+  "author": "OmniDesk",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build:renderer": "vite build",
+    "electron": "cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "start": "npm run build:renderer && electron .",
+    "pack:win": "npm run build:renderer && electron-builder --win --x64",
+    "lint": "echo \"no lint configured\""
+  },
+  "dependencies": {
+    "element-ui": "^2.15.14",
+    "vue": "^2.7.16"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue2": "^2.3.3",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "com.omnidesk.app",
+    "productName": "OmniDesk",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "allowScripts": {}
+}

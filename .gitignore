@@ -1,0 +1,10 @@
+node_modules/
+dist/
+release/
+electron-dl/
+*.log
+.DS_Store
+.vite/
+*.local
+generated-*.png
+
