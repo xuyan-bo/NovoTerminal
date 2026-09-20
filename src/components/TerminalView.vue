@@ -98,7 +98,15 @@ export default {
       if (v) {
         this._lastW = 0;
         this._lastH = 0;
-        this.$nextTick(() => this.scheduleFit());
+        this.$nextTick(() => {
+          this.scheduleFit();
+          // xterm only receives keystrokes while focused; tab switches can steal it
+          if (this.term) {
+            try {
+              this.term.focus();
+            } catch (_) {}
+          }
+        });
       }
     },
   },
@@ -149,6 +157,10 @@ export default {
       this._lastW = 0;
       this._lastH = 0;
       this.scheduleFit();
+      // Grab focus so typing works immediately (open() does not focus)
+      try {
+        term.focus();
+      } catch (_) {}
 
       term.onData((data) => {
         if (!this.liveSessionId) return;
@@ -422,6 +434,12 @@ export default {
         refresh().catch(() => {});
         // one delayed sync in case layout settled after mount/fullscreen
         this.scheduleRemoteResize();
+        // focus after the shell is ready so the user can type right away
+        if (this.term) {
+          try {
+            this.term.focus();
+          } catch (_) {}
+        }
       } catch (e) {
         this.status = 'error';
         this.statusDetail = e.message || '';
@@ -547,14 +565,22 @@ export default {
   overflow: hidden;
   padding: 4px 6px 6px;
   box-sizing: border-box;
+  background: #0f1419 !important;
 }
 .ssh-term /deep/ .xterm {
   height: 100%;
   width: 100%;
+  background: #0f1419 !important;
 }
 .ssh-term /deep/ .xterm-viewport {
   overflow-y: auto !important;
   overflow-x: hidden !important;
-  background-color: transparent !important;
+  background-color: #0f1419 !important;
+}
+.ssh-term /deep/ .xterm-screen {
+  background: #0f1419 !important;
+}
+.ssh-term /deep/ .xterm-screen canvas {
+  background: #0f1419 !important;
 }
 </style>

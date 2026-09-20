@@ -82,9 +82,6 @@
           </button>
         </el-input>
       </el-form-item>
-      <el-form-item :label="$t('asset.tags')" prop="tags">
-        <el-input v-model="form.tags" :placeholder="$t('asset.tagsPh')" />
-      </el-form-item>
       <el-form-item :label="$t('asset.note')" prop="note">
         <el-input v-model="form.note" type="textarea" :rows="2" />
       </el-form-item>
@@ -208,7 +205,6 @@ export default {
         host: '',
         user: '',
         pass: '',
-        tags: '',
         note: '',
       },
       draft: {
@@ -493,7 +489,6 @@ export default {
           host: a.host,
           user: a.user,
           pass: a.pass || '',
-          tags: a.tags || '',
           note: a.note || '',
         };
         this.draft = JSON.parse(JSON.stringify(a.methods || {}));
@@ -509,7 +504,6 @@ export default {
           host: '',
           user: '',
           pass: '',
-          tags: '',
           note: '',
         };
         this.draft = this.defaultDraft('win');
@@ -534,13 +528,35 @@ export default {
       this.testing = true;
       this.testingId = m.id;
       try {
-        const r = await api.sessionTest({
-          asset: { host: this.form.host },
-          method: { protocol: m.id, port: row.port },
-        });
-        if (r && r.ok)
-          this.$message.success(`${m.name} · ${r.latencyMs ?? '-'} ms`);
-        else this.$message.error(r.error || r.__error || '测试失败');
+        const r = unwrap(
+          await api.sessionTest({
+            asset: {
+              host: this.form.host,
+              user: this.form.user,
+              pass: this.form.pass,
+            },
+            method: { protocol: m.id, port: row.port, advanced: row.advanced || {} },
+          })
+        );
+        if (r && r.ok) {
+          const parts = [`${m.name} · ${r.latencyMs ?? '-'} ms`];
+          if (r.nla) parts.push(t('asset.testNla'));
+          this.$message.success(parts.join(' · '));
+        } else {
+          const code = (r && r.code) || '';
+          const map = {
+            NO_HOST: t('asset.testNoHost'),
+            TCP_TIMEOUT: t('asset.testTcpFail'),
+            TCP_ERROR: t('asset.testTcpFail'),
+            AUTH_FAILED: t('asset.testAuthFail'),
+            HOSTKEY_REJECTED: t('asset.testHostkey'),
+            SSH_KEY_READ: t('asset.testKeyRead'),
+            VNC_NO_AUTH: t('asset.testVncNoAuth'),
+            VNC_REJECTED: t('asset.testVncRejected'),
+            RDP_BAD_RESPONSE: t('asset.testRdpBad'),
+          };
+          this.$message.error(map[code] || (r && (r.error || r.__error)) || t('asset.testFail'));
+        }
       } catch (e) {
         this.$message.error(e.message);
       } finally {
@@ -577,10 +593,8 @@ export default {
             host: this.form.host.trim(),
             user: this.form.user.trim(),
             pass: this.form.pass,
-            tags: this.form.tags,
             note: this.form.note,
             methods,
-            display: { layout: 'extend' },
             // empty → store layer puts the asset under 未分组
             gid: this.form.gid || UNGROUPED_ID,
           };

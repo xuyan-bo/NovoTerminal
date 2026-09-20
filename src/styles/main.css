@@ -261,6 +261,36 @@ button {
   flex: 1;
   display: flex;
   min-height: 0;
+  position: relative;
+}
+
+/* drag handle between sidebar and main pane (SFTP-splitter style) */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  margin-left: -4px;
+  cursor: col-resize;
+  z-index: 20;
+  background: transparent;
+}
+
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border);
+  transition: background 0.15s;
+}
+
+.sidebar-resizer:hover::after,
+.sidebar-resizer.active::after {
+  background: var(--text-2);
 }
 
 /* sidebar */
@@ -726,10 +756,31 @@ button {
   border-radius: 6px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  cursor: pointer;
 }
 
 .recent-item:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.recent-connect-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.recent-connect-btn:hover {
+  color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-soft);
 }
@@ -880,6 +931,10 @@ button {
   gap: 10px 24px;
 }
 
+.ad-field-wide {
+  grid-column: 1 / -1;
+}
+
 .ad-fields dt {
   color: var(--text-3);
   font-size: 11px;
@@ -891,6 +946,14 @@ button {
   font-size: 12.5px;
   margin-top: 2px;
   word-break: break-all;
+}
+
+.ad-note {
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .method-connect-list {

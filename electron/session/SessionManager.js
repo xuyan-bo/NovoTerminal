@@ -1,5 +1,6 @@
-const { RdpWindowsMstscAdapter, tcpProbe } = require('./adapters/RdpWindowsMstscAdapter');
+const { RdpWindowsMstscAdapter } = require('./adapters/RdpWindowsMstscAdapter');
 const { BaseAdapter } = require('./adapters/BaseAdapter');
+const { tcpProbe, testSsh, testVnc, testRdp } = require('./testers');
 
 class SessionManager {
   constructor({ store, send }) {
@@ -59,9 +60,30 @@ class SessionManager {
   }
 
   async testConnection(req) {
-    const a = this.getAdapter(req.method && req.method.protocol);
-    if (!a) return { ok: false, error: 'unknown protocol' };
-    return a.testConnection(req);
+    const protocol = String((req.method && req.method.protocol) || '').toLowerCase();
+    const asset = req.asset || {};
+    const method = req.method || {};
+    const host = asset.host;
+    if (!host) return { ok: false, code: 'NO_HOST', error: '缺少主机地址' };
+    const port = method.port;
+    const advanced = method.advanced || {};
+
+    if (protocol === 'ssh') {
+      return testSsh({
+        host,
+        port,
+        username: asset.user,
+        password: asset.pass,
+        advanced,
+      });
+    }
+    if (protocol === 'vnc') {
+      return testVnc({ host, port, password: asset.pass });
+    }
+    if (protocol === 'rdp') {
+      return testRdp({ host, port });
+    }
+    return tcpProbe(host, port);
   }
 
   async connect(req) {

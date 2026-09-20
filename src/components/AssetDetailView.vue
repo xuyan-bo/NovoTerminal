@@ -21,6 +21,10 @@
               <dt>{{ row[0] }}</dt>
               <dd>{{ row[1] }}</dd>
             </div>
+            <div class="ad-field-wide">
+              <dt>{{ $t('detail.note') }}</dt>
+              <dd class="ad-note">{{ asset.note || '-' }}</dd>
+            </div>
           </dl>
         </div>
 
@@ -110,21 +114,12 @@ export default {
     fields() {
       const a = this.asset;
       if (!a) return [];
-      const layoutMap = {
-        single: '单屏',
-        extend: '横向扩展',
-        stack: '纵向扩展',
-        mirror: '镜像',
-      };
       return [
         ['OS 类型', this.osName],
         ['IP / 主机', a.host || '-'],
         ['用户名', a.user || '-'],
         ['分组', this.hit && this.hit.group ? this.hit.group.name : '-'],
-        ['标签', a.tags || '-'],
-        ['备注', a.note || '-'],
         ['访问方式数', this.methods.length + ' 种'],
-        ['显示布局', (a.display && layoutMap[a.display.layout]) || (a.display && a.display.layout) || '-'],
       ];
     },
   },

@@ -1,31 +1,9 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const net = require('net');
 const { spawn, execFile } = require('child_process');
 const { BaseAdapter } = require('./BaseAdapter');
-
-function tcpProbe(host, port, timeoutMs = 2500) {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    const t0 = Date.now();
-    let done = false;
-    const finish = (ok, error, latencyMs) => {
-      if (done) return;
-      done = true;
-      socket.destroy();
-      resolve({ ok, error: error || undefined, latencyMs: latencyMs });
-    };
-    socket.setTimeout(timeoutMs);
-    socket.once('connect', () => finish(true, undefined, Date.now() - t0));
-    socket.once('timeout', () => finish(false, 'TCP_TIMEOUT'));
-    socket.once('error', (e) => {
-      const code = e.code || 'TCP_ERROR';
-      finish(false, code === 'ECONNREFUSED' || code === 'ETIMEDOUT' ? 'TCP_TIMEOUT' : 'TCP_ERROR');
-    });
-    socket.connect(Number(port) || 3389, host);
-  });
-}
+const { tcpProbe, testRdp } = require('../testers');
 
 function findMstsc() {
   const candidates = [
@@ -128,7 +106,7 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
     }
     const host = payload.asset.host;
     const port = (payload.method && payload.method.port) || 3389;
-    return tcpProbe(host, port);
+    return testRdp({ host, port });
   }
 
   async connect(payload, sessionId) {

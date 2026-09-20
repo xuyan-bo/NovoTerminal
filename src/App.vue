@@ -9,7 +9,13 @@
     />
     <template v-else>
     <div class="body-row">
-      <side-bar />
+      <side-bar :style="sidebarStyle" />
+      <div
+        class="sidebar-resizer"
+        :class="{ active: resizing }"
+        :style="{ left: sidebarWidth + 'px' }"
+        @mousedown="startResize"
+      ></div>
       <section class="main">
         <div class="tabbar">
           <div
@@ -98,6 +104,10 @@ import { store, closeTab, api, refresh } from './store';
 import { t, applySettings } from './i18n';
 import { OS_SVG } from './constants';
 
+const MIN_SIDEBAR_W = 180;
+const MAX_SIDEBAR_W = 640;
+const SIDEBAR_W_KEY = 'omnidesk.sidebarWidth';
+
 function parseSftpHash() {
   const h = String((typeof location !== 'undefined' && location.hash) || '').replace(/^#\/?/, '');
   if (!h.startsWith('sftp')) return null;
@@ -128,11 +138,19 @@ export default {
   data() {
     return {
       clock: '',
+      sidebarWidth: 268,
+      resizing: false,
       sftpQuery: parseSftpHash() || {},
       isSftpRoute: !!parseSftpHash(),
     };
   },
   computed: {
+    sidebarStyle() {
+      return {
+        width: this.sidebarWidth + 'px',
+        flex: '0 0 ' + this.sidebarWidth + 'px',
+      };
+    },
     tabs() {
       return store.tabs;
     },
@@ -156,6 +174,10 @@ export default {
       this.isSftpRoute = !!q;
     };
     window.addEventListener('hashchange', this._onHash);
+    try {
+      const saved = Number(localStorage.getItem(SIDEBAR_W_KEY));
+      if (saved >= MIN_SIDEBAR_W && saved <= MAX_SIDEBAR_W) this.sidebarWidth = saved;
+    } catch (_) {}
     if (!this.isSftpRoute) {
       if (store.snapshot.settings) applySettings(store.snapshot.settings);
       this.tick();
@@ -191,6 +213,32 @@ export default {
     $t: t,
     osSvg(os) {
       return OS_SVG[os] || '';
+    },
+    /** Drag the divider between the asset tree and the right pane */
+    startResize(e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      this.resizing = true;
+      const startX = e.clientX;
+      const startW = this.sidebarWidth;
+      const onMove = (ev) => {
+        const w = startW + (ev.clientX - startX);
+        this.sidebarWidth = Math.max(MIN_SIDEBAR_W, Math.min(MAX_SIDEBAR_W, w));
+      };
+      const onUp = () => {
+        this.resizing = false;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        try {
+          localStorage.setItem(SIDEBAR_W_KEY, String(this.sidebarWidth));
+        } catch (_) {}
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
     },
     tabTitle(tab) {
       // touch localeTick so the home tab label follows language switches
