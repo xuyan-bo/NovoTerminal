@@ -1,4 +1,6 @@
 node_modules/
+*.7z
+.idea/
 dist/
 release/
 electron-dl/

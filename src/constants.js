@@ -303,6 +303,58 @@ export function formatTime(ts) {
   return '更早';
 }
 
+/** xterm.js default ANSI palette (16 colors) — Xshell classic black fallback */
+const XTERM_ANSI_DEFAULT = [
+  '#000000', '#cd0000', '#00cd00', '#cdcd00', '#0000ee', '#cd00cd', '#00cdcd', '#e5e5e5',
+  '#7f7f7f', '#ff0000', '#00ff00', '#ffff00', '#5c5cff', '#ff00ff', '#00ffff', '#ffffff',
+];
+
+/** Default SSH terminal color scheme — Xshell classic black window */
+export const SSH_THEME_DEFAULT = {
+  background: '#000000',
+  foreground: '#c0c0c0',
+  bold: '#ffffff',
+  cursor: '#ffffff',
+  ansi: XTERM_ANSI_DEFAULT.slice(),
+};
+
+/** Merge a saved color scheme over defaults; missing keys fall back to default */
+export function resolveSshTheme(saved) {
+  const base = {
+    background: SSH_THEME_DEFAULT.background,
+    foreground: SSH_THEME_DEFAULT.foreground,
+    bold: SSH_THEME_DEFAULT.bold,
+    cursor: SSH_THEME_DEFAULT.cursor,
+    ansi: SSH_THEME_DEFAULT.ansi.slice(),
+  };
+  if (!saved || typeof saved !== 'object') return base;
+  if (typeof saved.background === 'string' && saved.background) base.background = saved.background;
+  if (typeof saved.foreground === 'string' && saved.foreground) base.foreground = saved.foreground;
+  if (typeof saved.bold === 'string' && saved.bold) base.bold = saved.bold;
+  if (typeof saved.cursor === 'string' && saved.cursor) base.cursor = saved.cursor;
+  if (Array.isArray(saved.ansi) && saved.ansi.length === 16) {
+    base.ansi = saved.ansi.map((c) => (typeof c === 'string' && c ? c : XTERM_ANSI_DEFAULT[0]));
+  }
+  return base;
+}
+
+/** Map a color scheme into xterm.js theme options */
+export function sshThemeToXterm(colors) {
+  const t = resolveSshTheme(colors);
+  const a = t.ansi;
+  return {
+    background: t.background,
+    foreground: t.foreground,
+    cursor: t.cursor,
+    cursorAccent: t.background,
+    selectionBackground: 'rgba(64,158,255,0.35)',
+    black: a[0], red: a[1], green: a[2], yellow: a[3],
+    blue: a[4], magenta: a[5], cyan: a[6], white: a[7],
+    brightBlack: a[8], brightRed: a[9], brightGreen: a[10], brightYellow: a[11],
+    brightBlue: a[12], brightMagenta: a[13], brightCyan: a[14], brightWhite: a[15],
+  };
+}
+
 /** Element async-validator: required with i18n at validate time */
 export function requiredRule(t, key, trigger = 'blur') {
   return {

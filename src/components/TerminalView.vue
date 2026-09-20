@@ -2,8 +2,34 @@
   <div ref="wrapEl" class="ssh-term-wrap">
     <div class="ssh-toolbar">
       <span class="pill ssh">{{ shortLabel }}</span>
-      <span class="ssh-meta">{{ title }}</span>
       <span class="ssh-status" :class="status">{{ statusText }}</span>
+      <span class="ssh-meta">{{ title }}</span>
+      <el-tooltip :content="$t('ssh.fullscreenTip')" placement="top">
+        <button
+          type="button"
+          class="gear-icon-btn"
+          @click="onToggleFullscreen"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path v-if="!isFullscreen" d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+            <path v-else d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
+          </svg>
+        </button>
+      </el-tooltip>
+      <el-tooltip :content="$t('theme.tip')" placement="top">
+        <button
+          type="button"
+          class="gear-icon-btn"
+          @click="openThemeDialog"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 21a9 9 0 1 1 9-9c0 2.2-1.8 3.5-4 3.5h-1.4c-1 0-1.8.8-1.8 1.8 0 .4.2.8.4 1.1.3.4.4.8.4 1.1 0 .8-.6 1.4-1.6 1.4z"/>
+            <circle cx="7.5" cy="11.5" r="1.2" fill="currentColor"/>
+            <circle cx="11" cy="7.5" r="1.2" fill="currentColor"/>
+            <circle cx="15.5" cy="9" r="1.2" fill="currentColor"/>
+          </svg>
+        </button>
+      </el-tooltip>
       <el-tooltip :content="$t('sftp.openTip')" placement="top">
         <button
           type="button"
@@ -35,6 +61,12 @@
       </el-tooltip>
     </div>
     <div ref="termEl" class="ssh-term"></div>
+    <transition name="fs-hint">
+      <div v-if="fsHint" class="fs-hint">
+        <kbd>Esc</kbd><span>{{ $t('ssh.fullscreenExitHint') }}</span>
+      </div>
+    </transition>
+    <ssh-theme-dialog ref="themeDialog" :asset-id="assetId" @saved="onThemeSaved" />
   </div>
 </template>
 
@@ -42,14 +74,17 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { api, unwrap, refresh } from '../store';
+import { api, unwrap, refresh, findAsset } from '../store';
 import { t } from '../i18n';
+import { sshThemeToXterm, resolveSshTheme } from '../constants';
+import SshThemeDialog from './SshThemeDialog.vue';
 
 const FIT_DEBOUNCE_MS = 120;
 const REMOTE_RESIZE_DEBOUNCE_MS = 220;
 
 export default {
   name: 'TerminalView',
+  components: { SshThemeDialog },
   props: {
     sessionId: { type: String, required: true },
     assetId: { type: String, required: true },
@@ -68,6 +103,8 @@ export default {
       offData: null,
       offState: null,
       ro: null,
+      isFullscreen: false,
+      fsHint: false,
     };
   },
   computed: {
@@ -118,21 +155,65 @@ export default {
     this._sentCols = 0;
     this._sentRows = 0;
     this._fitting = false;
+    this._fsHintTimer = null;
     this.initTerm();
     this.connect();
     window.addEventListener('resize', this.scheduleFit);
+    document.addEventListener('fullscreenchange', this.onFsChange);
+    if (document.webkitFullscreenElement !== undefined) {
+      document.addEventListener('webkitfullscreenchange', this.onFsChange);
+    }
   },
   activated() {
     this.scheduleFit();
   },
   beforeDestroy() {
     window.removeEventListener('resize', this.scheduleFit);
+    document.removeEventListener('fullscreenchange', this.onFsChange);
+    if (document.webkitFullscreenElement !== undefined) {
+      document.removeEventListener('webkitfullscreenchange', this.onFsChange);
+    }
+    if (this.isFullscreen) {
+      try {
+        this.exitFullscreen();
+      } catch (_) {}
+    }
     if (this._fitTimer) clearTimeout(this._fitTimer);
     if (this._rsTimer) clearTimeout(this._rsTimer);
+    if (this._fsHintTimer) clearTimeout(this._fsHintTimer);
     this.teardownTerm();
     this.disconnectNow(true);
   },
   methods: {
+    /** Read this asset's saved SSH color scheme (or defaults if unset) */
+    getAssetTheme() {
+      const hit = findAsset(this.assetId);
+      const adv = hit && hit.asset.methods && hit.asset.methods.ssh && hit.asset.methods.ssh.advanced;
+      return resolveSshTheme((adv && adv.colors) || null);
+    },
+    /** Sync CSS background + xterm theme so both render surfaces match */
+    syncSurface(colors) {
+      const theme = sshThemeToXterm(colors);
+      const bg = theme.background || '#000000';
+      const el = this.$refs.wrapEl;
+      if (el) el.style.setProperty('--ssh-bg', bg);
+      if (this.term) {
+        try {
+          // xterm 5.5: assigning options.theme triggers a repaint; setOption('theme') does not
+          this.term.options.theme = theme;
+        } catch (_) {}
+      }
+      return theme;
+    },
+    applyTheme(colors) {
+      this.syncSurface(colors || this.getAssetTheme());
+    },
+    openThemeDialog() {
+      this.$refs.themeDialog && this.$refs.themeDialog.open();
+    },
+    onThemeSaved(colors) {
+      this.applyTheme(colors);
+    },
     initTerm() {
       if (this.term) return;
       const term = new Terminal({
@@ -142,18 +223,15 @@ export default {
         convertEol: false,
         // Avoid scrollback thrash during resize reflow
         scrollback: 2000,
-        theme: {
-          background: '#0f1419',
-          foreground: '#d7dde8',
-          cursor: '#409EFF',
-          selectionBackground: 'rgba(64,158,255,0.35)',
-        },
+        theme: sshThemeToXterm(this.getAssetTheme()),
       });
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(this.$refs.termEl);
       this.term = term;
       this.fit = fit;
+      // sync CSS background variable with theme (canvas bg comes from options.theme)
+      this.syncSurface(this.getAssetTheme());
       this._lastW = 0;
       this._lastH = 0;
       this.scheduleFit();
@@ -411,7 +489,7 @@ export default {
           if (!ev || ev.sessionId !== sid) return;
           if (ev.type === 'ready') {
             this.status = 'ready';
-            this.statusDetail = `${r.host}:${r.port}`;
+            this.statusDetail = '';
           } else if (ev.type === 'ended') {
             this.status = 'ended';
             this.writeOut(t('ssh.endedHint'));
@@ -429,7 +507,7 @@ export default {
         });
 
         this.status = 'ready';
-        this.statusDetail = `${r.host}:${r.port}`;
+        this.statusDetail = '';
         // pull latest snapshot so home “recent” shows this SSH connect
         refresh().catch(() => {});
         // one delayed sync in case layout settled after mount/fullscreen
@@ -476,6 +554,77 @@ export default {
       }
     },
 
+    /** Enter/exit terminal fullscreen via the Fullscreen API */
+    async onToggleFullscreen() {
+      if (this.isFullscreen) {
+        this.exitFullscreen();
+      } else {
+        await this.enterFullscreen();
+      }
+    },
+
+    async enterFullscreen() {
+      const el = this.$refs.wrapEl;
+      if (!el) return;
+      try {
+        const req =
+          (el.requestFullscreen && el.requestFullscreen.bind(el)) ||
+          (el.webkitRequestFullscreen && el.webkitRequestFullscreen.bind(el));
+        if (req) await req();
+      } catch (_) {}
+      if (this.isFullscreen || document.fullscreenElement) {
+        this.showFsHint();
+        return;
+      }
+      // Fullscreen API unavailable → fall back to hiding the sidebar/statusbar via a CSS class
+      this.isFullscreen = true;
+      el.classList.add('is-terminal-fullscreen');
+      this.showFsHint();
+    },
+
+    showFsHint() {
+      this.fsHint = true;
+      if (this._fsHintTimer) clearTimeout(this._fsHintTimer);
+      this._fsHintTimer = setTimeout(() => {
+        this.fsHint = false;
+      }, 3000);
+    },
+
+    async exitFullscreen() {
+      const doc = document;
+      const exit =
+        (doc.exitFullscreen && doc.exitFullscreen.bind(doc)) ||
+        (doc.webkitExitFullscreen && doc.webkitExitFullscreen.bind(doc));
+      if (exit) {
+        try {
+          await exit();
+        } catch (_) {}
+      }
+      if (this.isFullscreen) {
+        this.isFullscreen = false;
+        this.$refs.wrapEl && this.$refs.wrapEl.classList.remove('is-terminal-fullscreen');
+        this.scheduleFit();
+      }
+    },
+
+    onFsChange() {
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      const el = this.$refs.wrapEl;
+      const now = !!fsEl && (fsEl === el);
+      if (now === this.isFullscreen) {
+        // Entered via API: still show the Esc hint
+        if (now) this.showFsHint();
+        return;
+      }
+      this.isFullscreen = now;
+      if (now) {
+        this.scheduleFit();
+        this.showFsHint();
+      } else if (el) {
+        el.classList.remove('is-terminal-fullscreen');
+      }
+    },
+
     disconnectNow(silent) {
       const sid = this.liveSessionId;
       this.liveSessionId = null;
@@ -505,18 +654,62 @@ export default {
 
 <style scoped>
 .ssh-term-wrap {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
   width: 100%;
   min-height: 0;
   overflow: hidden;
-  background: var(--bg-app, #0f1419);
+  background: var(--ssh-bg, #000000);
+}
+/* Fallback fullscreen when the Fullscreen API is unavailable:
+   cover the whole app root and hide sidebar/statusbar chrome. */
+.ssh-term-wrap.is-terminal-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+.fs-hint {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(20, 28, 38, 0.92);
+  border: 1px solid var(--border, #2a3544);
+  color: var(--text-2, #9aa7b8);
+  font-size: 12px;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.fs-hint kbd {
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: #2a3544;
+  border: 1px solid #3a4657;
+  color: #d7dde8;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+}
+.fs-hint-enter-active,
+.fs-hint-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.fs-hint-enter,
+.fs-hint-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-6px);
 }
 .ssh-toolbar {
   display: flex;
   align-items: center;
-  gap: 15px;
+  gap: 7.5px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border, #2a3544);
   background: var(--bg-panel, #151b24);
@@ -565,22 +758,22 @@ export default {
   overflow: hidden;
   padding: 4px 6px 6px;
   box-sizing: border-box;
-  background: #0f1419 !important;
+  background: var(--ssh-bg, #000000);
 }
 .ssh-term /deep/ .xterm {
   height: 100%;
   width: 100%;
-  background: #0f1419 !important;
+  background: transparent;
 }
 .ssh-term /deep/ .xterm-viewport {
   overflow-y: auto !important;
   overflow-x: hidden !important;
-  background-color: #0f1419 !important;
+  background-color: var(--ssh-bg, #000000);
 }
 .ssh-term /deep/ .xterm-screen {
-  background: #0f1419 !important;
+  background: transparent;
 }
 .ssh-term /deep/ .xterm-screen canvas {
-  background: #0f1419 !important;
+  background: transparent;
 }
 </style>
