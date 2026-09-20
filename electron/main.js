@@ -209,10 +209,22 @@ function registerIpc() {
   handle('store:clone-asset', (aid) => unwrap(store.cloneAsset(aid)));
   handle('store:settings', () => store.getSettings());
   handle('store:update-settings', (patch) => unwrap(store.updateSettings(patch)));
-  handle('app:verify-system-auth', async (reason) => verifySystemAuth(reason));
+  /** Get the current main window HWND so the native auth dialog can be parented to it */
+  function mainWindowHwnd() {
+    try {
+      const bw = BrowserWindow.getFocusedWindow() || win;
+      if (!bw || bw.isDestroyed()) return 0;
+      const buf = bw.getNativeWindowHandle();
+      return buf ? buf.readUInt32LE(0) : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  handle('app:verify-system-auth', async (reason) => verifySystemAuth(reason, mainWindowHwnd()));
   handle('store:export', async () => {
     // sensitive: require OS identity verification like Chrome password export
-    const auth = await verifySystemAuth('导出 OmniDesk 配置（包含敏感信息）');
+    const auth = await verifySystemAuth('导出 OmniDesk 配置（包含敏感信息）', mainWindowHwnd());
     if (!auth.ok) {
       const e = new Error(auth.message || '系统身份验证失败');
       e.code = auth.code || 'AUTH_FAILED';
@@ -222,7 +234,7 @@ function registerIpc() {
   });
   handle('store:import', async (text) => {
     // sensitive: require OS identity verification like export (overwrites data)
-    const auth = await verifySystemAuth('导入 OmniDesk 配置（将覆盖当前数据）');
+    const auth = await verifySystemAuth('导入 OmniDesk 配置（将覆盖当前数据）', mainWindowHwnd());
     if (!auth.ok) {
       const e = new Error(auth.message || '系统身份验证失败');
       e.code = auth.code || 'AUTH_FAILED';

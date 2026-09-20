@@ -1,9 +1,24 @@
+/**
+ * OmniDesk system-level identity verification.
+ *
+ * Windows implementation uses a small PowerShell (.NET) helper to:
+ *   1. Show the native credential dialog (CredUIPromptForWindowsCredentialsW),
+ *      parented to the main window so it merges into the app's taskbar button
+ *      (app icon) and stays on top — no orphaned "ghost" barrier.
+ *   2. Validate the submitted password in-process via LogonUserW (fast,
+ *      millisecond-level) and report the exact Win32 error so we can tell
+ *      "wrong password" (1326 / ERROR_LOGON_FAILURE) apart from "account does
+ *      not exist" (1325 / ERROR_NO_SUCH_USER).
+ *
+ * No koffi / native FFI dependency is required; it relies on built-in .NET.
+ */
+
 const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-/** Chrome-style: cache successful auth for 30 s to avoid re-prompting */
+/** Chrome-style: cache a successful auth for 30 s to avoid re-prompting */
 const AUTH_CACHE_MS = 30 * 1000;
 let lastVerifiedAt = 0;
 
@@ -11,23 +26,28 @@ function resultMessage(code) {
   const map = {
     Verified: '验证通过',
     Canceled: '已取消验证',
+    UserCanceled: '已取消验证',
+    BadCredentials: '用户名或密码不正确',
+    AccountNotFound: '账号不存在',
     DeviceNotPresent: '未检测到可用的身份验证设备',
     NotConfiguredForUser: '系统未配置身份验证（请先在 Windows 设置中启用 Hello / PIN）',
     DisabledByPolicy: '系统策略禁用了身份验证',
     DeviceBusy: '身份验证设备忙，请稍后再试',
     RetriesExhausted: '验证次数过多',
-    CredentialNotSaved: '未保存系统凭据',
-    UserCanceled: '已取消验证',
+    UnsupportedPlatform: '当前系统暂不支持系统级身份验证',
     Failed: '系统身份验证失败',
   };
   return map[code] || map.Failed;
 }
 
+// ---------------------------------------------------------------------------
+// Windows Hello (biometric / PIN / face) via UserConsentVerifier
+// ---------------------------------------------------------------------------
+
 function encodePs(script) {
   return Buffer.from(script, 'utf16le').toString('base64');
 }
 
-/** Build the Hello (UserConsentVerifier) script */
 function buildHelloScript(reason) {
   const msg = String(reason || 'OmniDesk 需要验证您的身份').replace(/'/g, "''");
   return [
@@ -42,7 +62,7 @@ function buildHelloScript(reason) {
     "function AwaitWinRt($op, $resultType) {",
     "  $generic = $asTask.MakeGenericMethod($resultType)",
     "  $task = $generic.Invoke($null, @($op))",
-    "  $null = $task.Wait(120000)",
+    "  $null = $task.Wait(180000)",
     "  return $task.Result",
     "}",
     "$result = AwaitWinRt `",
@@ -52,28 +72,33 @@ function buildHelloScript(reason) {
   ].join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Native credential dialog + fast password validation (PowerShell/.NET)
+// ---------------------------------------------------------------------------
+
 /**
- * Build the modern credential dialog script (CredUIPromptForWindowsCredentials).
- * This is the Windows Security dialog shown in Chrome/Quark — supports Hello/PIN/password.
+ * Build the password dialog script. Uses a single-quoted here-string (@' ... '@)
+ * for the C# interop so PowerShell does not expand `$`/backslashes inside it.
  */
-function buildModernPasswordScript(reason) {
+function buildPasswordScript(reason) {
   const msg = String(reason || 'OmniDesk 需要验证您的身份');
-  // Write a .ps1 that uses Add-Type with -TypeDefinition (not -MemberDefinition)
-  // and calls CredUIPromptForWindowsCredentialsW + CredUnPackAuthenticationBufferW
   return [
-    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-    '$ErrorActionPreference = "Stop"',
+    'param([int64]$hwnd, [string]$reason)',
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+    "$ErrorActionPreference = 'Stop'",
     '',
-    '# --- C# interop ---',
     '$cs = @"',
     'using System;',
     'using System.Text;',
     'using System.Runtime.InteropServices;',
     '',
     'public static class AuthHelper {',
-    '    public const uint CREDUIWIN_GENERIC = 0x1;',
-    '    public const uint CREDUIWIN_ENUMERATE_CURRENT_USER = 0x200;',
-    '    public const int ERROR_CANCELLED = 1223;',
+    '    const int LOGON32_LOGON_NETWORK = 3;',
+    '    const int LOGON32_PROVIDER_DEFAULT = 0;',
+    '    const uint ERROR_CANCELLED = 1223;',
+    '    const uint ERROR_LOGON_FAILURE = 1326;',
+    '    const uint ERROR_NO_SUCH_USER = 1325;',
+    '    const uint CREDUIWIN_ENUMERATE_CURRENT_USER = 0x200;',
     '',
     '    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]',
     '    public struct CREDUI_INFOW {',
@@ -86,78 +111,75 @@ function buildModernPasswordScript(reason) {
     '',
     '    [DllImport("credui.dll", CharSet = CharSet.Unicode, SetLastError = true)]',
     '    public static extern uint CredUIPromptForWindowsCredentialsW(',
-    '        ref CREDUI_INFOW pUiInfo,',
-    '        int dwAuthError,',
-    '        ref uint pulAuthPackage,',
-    '        IntPtr pvInAuthBuffer,',
-    '        uint ulInAuthBufferSize,',
-    '        out IntPtr ppvOutAuthBuffer,',
-    '        out uint pulOutAuthBufferSize,',
-    '        ref bool pfSave,',
-    '        uint dwFlags);',
+    '        ref CREDUI_INFOW pUiInfo, int dwAuthError, ref uint pulAuthPackage,',
+    '        IntPtr pvInAuthBuffer, uint ulInAuthBufferSize,',
+    '        out IntPtr ppvOutAuthBuffer, out uint pulOutAuthBufferSize,',
+    '        ref bool pfSave, uint dwFlags);',
     '',
     '    [DllImport("credui.dll", CharSet = CharSet.Unicode)]',
     '    public static extern bool CredUnPackAuthenticationBufferW(',
-    '        int dwFlags,',
-    '        IntPtr pAuthBuffer,',
-    '        uint cbAuthBuffer,',
-    '        StringBuilder pszUserName,',
-    '        ref uint pcchMaxUserName,',
-    '        StringBuilder pszDomainName,',
-    '        ref uint pcchMaxDomainName,',
-    '        StringBuilder pszPassword,',
-    '        ref uint pcchMaxPassword);',
+    '        int dwFlags, IntPtr pAuthBuffer, uint cbAuthBuffer,',
+    '        StringBuilder pszUserName, ref uint pcchMaxUserName,',
+    '        StringBuilder pszDomainName, ref uint pcchMaxDomainName,',
+    '        StringBuilder pszPassword, ref uint pcchMaxPassword);',
+    '',
+    '    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]',
+    '    public static extern bool LogonUserW(',
+    '        string username, string domain, string password,',
+    '        int logonType, int logonProvider, out IntPtr phToken);',
+    '',
+    '    [DllImport("kernel32.dll")]',
+    '    public static extern bool CloseHandle(IntPtr hObject);',
+    '',
+    '    [DllImport("kernel32.dll")]',
+    '    public static extern int GetLastError();',
     '',
     '    [DllImport("ole32.dll")]',
     '    public static extern void CoTaskMemFree(IntPtr pv);',
     '',
-    '    static bool ValidateCredentials(string domainUser, string password) {',
-    '        string username = domainUser;',
-    '        if (username.Contains("\\\\")) username = username.Split(new[] { "\\\\" }, 2, StringSplitOptions.None)[1];',
-    '        bool ok = false;',
-    '        try {',
-    '            var pc = new System.DirectoryServices.AccountManagement.PrincipalContext(',
-    '                System.DirectoryServices.AccountManagement.ContextType.Machine);',
-    '            ok = pc.ValidateCredentials(username, password);',
-    '        } catch { }',
-    '        if (!ok) {',
-    '            try {',
-    '                var pc2 = new System.DirectoryServices.AccountManagement.PrincipalContext(',
-    '                    System.DirectoryServices.AccountManagement.ContextType.Domain);',
-    '                ok = pc2.ValidateCredentials(username, password);',
-    '            } catch { }',
+    '    // Fast local validation; returns 0 on success, else the Win32 error.',
+    '    static int Validate(string fullUser, string password) {',
+    '        string[] parts = fullUser.Split(\'\\\\\');',
+    '        string domain = parts.Length > 1 ? parts[0] : (string)null;',
+    '        string user = parts[parts.Length - 1];',
+    '        IntPtr token;',
+    '        if (LogonUserW(user, domain, password, LOGON32_LOGON_NETWORK,',
+    '                       LOGON32_PROVIDER_DEFAULT, out token)) {',
+    '            if (token != IntPtr.Zero) CloseHandle(token);',
+    '            return 0;',
     '        }',
-    '        return ok;',
+    '        return GetLastError();',
     '    }',
     '',
-    '    public static string[] Prompt(string message, string caption, int lastError) {',
+    '    // Returns: "Verified" / "Canceled" / "Error:<code>"',
+    '    public static string Prompt(long hwnd, string message, string caption) {',
     '        var info = new CREDUI_INFOW();',
     '        info.cbSize = Marshal.SizeOf(info);',
-    '        info.hwndParent = IntPtr.Zero;',
-    '        info.pszMessageText = message ?? "";',
-    '        info.pszCaptionText = caption ?? "OmniDesk";',
+    '        info.hwndParent = hwnd > 0 ? new IntPtr(hwnd) : IntPtr.Zero;',
+    '        info.pszMessageText = string.IsNullOrEmpty(message) ? "" : message;',
+    '        info.pszCaptionText = string.IsNullOrEmpty(caption) ? "OmniDesk" : caption;',
     '        info.hbmBanner = IntPtr.Zero;',
     '',
     '        uint authPackage = 0;',
     '        bool save = false;',
+    '        int lastError = 0;',
     '',
     '        for (int attempt = 0; attempt < 5; attempt++) {',
     '            IntPtr outBuf = IntPtr.Zero;',
     '            uint outSize = 0;',
-    '',
     '            uint result = CredUIPromptForWindowsCredentialsW(',
     '                ref info, lastError, ref authPackage,',
     '                IntPtr.Zero, 0,',
     '                out outBuf, out outSize,',
     '                ref save, CREDUIWIN_ENUMERATE_CURRENT_USER);',
     '',
-    '            if (result == (uint)ERROR_CANCELLED) {',
-    '                return new string[] { "Canceled", "" };',
+    '            if (result == ERROR_CANCELLED) {',
+    '                if (outBuf != IntPtr.Zero) CoTaskMemFree(outBuf);',
+    '                return "Canceled";',
     '            }',
-    '',
     '            if (result != 0) {',
     '                if (outBuf != IntPtr.Zero) CoTaskMemFree(outBuf);',
-    '                return null;',
+    '                return "Failed";',
     '            }',
     '',
     '            var u = new StringBuilder(256);',
@@ -165,71 +187,53 @@ function buildModernPasswordScript(reason) {
     '            var p = new StringBuilder(256);',
     '            uint uLen = 256, dLen = 256, pLen = 256;',
     '',
-    '            bool ok = CredUnPackAuthenticationBufferW(',
-    '                0, outBuf, outSize,',
-    '                u, ref uLen, d, ref dLen, p, ref pLen);',
-    '',
+    '            if (!CredUnPackAuthenticationBufferW(0, outBuf, outSize,',
+    '                    u, ref uLen, d, ref dLen, p, ref pLen)) {',
+    '                CoTaskMemFree(outBuf);',
+    '                return "Failed";',
+    '            }',
     '            CoTaskMemFree(outBuf);',
-    '',
-    '            if (!ok) return null;',
     '',
     '            string username = u.ToString();',
     '            string password = p.ToString();',
     '            string domainStr = d.ToString();',
-    '            string fullUser = string.IsNullOrEmpty(domainStr) ? username : domainStr + "\\\\" + username;',
+    '            string fullUser = string.IsNullOrEmpty(domainStr)',
+    '                ? username : domainStr + "\\\\" + username;',
     '',
     '            if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password)) {',
     '                lastError = 0;',
     '                continue;',
     '            }',
     '',
-    '            if (ValidateCredentials(fullUser, password)) {',
-    '                return new string[] { fullUser, password };',
-    '            }',
-    '',
-    '            lastError = 0x525;',
+    '            int code = Validate(fullUser, password);',
+    '            if (code == 0) return "Verified";',
+    '            lastError = code;',
     '        }',
-    '        return null;',
+    '',
+    '        if (lastError == ERROR_LOGON_FAILURE) return "Error:1326";',
+    '        if (lastError == ERROR_NO_SUCH_USER) return "Error:1325";',
+    '        return "Error:" + lastError;',
     '    }',
     '}',
     '"@',
     '',
-    'Add-Type -TypeDefinition $cs -Language CSharp -ReferencedAssemblies System.DirectoryServices.AccountManagement',
+    'Add-Type -TypeDefinition $cs -Language CSharp',
     '',
-    '# --- Prompt for credentials ---',
-    '$reason = $args[0]',
-    '$creds = [AuthHelper]::Prompt($reason, "OmniDesk", 0)',
-    '',
-    'if ($creds -eq $null) {',
-    '  Write-Output "Canceled"',
-    '  exit',
-    '}',
-    '',
-    '$rawUser = $creds[0]',
-    '$password = $creds[1]',
-    '',
-    '# Normalize: strip domain (DOMAIN\\user -> user)',
-    '$username = $rawUser',
-    'if ($username -match "\\\\") { $username = $username.Split("\\")[-1] }',
-    '',
-    'if ($creds[0] -eq "Canceled") {',
-    '  Write-Output "Canceled"',
-    '} else {',
-    '  Write-Output "Verified"',
-    '}',
+    '$res = [AuthHelper]::Prompt($hwnd, $reason, "OmniDesk")',
+    'Write-Output $res',
   ].join('\r\n');
 }
 
-/** Run a PowerShell script via -EncodedCommand */
+/** Run a PowerShell script via -EncodedCommand (for Hello / WinRT). */
 function runPs(script, options) {
-  const { timeout, sta } = options || {};
+  const { timeout } = options || {};
   return new Promise((resolve) => {
     const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass'];
-    if (sta) args.push('-STA');
+    args.push('-STA');
     args.push('-EncodedCommand', encodePs(script));
     execFile(
       'powershell.exe', args,
-      { timeout: timeout || 130000, windowsHide: true, maxBuffer: 1024 * 1024 },
+      { timeout: timeout || 190000, windowsHide: true, maxBuffer: 1024 * 1024 },
       (err, stdout, stderr) => {
         const out = String(stdout || '').trim();
         const lines = out.split(/\r?\n/).filter(Boolean);
@@ -239,7 +243,7 @@ function runPs(script, options) {
   });
 }
 
-/** Run a .ps1 file with optional arguments */
+/** Run a .ps1 file with arguments (for the credential dialog). */
 function runPsFile(psContent, psArgs, options) {
   const { timeout } = options || {};
   return new Promise((resolve) => {
@@ -260,47 +264,57 @@ function runPsFile(psContent, psArgs, options) {
   });
 }
 
-/**
- * Request system-level user verification.
- *   1. Windows Hello / PIN / biometric (UserConsentVerifier)
- *   2. Modern credential dialog (CredUIPromptForWindowsCredentialsW) + password validation
- */
-async function verifySystemAuth(reason) {
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+async function verifySystemAuth(reason, hwnd) {
   if (process.platform !== 'win32') {
-    return { ok: false, code: 'UnsupportedPlatform', method: 'system', message: '当前系统暂不支持系统级身份验证' };
+    return { ok: false, code: 'UnsupportedPlatform', method: 'system', message: resultMessage('UnsupportedPlatform') };
   }
 
   if (Date.now() - lastVerifiedAt < AUTH_CACHE_MS) {
     return { ok: true, code: 'Verified', method: 'cached', message: '验证通过' };
   }
 
-  // Step 1: Windows Hello
-  const hello = await runPs(buildHelloScript(reason), { sta: true });
-  if (hello.out === 'Verified') {
+  // Step 1 — Windows Hello (face / fingerprint / PIN).
+  const hello = await runPs(buildHelloScript(reason), { timeout: 190000 }).catch(() => null);
+  const helloCode = hello && hello.out ? hello.out : '';
+  if (helloCode === 'Verified') {
     lastVerifiedAt = Date.now();
     return { ok: true, code: 'Verified', method: 'hello', message: '验证通过' };
   }
-  const skipFallback = ['Canceled', 'UserCanceled', 'DisabledByPolicy', 'RetriesExhausted', 'DeviceBusy'];
-  if (skipFallback.includes(hello.out)) {
-    return { ok: false, code: hello.out, method: 'hello', message: resultMessage(hello.out) };
+  if (['Canceled', 'UserCanceled', 'DisabledByPolicy', 'RetriesExhausted', 'DeviceBusy'].includes(helloCode)) {
+    return { ok: false, code: helloCode, method: 'hello', message: resultMessage(helloCode) };
   }
 
-  // Step 2: Modern credential dialog
-  const pwScript = buildModernPasswordScript(reason);
-  const pw = await runPsFile(pwScript, [reason || 'OmniDesk 需要验证您的身份'], { timeout: 130000 });
+  // Step 2 — native password dialog. Parent to the main window (app icon,
+  // stays on top, no orphaned taskbar entry).
+  const pwScript = buildPasswordScript(reason);
+  const h = hwnd && hwnd > 0 ? String(hwnd) : '0';
+  const pw = await runPsFile(pwScript, [h, reason || 'OmniDesk 需要验证您的身份'], { timeout: 130000 });
 
   if (pw.debug) console.error('[auth] pw:', pw.debug);
+  const out = pw.out || 'Failed';
 
-  if (pw.out === 'Verified') {
+  if (out === 'Verified') {
     lastVerifiedAt = Date.now();
     return { ok: true, code: 'Verified', method: 'password', message: '验证通过' };
   }
-
-  const code = pw.out || 'Failed';
-  return {
-    ok: false, code, method: 'password',
-    message: code === 'Canceled' ? '已取消验证' : '密码错误或验证失败',
-  };
+  if (out === 'Canceled') {
+    return { ok: false, code: 'Canceled', method: 'password', message: '已取消验证' };
+  }
+  if (out === 'Error:1326') {
+    return { ok: false, code: 'BadCredentials', method: 'password', message: '用户名或密码不正确' };
+  }
+  if (out === 'Error:1325') {
+    return { ok: false, code: 'AccountNotFound', method: 'password', message: '账号不存在' };
+  }
+  if (out.startsWith('Error:')) {
+    const code = out.slice(6);
+    return { ok: false, code: 'Failed', method: 'password', message: `身份验证失败（错误码 ${code}）` };
+  }
+  return { ok: false, code: 'Failed', method: 'password', message: '密码错误或验证失败' };
 }
 
 function resetAuthCache() { lastVerifiedAt = 0; }
