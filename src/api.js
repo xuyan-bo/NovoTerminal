@@ -12,7 +12,7 @@ const mockState = {
     },
   ],
   recent: [],
-  settings: { theme: 'dark', lang: 'zh', dataPath: '(预览模式，无 Electron）' },
+  settings: { theme: 'dark', lang: 'zh', dataPath: '(预览模式，无 Electron）', closeAction: 'ask' },
 };
 
 async function local(method, ...args) {
@@ -53,9 +53,6 @@ export const api = hasBridge
       },
       async reorderAsset() {
         return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
-      },
-      async sessionCapabilities() {
-        return { embeddable: false, resolution: 'partial', colorDepth: true, refreshRate: false, multimon: 'partial', clipboard: true, processTracked: true };
       },
       async sessionConnect() {
         throw Object.assign(new Error('浏览器预览模式无法连接，请用 npm run electron 启动'), { code: 'NO_BRIDGE' });

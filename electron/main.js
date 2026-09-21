@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -114,15 +114,117 @@ let sessions = null;
 let sshSessions = null;
 let vncSessions = null;
 let sftpManager = null;
+let tray = null;
+let trayDestroying = false;
 const sftpWindows = new Map(); // assetId -> BrowserWindow
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
+
+// ---------- Single instance lock ----------
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+  return;
+}
+app.on('second-instance', () => {
+  showMainWindow();
+});
 
 function send(channel, payload) {
   // Broadcast to all windows so SFTP child windows receive progress events
   BrowserWindow.getAllWindows().forEach((w) => {
     if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
   });
+}
+
+function showMainWindow() {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.setSkipTaskbar(false);
+  win.focus();
+}
+
+function doMinimizeToTray() {
+  if (win && !win.isDestroyed()) {
+    win.setSkipTaskbar(true);
+    win.hide();
+  }
+}
+
+function doQuit() {
+  trayDestroying = true;
+  app.quit();
+}
+
+function handleCloseIntent() {
+  const settings = store && store.getSettings ? store.getSettings() : {};
+  const useTray = !!tray;
+  const prefs = settings.closeAction || 'ask'; // 'ask' | 'minimize' | 'quit'
+
+  // 明确偏好：直接走
+  if (prefs === 'minimize' && useTray) {
+    doMinimizeToTray();
+    return;
+  }
+  if (prefs === 'quit' || !useTray) {
+    doQuit();
+    return;
+  }
+
+  // ask（默认）：通知渲染进程弹自定义对话框
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('app:close-prompt');
+  } else {
+    doMinimizeToTray();
+  }
+}
+
+function createTray() {
+  const iconFile = process.platform === 'win32' ? 'icon.ico' : 'icon-32.png';
+  const iconPath = path.join(__dirname, 'assets', iconFile);
+  let trayIcon;
+  try {
+    trayIcon = nativeImage.createFromPath(iconPath);
+    if (!trayIcon || trayIcon.isEmpty()) {
+      trayIcon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png'));
+    }
+  } catch (_) {
+    trayIcon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png'));
+  }
+  if (!trayIcon || trayIcon.isEmpty()) {
+    trayIcon = nativeImage.createFromDataURL(
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAFklEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+    );
+  }
+
+  try {
+    tray = new Tray(trayIcon);
+    tray.setToolTip('OmniDesk');
+    rebuildTrayMenu();
+    tray.on('click', () => showMainWindow());
+    tray.on('double-click', () => showMainWindow());
+  } catch (e) {
+    console.error('[tray] failed to create tray icon:', e.message);
+    tray = null;
+  }
+}
+
+function rebuildTrayMenu() {
+  if (!tray) return;
+  const menu = Menu.buildFromTemplate([
+    { label: '打开主窗口', click: () => showMainWindow() },
+    { type: 'separator' },
+    { label: '退出 OmniDesk', click: () => { trayDestroying = true; app.quit(); } },
+  ]);
+  tray.setContextMenu(menu);
+}
+
+function destroyTray() {
+  if (tray) {
+    try { tray.destroy(); } catch (_) {}
+    tray = null;
+  }
 }
 
 function createWindow() {
@@ -148,6 +250,13 @@ function createWindow() {
   });
   win.webContents.on('console-message', (_e, level, message) => {
     if (level >= 2) console.error('[renderer]', message);
+  });
+
+  // Close → delegate to handleCloseIntent (prefs or renderer custom prompt)
+  win.on('close', (e) => {
+    if (trayDestroying) return; // tray-initiated quit → let it close
+    e.preventDefault();
+    handleCloseIntent();
   });
 
   if (isDev) {
@@ -219,6 +328,20 @@ function registerIpc() {
   }
 
   handle('app:verify-system-auth', async (reason) => verifySystemAuth(reason, mainWindowHwnd()));
+
+  // Renderer resolved the "close window" custom prompt
+  handle('app:resolve-close', (payload) => {
+    const action = payload && payload.action === 'quit' ? 'quit' : 'minimize';
+    if (payload && payload.remember) {
+      try { store.updateSettings({ closeAction: action }); } catch (_) {}
+    }
+    if (action === 'quit') {
+      doQuit();
+    } else {
+      doMinimizeToTray();
+    }
+    return true;
+  });
   handle('store:export', async () => {
     // sensitive: require OS identity verification like Chrome password export
     const auth = await verifySystemAuth('导出 OmniDesk 配置（包含敏感信息）', mainWindowHwnd());
@@ -250,7 +373,6 @@ function registerIpc() {
     return store.snapshot().settings;
   });
 
-  handle('session:capabilities', (protocol) => sessions.capabilities(protocol));
   handle('session:test', (req) => sessions.testConnection(req));
   handle('session:connect', async (req) => {
     const hit = store.findAsset(req.assetId);
@@ -536,6 +658,7 @@ app.whenReady().then(() => {
   sftpManager = new SftpManager({ send, store });
   registerIpc();
   createWindow();
+  createTray();
 
   // Reset auth cache on screen lock / suspend (Chrome-style: re-verify after lock)
   if (process.platform === 'win32') {
@@ -547,14 +670,31 @@ app.whenReady().then(() => {
   }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (!win || win.isDestroyed()) {
+      createWindow();
+      createTray();
+    } else {
+      showMainWindow();
+    }
   });
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (e) => {
+  // before-quit fires for both tray-initiated quit AND programmatic quit.
+  // Clean up sessions always. Tray cleanup must happen so macOS doesn't leak it.
   if (vncSessions) vncSessions.destroyAll();
+  destroyTray();
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (trayDestroying) {
+    // tray-initiated quit → definitely quit
+    if (process.platform !== 'darwin') app.quit();
+    return;
+  }
+  const useTray = !!tray;
+  if (!useTray || process.platform === 'darwin') {
+    if (process.platform !== 'darwin') app.quit();
+  }
+  // else: minimized to tray, keep running
 });

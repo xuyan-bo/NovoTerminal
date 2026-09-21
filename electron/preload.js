@@ -26,6 +26,12 @@ const api = {
   cloneAsset: (aid) => ipcRenderer.invoke('store:clone-asset', aid),
   getSettings: () => ipcRenderer.invoke('store:settings'),
   updateSettings: (patch) => ipcRenderer.invoke('store:update-settings', patch),
+  resolveClose: (action, remember) => ipcRenderer.invoke('app:resolve-close', { action, remember }),
+  onClosePrompt: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('app:close-prompt', handler);
+    return () => ipcRenderer.removeListener('app:close-prompt', handler);
+  },
   exportGroups: () => ipcRenderer.invoke('store:export'),
   importGroups: (json) => ipcRenderer.invoke('store:import', json),
   verifySystemAuth: (reason) => ipcRenderer.invoke('app:verify-system-auth', reason),
@@ -33,7 +39,6 @@ const api = {
   clipboardReadText: () => ipcRenderer.invoke('clipboard:read-text'),
   clipboardWriteText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
 
-  sessionCapabilities: (protocol) => ipcRenderer.invoke('session:capabilities', protocol),
   sessionTest: (req) => ipcRenderer.invoke('session:test', req),
   sessionConnect: (req) => ipcRenderer.invoke('session:connect', req),
   sessionDisconnect: (sessionId) => ipcRenderer.invoke('session:disconnect', sessionId),

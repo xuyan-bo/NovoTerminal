@@ -1,5 +1,4 @@
 const { RdpWindowsMstscAdapter } = require('./adapters/RdpWindowsMstscAdapter');
-const { BaseAdapter } = require('./adapters/BaseAdapter');
 const { tcpProbe, testSsh, testVnc, testRdp } = require('./testers');
 
 class SessionManager {
@@ -13,50 +12,12 @@ class SessionManager {
           this.active.delete(ev.sessionId);
         }
       }),
-      vnc: this._stub('vnc', { embeddable: true }),
-      ssh: this._stub('ssh', { embeddable: true }),
     };
     this.active = new Map();
   }
 
-  _stub(id, caps) {
-    const self = this;
-    return {
-      id,
-      capabilities() {
-        return Object.assign(
-          {
-            embeddable: false,
-            resolution: 'none',
-            colorDepth: false,
-            refreshRate: false,
-            multimon: 'none',
-            clipboard: false,
-            processTracked: false,
-          },
-          caps
-        );
-      },
-      async testConnection(payload) {
-        const port = (payload.method && payload.method.port) || 5900;
-        return tcpProbe(payload.asset.host, port);
-      },
-      async connect() {
-        throw Object.assign(new Error(`${id} 会话将在后续版本实现`), { code: 'NOT_IMPLEMENTED' });
-      },
-      async disconnect() {
-        return { ok: true };
-      },
-    };
-  }
-
   getAdapter(protocol) {
     return this.adapters[String(protocol || '').toLowerCase()] || null;
-  }
-
-  capabilities(protocol) {
-    const a = this.getAdapter(protocol);
-    return a ? a.capabilities() : null;
   }
 
   async testConnection(req) {

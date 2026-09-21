@@ -86,6 +86,7 @@
     <asset-dialog />
     <group-dialog />
     <method-advanced-dialog />
+    <close-prompt-dialog />
     </template>
   </div>
 </template>
@@ -97,6 +98,7 @@ import SettingsDialog from './components/SettingsDialog.vue';
 import AssetDialog from './components/AssetDialog.vue';
 import GroupDialog from './components/GroupDialog.vue';
 import MethodAdvancedDialog from './components/MethodAdvancedDialog.vue';
+import ClosePromptDialog from './components/ClosePromptDialog.vue';
 import { store, closeTab, api, refresh } from './store';
 import { t, applySettings } from './i18n';
 import { OS_SVG } from './constants';
@@ -130,6 +132,7 @@ export default {
     AssetDialog,
     GroupDialog,
     MethodAdvancedDialog,
+    ClosePromptDialog,
     SftpPage: () => import('./components/SftpPage.vue'),
   },
   data() {

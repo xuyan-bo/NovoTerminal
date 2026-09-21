@@ -29,6 +29,7 @@ function defaultData() {
       theme: 'dark',
       lang: 'zh',
       dataPath: '',
+      closeAction: 'ask', // 'ask' = 每次询问, 'minimize' = 直接最小化, 'quit' = 直接退出
     },
   };
 }

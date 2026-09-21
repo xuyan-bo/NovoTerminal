@@ -45,6 +45,13 @@
           </div>
           <span class="hint" style="margin-left:8px">{{ $t('settings.previewLang') }}</span>
         </el-form-item>
+        <el-form-item :label="$t('settings.closeAction')">
+          <el-radio-group v-model="form.closeAction">
+            <el-radio :label="'ask'">{{ $t('settings.closeActionAsk') }}</el-radio>
+            <el-radio :label="'minimize'">{{ $t('settings.closeActionMin') }}</el-radio>
+            <el-radio :label="'quit'">{{ $t('settings.closeActionQuit') }}</el-radio>
+          </el-radio-group>
+        </el-form-item>
       </div>
 
       <div class="set-section">
@@ -102,7 +109,7 @@ export default {
         { id: 'light', label: '浅色' },
         { id: 'system', label: '跟随系统' },
       ],
-      form: { theme: 'dark', lang: 'zh', dataPath: '' },
+      form: { theme: 'dark', lang: 'zh', dataPath: '', closeAction: 'ask' },
       rules: {
         theme: [
           {
@@ -153,6 +160,7 @@ export default {
         theme: s.theme || 'dark',
         lang: s.lang || 'zh',
         dataPath: s.dataPath || '',
+        closeAction: s.closeAction || 'ask',
       };
       applyTheme(this.form.theme);
       setLocale(this.form.lang);
@@ -200,6 +208,7 @@ export default {
             await api.updateSettings({
               theme: this.form.theme,
               lang: this.form.lang,
+              closeAction: this.form.closeAction,
             })
           );
           await refresh();
