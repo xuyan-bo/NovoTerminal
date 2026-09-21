@@ -39,8 +39,9 @@ function resolveAdvanced(saved) {
  * renderer connects via noVNC to ws://127.0.0.1:<port>.
  */
 class VncSessionManager {
-  constructor({ send }) {
+  constructor({ send, log }) {
     this.send = send || (() => {});
+    this.log = log;
     this.sessions = new Map();
     this._seq = 0;
   }
@@ -51,6 +52,24 @@ class VncSessionManager {
 
   _emit(sessionId, type, payload) {
     this.send('vnc:state', { sessionId, type, ...(payload || {}) });
+    if (!this.log) return;
+    const rec = this.sessions.get(sessionId);
+    const meta = {
+      sessionId,
+      host: (payload && payload.host) || (rec && rec.host),
+      port: (payload && payload.port) || (rec && rec.port),
+    };
+    if (type === 'ready') {
+      this.log.info('vnc', 'vnc connected', meta);
+    } else if (type === 'error') {
+      this.log.error('vnc', 'vnc error', {
+        ...meta,
+        code: payload && payload.code,
+        message: payload && payload.message,
+      });
+    } else if (type === 'ended') {
+      this.log.info('vnc', 'vnc closed', meta);
+    }
   }
 
   async connect(req) {
@@ -74,7 +93,7 @@ class VncSessionManager {
       onEnd: (origin) => {
         if (this.sessions.has(sessionId)) {
           this.sessions.delete(sessionId);
-          this._emit(sessionId, 'ended', { origin });
+          this._emit(sessionId, 'ended', { origin, host, port });
         }
       },
     });
@@ -124,7 +143,7 @@ class VncSessionManager {
     try {
       s.proxy.stop();
     } catch (_) {}
-    this._emit(sessionId, 'ended', {});
+    this._emit(sessionId, 'ended', { host: s.host, port: s.port });
     return { ok: true };
   }
 

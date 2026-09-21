@@ -51,6 +51,11 @@
 - 默认不写注释；仅对非直观的约束、异步竞态或兼容原因添加简短说明，不复述代码，不保留任务过程说明。
 - 新增错误处理要有实际边界依据，不添加不可能触发的兜底，不将操作失败吞掉后返回成功。
 - 删除代码前确认模板、动态调用和跨文件引用；不保留空组件、无用导出或仅用于兼容已删除内部调用的转发函数。
+- **日志规范**：新增或修改功能时，必须在关键节点补充持久化日志——连接成功/断开/失败、IPC 错误、SFTP 任务起止等。主进程通过 `electron/logs/logStore.js` 暴露的 `logger` 注入到各 manager（渲染端经 preload 的 `logWrite` 写入），层级用 `info`/`warn`/`error`，meta 携带主机、端口、错误码、耗时等不含凭据的信息。示例：
+  - 连接成功：`this.log.info('ssh', 'ssh connected', { sessionId, host, port })`
+  - 连接失败：`this.log.error('rdp', 'session connect failed', { host, port, code: e.code, message: e.message })`
+  - meta 一律禁止 password、私钥、vnc pass 等敏感字段，脱敏交给 `logStore` 兜底仍不应依赖。
+- **滚动条样式**：所有可滚动区域统一使用 Element 的细滚动条（约 6px、圆角，滑块用 `--border`，hover 变 `--text-3`，轨道透明），不出现粗的原生滚动条。SSH 的 `.xterm-viewport`、VNC 及会话视图 `.view` 超出宽高时的右侧/底部滚动条已在此约定内；新增可滚动容器应复用并用 `::webkit-scrollbar` 收敛宽度，避免另起更粗样式。
 
 ## 4. Vue 组件与状态所有权
 

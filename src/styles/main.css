@@ -131,6 +131,46 @@ button {
   background: transparent;
 }
 
+/* log table: thin, subtle scrollbar matching the recent-connections look */
+.log-table .el-table__body-wrapper::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.log-table .el-table__body-wrapper::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+.log-table .el-table__body-wrapper::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+.log-table .el-table__body-wrapper::-webkit-scrollbar-track,
+.log-table .el-table__body-wrapper::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* unified Element-style thin scrollbar: session views (SSH/VNC) + xterm viewport.
+   Keeps the native scrollbar from pushing in thick right/bottom bars. */
+.view::-webkit-scrollbar,
+.xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.view::-webkit-scrollbar-thumb,
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.view::-webkit-scrollbar-thumb:hover,
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+.view::-webkit-scrollbar-track,
+.view::-webkit-scrollbar-corner,
+.xterm-viewport::-webkit-scrollbar-track,
+.xterm-viewport::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 .el-dialog__title,
 .el-dialog__body {
   color: var(--text);
@@ -459,6 +499,7 @@ button {
   padding: 8px 10px;
   display: flex;
   justify-content: flex-start;
+  gap: 7.5px;
 }
 
 /* main */

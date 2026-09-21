@@ -58,9 +58,10 @@ function formatSpeed(bps) {
  * SFTP sessions + transfer tasks for the external SFTP window.
  */
 class SftpManager {
-  constructor({ send, store }) {
+  constructor({ send, store, log }) {
     this.send = send || (() => {});
     this.store = store;
+    this.log = log;
     this.conns = new Map(); // connId -> { client, sftp, assetId, host, port }
     this.tasks = new Map(); // taskId -> state
     this._seq = 0;
@@ -148,6 +149,14 @@ class SftpManager {
     return new Promise((resolve, reject) => {
       const client = new Client();
       const fail = (err) => {
+        this.log &&
+          this.log.error('sftp', 'sftp connect failed', {
+            assetId,
+            host: asset.host,
+            port: method.port,
+            code: err.code || 'SFTP_ERROR',
+            message: err.message,
+          });
         try {
           client.end();
         } catch (_) {}
@@ -165,6 +174,13 @@ class SftpManager {
             host: asset.host,
             port: method.port,
           });
+          this.log &&
+            this.log.info('sftp', 'sftp connected', {
+              assetId,
+              host: asset.host,
+              port: method.port,
+              connId,
+            });
           // probe home
           sftp.realpath('.', (e2, abs) => {
             const home = !e2 && abs ? String(abs) : '/';
@@ -856,6 +872,13 @@ class SftpManager {
     try {
       c.client.end();
     } catch (_) {}
+    this.log &&
+      this.log.info('sftp', 'sftp closed', {
+        assetId: c.assetId,
+        host: c.host,
+        port: c.port,
+        connId,
+      });
     return { ok: true };
   }
 }

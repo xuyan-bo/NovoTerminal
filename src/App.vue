@@ -83,6 +83,7 @@
     </div>
 
     <settings-dialog />
+    <log-dialog />
     <asset-dialog />
     <group-dialog />
     <method-advanced-dialog />
@@ -95,6 +96,7 @@
 import SideBar from './components/SideBar.vue';
 import AssetDetailView from './components/AssetDetailView.vue';
 import SettingsDialog from './components/SettingsDialog.vue';
+import LogDialog from './components/LogDialog.vue';
 import AssetDialog from './components/AssetDialog.vue';
 import GroupDialog from './components/GroupDialog.vue';
 import MethodAdvancedDialog from './components/MethodAdvancedDialog.vue';
@@ -129,6 +131,7 @@ export default {
     HomeView: () => import('./components/HomeView.vue'),
     AssetDetailView,
     SettingsDialog,
+    LogDialog,
     AssetDialog,
     GroupDialog,
     MethodAdvancedDialog,

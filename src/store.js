@@ -12,6 +12,7 @@ export const store = Vue.observable({
   activeGroupId: null,
   sessionMap: {},
   settingsDialog: false,
+  logDialog: false,
   assetDialog: { visible: false, editId: null, gid: null },
   groupDialog: { visible: false, editId: null },
   methodAdvancedDialog: {

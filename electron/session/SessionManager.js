@@ -2,14 +2,21 @@ const { RdpWindowsMstscAdapter } = require('./adapters/RdpWindowsMstscAdapter');
 const { tcpProbe, testSsh, testVnc, testRdp } = require('./testers');
 
 class SessionManager {
-  constructor({ store, send }) {
+  constructor({ store, send, log }) {
     this.store = store;
     this.send = send || (() => {});
+    this.log = log;
     this.adapters = {
       rdp: new RdpWindowsMstscAdapter((ev) => {
         this.send('session:state', ev);
         if (ev.type === 'ended') {
           this.active.delete(ev.sessionId);
+          this.log &&
+            this.log.info('rdp', 'session closed', {
+              protocol: 'rdp',
+              sessionId: ev.sessionId,
+              code: ev.code,
+            });
         }
       }),
     };
@@ -54,6 +61,12 @@ class SessionManager {
     if (!adapter) throw Object.assign(new Error('unknown protocol'), { code: 'UNKNOWN_PROTOCOL' });
 
     this.send('session:state', { type: 'connecting', sessionId, assetId: req.assetId, protocol });
+    const logMeta = {
+      protocol,
+      assetId: req.assetId,
+      host: req.asset && req.asset.host,
+      port: req.method && req.method.port,
+    };
 
     const payload = { ...req, sessionId };
     if (req.auth && req.auth.mode === 'keytar' && req.asset && req.asset.pass) {
@@ -64,6 +77,7 @@ class SessionManager {
     try {
       const result = await adapter.connect(payload, sessionId);
       this.active.set(sessionId, { assetId: req.assetId, protocol, startedAt: Date.now() });
+      this.log && this.log.info(protocol, 'session connected', { ...logMeta, sessionId });
 
       const hit = this.store.findAsset(req.assetId);
       if (hit && adapter.id === 'rdp-windows-mstsc') {
@@ -77,6 +91,12 @@ class SessionManager {
 
       return { sessionId, ...result, embeddable: false };
     } catch (e) {
+      this.log &&
+        this.log.error(protocol, 'session connect failed', {
+          ...logMeta,
+          code: e.code || 'CONNECT_FAILED',
+          message: e.message,
+        });
       this.send('session:state', {
         type: 'error',
         sessionId,

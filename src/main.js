@@ -5,9 +5,25 @@ import enLocale from 'element-ui/lib/locale/lang/en';
 import locale from 'element-ui/lib/locale';
 import 'element-ui/lib/theme-chalk/index.css';
 import App from './App.vue';
-import { refresh, store } from './store';
+import { refresh, store, api } from './store';
 import { t, setLocale, applySettings } from './i18n';
 import './styles/main.css';
+
+/** Forward uncaught renderer errors to the main-process log sink (no-op in browser). */
+function forwardError(message, meta) {
+  try {
+    if (api && api.logWrite) {
+      api.logWrite({ level: 'error', source: 'renderer', message, meta });
+    }
+  } catch (_) {}
+}
+window.addEventListener('error', (e) => {
+  forwardError(e.message || 'uncaught error', { file: e.filename, line: e.lineno, col: e.colno });
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e.reason;
+  forwardError((r && (r.message || r)) || String(r), { rejected: true });
+});
 
 Vue.use(ElementUI, { size: 'small' });
 Vue.config.productionTip = false;

@@ -39,6 +39,16 @@ const api = {
   clipboardReadText: () => ipcRenderer.invoke('clipboard:read-text'),
   clipboardWriteText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
 
+  // Logs
+  logList: (filter) => ipcRenderer.invoke('log:list', filter),
+  logClear: () => ipcRenderer.invoke('log:clear'),
+  logWrite: (payload) => ipcRenderer.invoke('log:write', payload),
+  onLog: (cb) => {
+    const handler = (_e, entry) => cb(entry);
+    ipcRenderer.on('log:new', handler);
+    return () => ipcRenderer.removeListener('log:new', handler);
+  },
+
   sessionTest: (req) => ipcRenderer.invoke('session:test', req),
   sessionConnect: (req) => ipcRenderer.invoke('session:connect', req),
   sessionDisconnect: (sessionId) => ipcRenderer.invoke('session:disconnect', sessionId),

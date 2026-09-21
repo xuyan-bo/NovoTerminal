@@ -97,8 +97,9 @@ function buildAuthOptions(adv, password, username) {
  * Xshell-style SSH sessions: ssh2 in main + stream over IPC to xterm.js.
  */
 class SshSessionManager {
-  constructor({ send }) {
+  constructor({ send, log }) {
     this.send = send || (() => {});
+    this.log = log;
     this.sessions = new Map();
     this._seq = 0;
   }
@@ -109,6 +110,28 @@ class SshSessionManager {
 
   _emit(sessionId, type, payload) {
     this.send('ssh:state', { sessionId, type, ...(payload || {}) });
+    if (!this.log) return;
+    const rec = this.sessions.get(sessionId);
+    const meta = {
+      sessionId,
+      host: (payload && payload.host) || (rec && rec.host),
+      port: (payload && payload.port) || (rec && rec.port),
+    };
+    if (type === 'ready') {
+      this.log.info('ssh', 'ssh connected', meta);
+    } else if (type === 'error') {
+      this.log.error('ssh', 'ssh error', {
+        ...meta,
+        code: payload && payload.code,
+        message: payload && payload.message,
+      });
+    } else if (type === 'ended') {
+      this.log.info('ssh', 'ssh closed', meta);
+    } else if (type === 'hostkey-saved') {
+      this.log.info('ssh', 'host key saved', { ...meta, fp: payload && payload.fp });
+    } else if (type === 'hostkey-mismatch') {
+      this.log.warn('ssh', 'host key mismatch', meta);
+    }
   }
 
   _write(sessionId, data) {
@@ -214,11 +237,17 @@ class SshSessionManager {
       const fail = (err) => {
         if (settled) return;
         settled = true;
+        const s0 = this.sessions.get(sessionId);
         cleanupAll();
         const e = Object.assign(new Error(err && err.message ? err.message : String(err)), {
           code: (err && err.code) || 'SSH_ERROR',
         });
-        this._emit(sessionId, 'error', { code: e.code, message: e.message });
+        this._emit(sessionId, 'error', {
+          code: e.code,
+          message: e.message,
+          host: s0 && s0.host,
+          port: s0 && s0.port,
+        });
         reject(e);
       };
 
@@ -243,7 +272,7 @@ class SshSessionManager {
               stream.on('close', () => {
                 if (this.sessions.has(sessionId)) {
                   cleanupAll();
-                  this._emit(sessionId, 'ended', {});
+                  this._emit(sessionId, 'ended', { host, port });
                 }
               });
 
@@ -272,7 +301,7 @@ class SshSessionManager {
             fail(Object.assign(new Error('SSH connection ended'), { code: 'SSH_ENDED' }));
           } else if (this.sessions.has(sessionId)) {
             cleanupAll();
-            this._emit(sessionId, 'ended', {});
+            this._emit(sessionId, 'ended', { host, port });
           }
         });
       };
@@ -443,8 +472,9 @@ class SshSessionManager {
 
   disconnect(sessionId) {
     const existed = this.sessions.has(sessionId);
+    const s = this.sessions.get(sessionId);
     this.cleanup(sessionId);
-    this._emit(sessionId, 'ended', {});
+    this._emit(sessionId, 'ended', { host: s && s.host, port: s && s.port });
     return { ok: true, existed };
   }
 

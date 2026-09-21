@@ -9,6 +9,7 @@ const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
 const { VncSessionManager } = require('./vnc/VncSessionManager');
 const { SftpManager } = require('./sftp/SftpManager');
+const { LogStore } = require('./logs/logStore');
 const { verifySystemAuth, resetAuthCache } = require('./auth/systemAuth');
 
 /** Advanced defaults mirrored from renderer constants — used when method.advanced is missing */
@@ -116,6 +117,14 @@ let vncSessions = null;
 let sftpManager = null;
 let tray = null;
 let trayDestroying = false;
+let logStore = null;
+
+/** Logger facade handed to managers; no-op until logStore is created. */
+const logger = {
+  info: (source, message, meta) => logStore && logStore.info(source, message, meta),
+  warn: (source, message, meta) => logStore && logStore.warn(source, message, meta),
+  error: (source, message, meta) => logStore && logStore.error(source, message, meta),
+};
 const sftpWindows = new Map(); // assetId -> BrowserWindow
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
@@ -249,7 +258,10 @@ function createWindow() {
     console.error('[load-fail]', code, desc, url);
   });
   win.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 2) console.error('[renderer]', message);
+    if (level >= 2) {
+      console.error('[renderer]', message);
+      logStore && logStore.error('renderer', message);
+    }
   });
 
   // Close → delegate to handleCloseIntent (prefs or renderer custom prompt)
@@ -273,6 +285,11 @@ function handle(channel, fn) {
     try {
       return await fn(...args);
     } catch (err) {
+      logStore &&
+        logStore.error('ipc', channel, {
+          message: err.message,
+          code: err.code || 'ERROR',
+        });
       return { __error: true, message: err.message, code: err.code || 'ERROR' };
     }
   });
@@ -371,6 +388,15 @@ function registerIpc() {
     store.setCustomPath(r.filePaths[0]);
     store.persist();
     return store.snapshot().settings;
+  });
+
+  // ---- Logs ----
+  handle('log:list', (filter) => logStore.list(filter || {}));
+  handle('log:clear', () => logStore.clear());
+  handle('log:write', (p) => {
+    const level =
+      p && p.level && ['error', 'warn', 'info'].includes(p.level) ? p.level : 'info';
+    return logStore.log(level, (p && p.source) || 'renderer', (p && p.message) || '', p && p.meta);
   });
 
   handle('session:test', (req) => sessions.testConnection(req));
@@ -651,11 +677,15 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
+  logStore = new LogStore({
+    dir: path.join(app.getPath('userData'), 'logs'),
+    onNew: (entry) => send('log:new', entry),
+  });
   store = new AssetStore();
-  sessions = new SessionManager({ store, send });
-  sshSessions = new SshSessionManager({ send });
-  vncSessions = new VncSessionManager({ send });
-  sftpManager = new SftpManager({ send, store });
+  sessions = new SessionManager({ store, send, log: logger });
+  sshSessions = new SshSessionManager({ send, log: logger });
+  vncSessions = new VncSessionManager({ send, log: logger });
+  sftpManager = new SftpManager({ send, store, log: logger });
   registerIpc();
   createWindow();
   createTray();
