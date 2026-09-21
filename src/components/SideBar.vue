@@ -7,6 +7,7 @@
     <div class="side-search">
       <el-input v-model="filter" size="mini" :placeholder="$t('sidebar.search')" clearable />
     </div>
+    <el-scrollbar class="tree-scroll">
     <div class="tree" @contextmenu.prevent="onBlankCtx" @dragend="onDragEnd" @drop="onTreeDrop">
       <div
         v-for="g in filteredGroups"
@@ -72,6 +73,7 @@
       </div>
       <div v-if="!filteredGroups.length" class="empty" style="padding:24px">{{ $t('sidebar.empty') }}</div>
     </div>
+    </el-scrollbar>
     <div class="side-footer">
       <button
         type="button"
@@ -97,6 +99,7 @@ import {
   unwrap,
   refresh,
   openSshSession,
+  openVncSession,
   reorderGroups,
   reorderAsset,
 } from '../store';
@@ -429,6 +432,16 @@ export default {
             host: asset.host,
             port: method.port,
             methodId: 'ssh',
+          });
+          return;
+        }
+        if (method.id === 'vnc') {
+          openVncSession({
+            assetId: asset.id,
+            assetName: asset.name,
+            host: asset.host,
+            port: method.port,
+            methodId: 'vnc',
           });
           return;
         }

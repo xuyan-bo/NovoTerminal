@@ -160,6 +160,12 @@ function testVnc({ host, port, password, timeoutMs = 8000 }) {
       }
     });
 
+    // noVNC-supported security type codes
+    const NOVNC_TYPES = {
+      1: 'None', 2: 'VNCAuth', 6: 'RA2ne', 16: 'Tight',
+      19: 'VeNCrypt', 22: 'XVP', 30: 'ARD', 113: 'MSLogonII', 256: 'Plain',
+    };
+
     function step() {
       if (stage === 'version') {
         if (buf.length < 12) return;
@@ -193,7 +199,12 @@ function testVnc({ host, port, password, timeoutMs = 8000 }) {
           sock.write(Buffer.from([1]));
           stage = 'sec-result';
         } else {
-          return finish(false, 'VNC_NO_AUTH', '服务器不支持 VNC 密码认证（支持: ' + types.join(',') + '）');
+          const supported = types.filter((t) => t in NOVNC_TYPES);
+          if (supported.length > 0) {
+            const names = supported.map((t) => NOVNC_TYPES[t] + '(' + t + ')').join(', ');
+            return finish(true, undefined, undefined, { auth: 'ok', note: '服务器认证类型: ' + names + '（noVNC 可处理）' });
+          }
+          return finish(false, 'VNC_NO_AUTH', '服务器认证类型 noVNC 不支持（支持: ' + types.join(',') + '）');
         }
         step();
         return;
@@ -207,8 +218,10 @@ function testVnc({ host, port, password, timeoutMs = 8000 }) {
           stage = 'challenge';
         } else if (type === 1) {
           stage = 'sec-result';
+        } else if (type in NOVNC_TYPES) {
+          return finish(true, undefined, undefined, { auth: 'ok', note: '服务器认证类型: ' + NOVNC_TYPES[type] + '（noVNC 可处理）' });
         } else {
-          return finish(false, 'VNC_NO_AUTH', '服务器不支持 VNC 密码认证（类型: ' + type + '）');
+          return finish(false, 'VNC_NO_AUTH', '服务器认证类型 noVNC 不支持（类型: ' + type + '）');
         }
         step();
         return;

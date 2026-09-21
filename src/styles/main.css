@@ -322,9 +322,16 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
-.tree {
+.tree-scroll {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+}
+
+.tree-scroll .el-scrollbar__wrap {
+  overflow-x: hidden;
+}
+
+.tree {
   padding: 6px;
 }
 
@@ -741,11 +748,27 @@ button {
   flex: 0 0 auto;
 }
 
+.recent-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.recent-scroll-wrap {
+  flex: 1;
+  min-height: 0;
+}
+
+.recent-scroll-wrap .el-scrollbar__wrap {
+  overflow-x: hidden;
+}
+
 .recent-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex: 1;
+  padding-bottom: 4px;
 }
 
 .recent-item {

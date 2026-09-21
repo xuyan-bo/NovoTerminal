@@ -15,12 +15,14 @@
     "lint": "echo \"no lint configured\""
   },
   "dependencies": {
+    "@novnc/novnc": "^1.7.0",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/xterm": "5.5.0",
     "echarts": "^6.1.0",
     "element-ui": "^2.15.14",
     "ssh2": "^1.17.0",
-    "vue": "^2.7.16"
+    "vue": "^2.7.16",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@vitejs/plugin-vue2": "^2.3.3",

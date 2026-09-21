@@ -11,6 +11,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     assetsDir: 'assets',
+    target: 'es2022',
   },
   server: {
     host: '127.0.0.1',

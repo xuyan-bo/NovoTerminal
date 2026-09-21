@@ -28,6 +28,14 @@
         </el-select>
         <el-switch v-else-if="f.type === 'switch'" v-model="form[f.key]" />
         <el-input
+          v-else-if="f.type === 'password'"
+          v-model="form[f.key]"
+          type="password"
+          show-password
+          clearable
+          :placeholder="ph(f)"
+        />
+        <el-input
           v-else-if="f.type === 'number'"
           v-model.number="form[f.key]"
           type="number"
@@ -137,14 +145,15 @@ export default {
       this.saving = true;
       try {
         const ctx = this.context;
-        if (ctx && ctx.type === 'detail' && ctx.assetId) {
-          const hit = findAsset(ctx.assetId);
+        const assetId = (ctx && ctx.type === 'detail' && ctx.assetId) || store.assetDialog.editId || null;
+        if (assetId) {
+          const hit = findAsset(assetId);
           if (!hit) throw new Error(t('detail.empty'));
           const methods = JSON.parse(JSON.stringify(hit.asset.methods || {}));
           const prev = methods[this.methodId] || {};
           methods[this.methodId] = { ...prev, enabled: true, advanced: payload };
           unwrap(
-            await api.updateAsset(ctx.assetId, {
+            await api.updateAsset(assetId, {
               methods,
               name: hit.asset.name,
               os: hit.asset.os,
@@ -159,7 +168,6 @@ export default {
           );
           await refresh();
         }
-        // Always surface result for AssetDialog / any parent that listens
         store.methodAdvancedResult = {
           methodId: this.methodId,
           advanced: payload,

@@ -69,6 +69,21 @@
               :active="activeTab === t.id"
             />
           </div>
+          <div
+            v-for="t in vncTabs"
+            :key="t.id"
+            class="view vnc-view"
+            :class="{ show: activeTab === t.id }"
+          >
+            <vnc-view
+              v-show="activeTab === t.id"
+              :session-id="t.id"
+              :asset-id="t.assetId"
+              :method-id="t.methodId || 'vnc'"
+              :title="(t.host || '') + (t.port ? ':' + t.port : '')"
+              :active="activeTab === t.id"
+            />
+          </div>
         </div>
 
         <div class="statusbar">
@@ -99,6 +114,7 @@ import AssetDialog from './components/AssetDialog.vue';
 import GroupDialog from './components/GroupDialog.vue';
 import MethodAdvancedDialog from './components/MethodAdvancedDialog.vue';
 import TerminalView from './components/TerminalView.vue';
+import VncView from './components/VncView.vue';
 import SftpPage from './components/SftpPage.vue';
 import { store, closeTab, api, refresh } from './store';
 import { t, applySettings } from './i18n';
@@ -133,6 +149,7 @@ export default {
     GroupDialog,
     MethodAdvancedDialog,
     TerminalView,
+    VncView,
     SftpPage,
   },
   data() {
@@ -162,6 +179,9 @@ export default {
     },
     sshTabs() {
       return store.tabs.filter((t) => t.kind === 'ssh');
+    },
+    vncTabs() {
+      return store.tabs.filter((t) => t.kind === 'vnc');
     },
     localeTick() {
       return store.localeTick;
@@ -250,8 +270,19 @@ export default {
       store.activeTab = tab.id;
     },
     closeTabById(id) {
-      closeTab(id);
-      // TerminalView beforeDestroy handles ssh disconnect
+      const tab = store.tabs.find((t) => t.id === id);
+      if (!tab) return;
+      if (tab.connected) {
+        this.$confirm(
+          t('tab.closeConfirmMsg', { name: tab.title }),
+          t('tab.closeConfirmTitle'),
+          { confirmButtonText: t('msg.confirm'), cancelButtonText: t('msg.cancel'), type: 'warning' }
+        ).then(() => {
+          closeTab(id);
+        }).catch(() => {});
+      } else {
+        closeTab(id);
+      }
     },
     tick() {
       const d = new Date();

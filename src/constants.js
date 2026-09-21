@@ -64,13 +64,12 @@ export const ADVANCED_DEFAULTS = {
     hostKeyPolicy: 'ask',
   },
   vnc: {
+    password: '',
     quality: 'auto',
-    colorDepth: 'auto',
     compressLevel: 6,
     jpegQuality: 6,
     shared: true,
     viewOnly: false,
-    screenMode: 'window',
     scale: 'fit',
     clipboard: true,
     localCursor: true,
@@ -205,6 +204,7 @@ export const ADVANCED_FIELDS = {
     },
   ],
   vnc: [
+    { key: 'password', type: 'password', labelKey: 'adv.vnc.password', placeholderKey: 'adv.vnc.passwordPh' },
     {
       key: 'quality',
       type: 'select',
@@ -216,28 +216,8 @@ export const ADVANCED_FIELDS = {
         { value: 'low', labelKey: 'adv.rdp.quality.low' },
       ],
     },
-    {
-      key: 'colorDepth',
-      type: 'select',
-      labelKey: 'adv.vnc.colorDepth',
-      options: [
-        { value: 'auto', labelKey: 'adv.auto' },
-        { value: 'full', labelKey: 'adv.vnc.colorDepth.full' },
-        { value: '256', label: '256' },
-        { value: '64', label: '64' },
-      ],
-    },
     { key: 'compressLevel', type: 'number', labelKey: 'adv.vnc.compressLevel', min: 0, max: 9, placeholderKey: 'adv.vnc.levelPh' },
     { key: 'jpegQuality', type: 'number', labelKey: 'adv.vnc.jpegQuality', min: 0, max: 9, placeholderKey: 'adv.vnc.levelPh' },
-    {
-      key: 'screenMode',
-      type: 'select',
-      labelKey: 'adv.rdp.screenMode',
-      options: [
-        { value: 'window', labelKey: 'adv.screenMode.window' },
-        { value: 'fullscreen', labelKey: 'adv.screenMode.fullscreen' },
-      ],
-    },
     {
       key: 'scale',
       type: 'select',

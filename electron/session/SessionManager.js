@@ -78,7 +78,7 @@ class SessionManager {
       });
     }
     if (protocol === 'vnc') {
-      return testVnc({ host, port, password: asset.pass });
+      return testVnc({ host, port, password: advanced.password || asset.pass });
     }
     if (protocol === 'rdp') {
       return testRdp({ host, port });

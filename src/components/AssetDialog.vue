@@ -541,6 +541,7 @@ export default {
         if (r && r.ok) {
           const parts = [`${m.name} · ${r.latencyMs ?? '-'} ms`];
           if (r.nla) parts.push(t('asset.testNla'));
+          if (r.note) parts.push(r.note);
           this.$message.success(parts.join(' · '));
         } else {
           const code = (r && r.code) || '';
@@ -555,7 +556,10 @@ export default {
             VNC_REJECTED: t('asset.testVncRejected'),
             RDP_BAD_RESPONSE: t('asset.testRdpBad'),
           };
-          this.$message.error(map[code] || (r && (r.error || r.__error)) || t('asset.testFail'));
+          const detail = r && (r.error || r.__error);
+          const base = map[code];
+          const msg = base && detail ? base + ' — ' + detail : base || detail || t('asset.testFail');
+          this.$message.error(msg);
         }
       } catch (e) {
         this.$message.error(e.message);

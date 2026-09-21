@@ -43,7 +43,9 @@
       <!-- right: recent connections (taller) -->
       <div class="dash-card dash-recent">
         <h3>{{ $t('home.recent') }} <span class="tag">{{ recent.length }}</span></h3>
-        <div v-if="recent.length" class="recent-list">
+        <div v-if="recent.length" class="recent-wrap">
+          <el-scrollbar class="recent-scroll-wrap">
+          <div class="recent-list">
           <div
             v-for="r in recent"
             :key="r.id + '-' + (r.method || '')"
@@ -67,6 +69,8 @@
               </button>
             </el-tooltip>
           </div>
+          </div>
+          </el-scrollbar>
         </div>
         <div v-else class="empty">{{ $t('home.recentEmpty') }}</div>
       </div>
@@ -76,7 +80,7 @@
 
 <script>
 import * as echarts from 'echarts';
-import { store, findAsset, openSshSession, api, unwrap, refresh } from '../store';
+import { store, findAsset, openSshSession, openVncSession, api, unwrap, refresh } from '../store';
 import { OS_SVG, formatTime } from '../constants';
 import { t } from '../i18n';
 
@@ -309,6 +313,16 @@ export default {
           host: hit.asset.host,
           port: r.port,
           methodId: 'ssh',
+        });
+        return;
+      }
+      if (method === 'vnc') {
+        openVncSession({
+          assetId: hit.asset.id,
+          assetName: hit.asset.name,
+          host: hit.asset.host,
+          port: r.port,
+          methodId: 'vnc',
         });
         return;
       }

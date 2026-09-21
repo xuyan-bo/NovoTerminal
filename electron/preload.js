@@ -57,6 +57,16 @@ const api = {
     return () => ipcRenderer.removeListener('ssh:state', handler);
   },
 
+  // VNC sessions (noVNC via WebSocket proxy)
+  vncConnect: (req) => ipcRenderer.invoke('vnc:connect', req),
+  vncDisconnect: (sessionId) => ipcRenderer.invoke('vnc:disconnect', sessionId),
+  vncList: () => ipcRenderer.invoke('vnc:list'),
+  onVncState: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('vnc:state', handler);
+    return () => ipcRenderer.removeListener('vnc:state', handler);
+  },
+
   // SFTP
   sftpOpenWindow: (req) => ipcRenderer.invoke('sftp:open-window', req),
   sftpOpen: (req) => ipcRenderer.invoke('sftp:open', req),

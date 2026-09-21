@@ -79,7 +79,7 @@
 </template>
 
 <script>
-import { store, findAsset, enabledMethods, api, unwrap, openMethodAdvanced, openSshSession, refresh } from '../store';
+import { store, findAsset, enabledMethods, api, unwrap, openMethodAdvanced, openSshSession, openVncSession, refresh } from '../store';
 import { OS_SVG, OS_NAME, methodPillClass } from '../constants';
 import { t } from '../i18n';
 
@@ -155,6 +155,16 @@ export default {
             host: this.asset && this.asset.host,
             port: m.port,
             methodId: 'ssh',
+          });
+          return;
+        }
+        if (m.id === 'vnc') {
+          openVncSession({
+            assetId: this.assetId,
+            assetName: this.asset && this.asset.name,
+            host: this.asset && this.asset.host,
+            port: m.port,
+            methodId: 'vnc',
           });
           return;
         }

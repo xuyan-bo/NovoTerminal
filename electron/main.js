@@ -7,6 +7,7 @@ const APP_BUILD = 'rd2-1647';
 const { AssetStore } = require('./store/assetStore');
 const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
+const { VncSessionManager } = require('./vnc/VncSessionManager');
 const { SftpManager } = require('./sftp/SftpManager');
 const { verifySystemAuth, resetAuthCache } = require('./auth/systemAuth');
 
@@ -39,12 +40,10 @@ const ADVANCED_DEFAULTS = {
   },
   vnc: {
     quality: 'auto',
-    colorDepth: 'auto',
     compressLevel: 6,
     jpegQuality: 6,
     shared: true,
     viewOnly: false,
-    screenMode: 'window',
     scale: 'fit',
     clipboard: true,
     localCursor: true,
@@ -116,6 +115,7 @@ let win = null;
 let store = null;
 let sessions = null;
 let sshSessions = null;
+let vncSessions = null;
 let sftpManager = null;
 const sftpWindows = new Map(); // assetId -> BrowserWindow
 
@@ -187,7 +187,7 @@ function registerIpc() {
     try {
       return clipboard.readText() || '';
     } catch (_) {
-      return '';
+      return null;
     }
   });
   handle('clipboard:write-text', (text) => {
@@ -286,6 +286,12 @@ function registerIpc() {
     if (!hit) throw new Error('asset not found');
     const method = hit.asset.methods && hit.asset.methods[req.methodId];
     if (!method || !method.enabled) throw new Error('method not enabled');
+    store.pushRecent(hit.asset, {
+      id: 'ssh',
+      proto: 'SSH',
+      port: method.port || 22,
+    });
+    send('store:changed', { reason: 'recent' });
     const result = await sshSessions.connect({
       assetId: hit.asset.id,
       asset: { host: hit.asset.host, user: hit.asset.user, pass: hit.asset.pass },
@@ -294,18 +300,35 @@ function registerIpc() {
       cols: req.cols,
       rows: req.rows,
     });
-    store.pushRecent(hit.asset, {
-      id: 'ssh',
-      proto: 'SSH',
-      port: method.port || 22,
-    });
-    send('store:changed', { reason: 'recent' });
     return result;
   });
   handle('ssh:write', (sessionId, data) => sshSessions.write(sessionId, data));
   handle('ssh:resize', (sessionId, cols, rows) => sshSessions.resize(sessionId, cols, rows));
   handle('ssh:disconnect', (sid) => sshSessions.disconnect(sid));
   handle('ssh:list', () => sshSessions.list());
+
+  // ---- VNC terminal (noVNC via WebSocket proxy) ----
+  handle('vnc:connect', async (req) => {
+    const hit = store.findAsset(req.assetId);
+    if (!hit) throw new Error('asset not found');
+    const method = hit.asset.methods && hit.asset.methods[req.methodId];
+    if (!method || !method.enabled) throw new Error('method not enabled');
+    store.pushRecent(hit.asset, {
+      id: 'vnc',
+      proto: 'VNC',
+      port: method.port || 5900,
+    });
+    send('store:changed', { reason: 'recent' });
+    const result = await vncSessions.connect({
+      assetId: hit.asset.id,
+      asset: { host: hit.asset.host, user: hit.asset.user, pass: hit.asset.pass },
+      method: { id: req.methodId, port: method.port || 5900, advanced: method.advanced },
+      advanced: method.advanced,
+    });
+    return result;
+  });
+  handle('vnc:disconnect', (sid) => vncSessions.disconnect(sid));
+  handle('vnc:list', () => vncSessions.list());
 
   // ---- SFTP window & transfers ----
   handle('sftp:open-window', async (req) => {
@@ -512,6 +535,7 @@ app.whenReady().then(() => {
   store = new AssetStore();
   sessions = new SessionManager({ store, send });
   sshSessions = new SshSessionManager({ send });
+  vncSessions = new VncSessionManager({ send });
   sftpManager = new SftpManager({ send, store });
   registerIpc();
   createWindow();
@@ -528,6 +552,10 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+app.on('before-quit', () => {
+  if (vncSessions) vncSessions.destroyAll();
 });
 
 app.on('window-all-closed', () => {

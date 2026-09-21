@@ -201,6 +201,33 @@ export function openSshSession({ assetId, assetName, host, port, methodId }) {
     host: host || '',
     port: port || 22,
     assetName: assetName || host || assetId,
+    connected: false,
+  });
+  store.activeTab = id;
+  return id;
+}
+
+/** Open an embedded VNC desktop tab (noVNC) */
+export function openVncSession({ assetId, assetName, host, port, methodId }) {
+  const mid = methodId || 'vnc';
+  const id = `vnc-${assetId}-${mid}`;
+  const existing = store.tabs.find((t) => t.id === id);
+  if (existing) {
+    store.activeTab = id;
+    return id;
+  }
+  store.tabs.push({
+    id,
+    title: `VNC · ${assetName || host || assetId}`,
+    closable: true,
+    icon: '🖥',
+    kind: 'vnc',
+    assetId,
+    methodId: mid,
+    host: host || '',
+    port: port || 5900,
+    assetName: assetName || host || assetId,
+    connected: false,
   });
   store.activeTab = id;
   return id;

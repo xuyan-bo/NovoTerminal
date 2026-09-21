@@ -74,7 +74,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { api, unwrap, refresh, findAsset } from '../store';
+import { api, unwrap, refresh, findAsset, store } from '../store';
 import { t } from '../i18n';
 import { sshThemeToXterm, resolveSshTheme } from '../constants';
 import SshThemeDialog from './SshThemeDialog.vue';
@@ -130,6 +130,10 @@ export default {
     },
   },
   watch: {
+    status(val) {
+      const tab = store.tabs.find((t) => t.id === this.sessionId);
+      if (tab) tab.connected = val === 'connecting' || val === 'ready';
+    },
     // Tab switched back → layout is visible again; refit only, do NOT reconnect
     active(v) {
       if (v) {
