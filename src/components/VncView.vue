@@ -45,9 +45,15 @@
 import { api, unwrap, refresh, findAsset, store } from '../store';
 import { t } from '../i18n';
 import RFB from '@novnc/novnc';
+import createFullscreenMixin from './session/fullscreen';
 
 export default {
   name: 'VncView',
+  mixins: [createFullscreenMixin({
+    fallbackClass: 'is-vnc-fullscreen',
+    onResize() { this._applyVncScale(); },
+    resizeOnNextTick: true,
+  })],
   props: {
     sessionId: { type: String, required: true },
     assetId: { type: String, required: true },
@@ -62,8 +68,6 @@ export default {
       liveSessionId: null,
       rfb: null,
       offState: null,
-      isFullscreen: false,
-      fsHint: false,
       desktopName: '',
     };
   },
@@ -102,27 +106,14 @@ export default {
     },
   },
   mounted() {
-    this._fsHintTimer = null;
     this._resizeObserver = null;
     this.connect();
-    document.addEventListener('fullscreenchange', this.onFsChange);
-    if (document.webkitFullscreenElement !== undefined) {
-      document.addEventListener('webkitfullscreenchange', this.onFsChange);
-    }
   },
   beforeDestroy() {
-    document.removeEventListener('fullscreenchange', this.onFsChange);
-    if (document.webkitFullscreenElement !== undefined) {
-      document.removeEventListener('webkitfullscreenchange', this.onFsChange);
-    }
     if (this._resizeObserver) {
       this._resizeObserver.disconnect();
       this._resizeObserver = null;
     }
-    if (this.isFullscreen) {
-      try { this.exitFullscreen(); } catch (_) {}
-    }
-    if (this._fsHintTimer) clearTimeout(this._fsHintTimer);
     this.disconnectNow(true);
   },
   methods: {
@@ -378,73 +369,6 @@ export default {
       } else {
         this.disconnectNow(false);
       }
-    },
-
-    async onToggleFullscreen() {
-      if (this.isFullscreen) {
-        this.exitFullscreen();
-      } else {
-        await this.enterFullscreen();
-      }
-    },
-
-    async enterFullscreen() {
-      const el = this.$refs.wrapEl;
-      if (!el) return;
-      try {
-        const req =
-          (el.requestFullscreen && el.requestFullscreen.bind(el)) ||
-          (el.webkitRequestFullscreen && el.webkitRequestFullscreen.bind(el));
-        if (req) await req();
-      } catch (_) {}
-      if (this.isFullscreen || document.fullscreenElement) {
-        this.showFsHint();
-        return;
-      }
-      this.isFullscreen = true;
-      el.classList.add('is-vnc-fullscreen');
-      this.showFsHint();
-    },
-
-    showFsHint() {
-      this.fsHint = true;
-      if (this._fsHintTimer) clearTimeout(this._fsHintTimer);
-      this._fsHintTimer = setTimeout(() => {
-        this.fsHint = false;
-      }, 3000);
-    },
-
-    async exitFullscreen() {
-      const doc = document;
-      const exit =
-        (doc.exitFullscreen && doc.exitFullscreen.bind(doc)) ||
-        (doc.webkitExitFullscreen && doc.webkitExitFullscreen.bind(doc));
-      if (exit) {
-        try { await exit(); } catch (_) {}
-      }
-      if (this.isFullscreen) {
-        this.isFullscreen = false;
-        this.$refs.wrapEl && this.$refs.wrapEl.classList.remove('is-vnc-fullscreen');
-      }
-    },
-
-    onFsChange() {
-      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-      const el = this.$refs.wrapEl;
-      const now = !!fsEl && (fsEl === el);
-      if (now === this.isFullscreen) {
-        if (now) this.showFsHint();
-        return;
-      }
-      this.isFullscreen = now;
-      if (now) {
-        this.showFsHint();
-      } else if (el) {
-        el.classList.remove('is-vnc-fullscreen');
-      }
-      this.$nextTick(() => {
-        this._applyVncScale();
-      });
     },
 
     _applyVncScale() {

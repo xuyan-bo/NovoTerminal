@@ -68,7 +68,6 @@
               {{ $t('detail.noMethods') }}
             </div>
           </div>
-          <div v-if="sessionNote" class="session-note">{{ sessionNote }}</div>
         </div>
       </div>
     </div>
@@ -79,9 +78,9 @@
 </template>
 
 <script>
-import { store, findAsset, enabledMethods, api, unwrap, openMethodAdvanced, openSshSession, openVncSession, refresh } from '../store';
+import { store, findAsset, enabledMethods, openMethodAdvanced, connectAsset, connectionErrorMessage } from '../store';
 import { OS_SVG, OS_NAME, methodPillClass } from '../constants';
-import { t } from '../i18n';
+import { protocolLabel } from '../protocols';
 
 export default {
   name: 'AssetDetailView',
@@ -89,7 +88,6 @@ export default {
   data() {
     return {
       loadingId: null,
-      sessionNote: '',
     };
   },
   computed: {
@@ -130,9 +128,7 @@ export default {
     pillClass(id) {
       return methodPillClass(id);
     },
-    short(id) {
-      return id === 'rdp' ? 'RDP' : id === 'vnc' ? 'VNC' : 'SSH';
-    },
+    short: protocolLabel,
     hasCustomAdv(m) {
       return !!(m.advanced && Object.keys(m.advanced).length);
     },
@@ -146,49 +142,10 @@ export default {
     },
     async connect(m) {
       this.loadingId = m.id;
-      this.sessionNote = '';
       try {
-        if (m.id === 'ssh') {
-          openSshSession({
-            assetId: this.assetId,
-            assetName: this.asset && this.asset.name,
-            host: this.asset && this.asset.host,
-            port: m.port,
-            methodId: 'ssh',
-          });
-          return;
-        }
-        if (m.id === 'vnc') {
-          openVncSession({
-            assetId: this.assetId,
-            assetName: this.asset && this.asset.name,
-            host: this.asset && this.asset.host,
-            port: m.port,
-            methodId: 'vnc',
-          });
-          return;
-        }
-        unwrap(
-          await api.sessionConnect({
-            assetId: this.assetId,
-            methodId: m.id,
-          })
-        );
-        refresh().catch(() => {});
-        if (m.id === 'rdp') {
-          // mstsc launched — no toast
-        } else {
-          this.sessionNote = t('detail.stubNote', { name: m.name });
-          this.$message.warning(t('msg.notImpl', { name: m.name }));
-        }
+        await connectAsset(this.asset, m);
       } catch (e) {
-        const map = {
-          TCP_TIMEOUT: t('msg.tcpFail'),
-          NOT_IMPLEMENTED: e.message,
-          NO_BRIDGE: e.message,
-          PLATFORM: e.message,
-        };
-        this.$message.error(map[e.code] || e.message || t('err.connect'));
+        this.$message.error(connectionErrorMessage(e));
       } finally {
         this.loadingId = null;
       }

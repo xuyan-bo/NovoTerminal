@@ -1,6 +1,8 @@
 import Vue from 'vue';
 import { api, unwrap } from './api';
-import { applySettings } from './i18n';
+import { applySettings, t } from './i18n';
+import { CATALOG } from './constants';
+import { getProtocol, protocolLabel } from './protocols';
 
 export const store = Vue.observable({
   snapshot: { groups: [], recent: [], settings: { theme: 'dark', lang: 'zh', dataPath: '' } },
@@ -123,29 +125,14 @@ export function findAsset(aid) {
 
 export function enabledMethods(asset) {
   if (!asset || !asset.methods) return [];
-  const catalog = {
-    win: [
-      { id: 'rdp', name: 'RDP', proto: 'RDP', defaultPort: 3389, rec: true },
-      { id: 'ssh', name: 'SSH', proto: 'SSH', defaultPort: 22, rec: false },
-      { id: 'vnc', name: 'VNC', proto: 'VNC', defaultPort: 5900, rec: false },
-    ],
-    mac: [
-      { id: 'vnc', name: 'VNC 屏幕共享', proto: 'VNC', defaultPort: 5900, rec: true },
-      { id: 'ssh', name: 'SSH', proto: 'SSH', defaultPort: 22, rec: false },
-    ],
-    linux: [
-      { id: 'ssh', name: 'SSH', proto: 'SSH', defaultPort: 22, rec: true },
-      { id: 'vnc', name: 'VNC', proto: 'VNC', defaultPort: 5900, rec: false },
-      { id: 'rdp', name: 'RDP (xrdp)', proto: 'RDP', defaultPort: 3389, rec: false },
-    ],
-  };
-  const cat = catalog[asset.os] || catalog.win;
+  const cat = CATALOG[asset.os] || CATALOG.win;
   const out = [];
   for (const meta of cat) {
     const conf = asset.methods[meta.id];
     if (conf && conf.enabled) {
       out.push({
         ...meta,
+        proto: protocolLabel(meta.id),
         port: conf.port || meta.defaultPort,
         primary: !!conf.primary,
         enabled: true,
@@ -176,68 +163,45 @@ export function openAssetDetail(asset) {
     title: asset.name,
     closable: true,
     icon: '▣',
+    kind: 'asset',
     os: asset.os,
     assetId: asset.id,
   });
 }
 
-/** Open an embedded SSH terminal tab (Xshell-style) */
-export function openSshSession({ assetId, assetName, host, port, methodId }) {
-  const mid = methodId || 'ssh';
-  const id = `ssh-${assetId}-${mid}`;
-  const existing = store.tabs.find((t) => t.id === id);
-  if (existing) {
-    store.activeTab = id;
-    return id;
+export async function connectAsset(asset, method) {
+  const protocol = getProtocol(method.id);
+  if (!protocol) {
+    throw Object.assign(new Error(t('msg.notImpl', { name: method.name || method.id })), {
+      code: 'NOT_IMPLEMENTED',
+    });
   }
-  store.tabs.push({
-    id,
-    title: `SSH · ${assetName || host || assetId}`,
-    closable: true,
-    icon: '⌘',
-    kind: 'ssh',
-    assetId,
-    methodId: mid,
-    host: host || '',
-    port: port || 22,
-    assetName: assetName || host || assetId,
-    connected: false,
-  });
-  store.activeTab = id;
-  return id;
+  if (protocol.component) {
+    const id = `${method.id}-${asset.id}-${method.id}`;
+    const assetName = asset.name || asset.host || asset.id;
+    openTab({
+      id,
+      title: `${protocol.label} · ${assetName}`,
+      closable: true,
+      icon: protocol.icon,
+      kind: method.id,
+      assetId: asset.id,
+      methodId: method.id,
+      host: asset.host || '',
+      port: method.port || protocol.defaultPort,
+      assetName,
+      connected: false,
+    });
+    return;
+  }
+  unwrap(await api.sessionConnect({ assetId: asset.id, methodId: method.id }));
+  refresh().catch(() => {});
 }
 
-/** Open an embedded VNC desktop tab (noVNC) */
-export function openVncSession({ assetId, assetName, host, port, methodId }) {
-  const mid = methodId || 'vnc';
-  const id = `vnc-${assetId}-${mid}`;
-  const existing = store.tabs.find((t) => t.id === id);
-  if (existing) {
-    store.activeTab = id;
-    return id;
-  }
-  store.tabs.push({
-    id,
-    title: `VNC · ${assetName || host || assetId}`,
-    closable: true,
-    icon: '🖥',
-    kind: 'vnc',
-    assetId,
-    methodId: mid,
-    host: host || '',
-    port: port || 5900,
-    assetName: assetName || host || assetId,
-    connected: false,
-  });
-  store.activeTab = id;
-  return id;
-}
-
-export function removeTabView(id) {
-  if (id.startsWith('asset-')) {
-    const aid = id.slice(6);
-    if (store.activeAssetId === aid) store.activeAssetId = null;
-  }
+export function connectionErrorMessage(error) {
+  if (error.code === 'TCP_TIMEOUT') return t('msg.tcpFail');
+  if (error.code === 'MSTSC_NOT_FOUND') return 'mstsc not found';
+  return error.message || t('err.connect');
 }
 
 export { api, unwrap };

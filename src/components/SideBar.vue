@@ -86,6 +86,7 @@
         </svg>
       </button>
     </div>
+    <ctx-menu ref="contextMenu" @select="handleCtx" />
   </aside>
 </template>
 
@@ -98,16 +99,19 @@ import {
   api,
   unwrap,
   refresh,
-  openSshSession,
-  openVncSession,
+  connectAsset,
+  connectionErrorMessage,
   reorderGroups,
   reorderAsset,
 } from '../store';
 import { OS_SVG, methodPillClass, isUngroupedGroup, UNGROUPED_ID } from '../constants';
+import { protocolLabel } from '../protocols';
+import CtxMenu from './CtxMenu.vue';
 import { t } from '../i18n';
 
 export default {
   name: 'SideBar',
+  components: { CtxMenu },
   data() {
     return {
       filter: '',
@@ -147,17 +151,9 @@ export default {
       store.settingsDialog = true;
     };
     this.$root.$on('open-settings', this._openSettings);
-    this._ctxHandler = (e) => {
-      if (!e.target.closest('.ctx-menu')) {
-        const menu = document.querySelector('.ctx-menu');
-        if (menu) menu.classList.remove('show');
-      }
-    };
-    document.addEventListener('click', this._ctxHandler);
   },
   beforeDestroy() {
     this.$root.$off('open-settings', this._openSettings);
-    document.removeEventListener('click', this._ctxHandler);
   },
   methods: {
     osSvg(os) {
@@ -169,9 +165,7 @@ export default {
     pillClass(id) {
       return methodPillClass(id);
     },
-    shortProto(id) {
-      return id === 'rdp' ? 'RDP' : id === 'vnc' ? 'VNC' : 'SSH';
-    },
+    shortProto: protocolLabel,
 
     // ---------- drag & drop ----------
     onGroupDragStart(e, g) {
@@ -366,27 +360,7 @@ export default {
       this.showMenu(e, items);
     },
     showMenu(e, items) {
-      const root = document.querySelector('.ctx-menu');
-      if (!root) return;
-      const self = this;
-      root.innerHTML = items
-        .map((it, i) => {
-          if (it.sep) return `<div class="ctx-sep"></div>`;
-          if (it.title) return `<div class="ctx-title">${it.label}</div>`;
-          return `<div class="ctx-item${it.danger ? ' danger' : ''}" data-i="${i}">${it.label}</div>`;
-        })
-        .join('');
-      root.classList.add('show');
-      root.style.left = e.clientX + 'px';
-      root.style.top = e.clientY + 'px';
-      root.querySelectorAll('.ctx-item').forEach((el) => {
-        el.onclick = (ev) => {
-          ev.stopPropagation();
-          root.classList.remove('show');
-          const it = items[Number(el.dataset.i)];
-          self.handleCtx(it);
-        };
-      });
+      this.$refs.contextMenu.open(e, items);
     },
     async handleCtx(it) {
       try {
@@ -425,44 +399,9 @@ export default {
     async connect(asset, method) {
       if (!method) return;
       try {
-        if (method.id === 'ssh') {
-          openSshSession({
-            assetId: asset.id,
-            assetName: asset.name,
-            host: asset.host,
-            port: method.port,
-            methodId: 'ssh',
-          });
-          return;
-        }
-        if (method.id === 'vnc') {
-          openVncSession({
-            assetId: asset.id,
-            assetName: asset.name,
-            host: asset.host,
-            port: method.port,
-            methodId: 'vnc',
-          });
-          return;
-        }
-        unwrap(
-          await api.sessionConnect({
-            assetId: asset.id,
-            methodId: method.id,
-          })
-        );
-        if (method.id !== 'rdp') {
-          this.$message.warning(t('msg.notImpl', { name: method.name }));
-        }
+        await connectAsset(asset, method);
       } catch (e) {
-        const map = {
-          TCP_TIMEOUT: t('msg.tcpFail'),
-          MSTSC_NOT_FOUND: 'mstsc not found',
-          NOT_IMPLEMENTED: e.message,
-          NO_BRIDGE: e.message,
-          PLATFORM: e.message,
-        };
-        this.$message.error(map[e.code] || e.message || t('err.connect'));
+        this.$message.error(connectionErrorMessage(e));
       }
     },
   },

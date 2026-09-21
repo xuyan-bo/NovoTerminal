@@ -78,6 +78,7 @@ import { api, unwrap, refresh, findAsset, store } from '../store';
 import { t } from '../i18n';
 import { sshThemeToXterm, resolveSshTheme } from '../constants';
 import SshThemeDialog from './SshThemeDialog.vue';
+import createFullscreenMixin from './session/fullscreen';
 
 const FIT_DEBOUNCE_MS = 120;
 const REMOTE_RESIZE_DEBOUNCE_MS = 220;
@@ -85,6 +86,10 @@ const REMOTE_RESIZE_DEBOUNCE_MS = 220;
 export default {
   name: 'TerminalView',
   components: { SshThemeDialog },
+  mixins: [createFullscreenMixin({
+    fallbackClass: 'is-terminal-fullscreen',
+    onResize() { this.scheduleFit(); },
+  })],
   props: {
     sessionId: { type: String, required: true },
     assetId: { type: String, required: true },
@@ -103,8 +108,6 @@ export default {
       offData: null,
       offState: null,
       ro: null,
-      isFullscreen: false,
-      fsHint: false,
     };
   },
   computed: {
@@ -159,32 +162,17 @@ export default {
     this._sentCols = 0;
     this._sentRows = 0;
     this._fitting = false;
-    this._fsHintTimer = null;
     this.initTerm();
     this.connect();
     window.addEventListener('resize', this.scheduleFit);
-    document.addEventListener('fullscreenchange', this.onFsChange);
-    if (document.webkitFullscreenElement !== undefined) {
-      document.addEventListener('webkitfullscreenchange', this.onFsChange);
-    }
   },
   activated() {
     this.scheduleFit();
   },
   beforeDestroy() {
     window.removeEventListener('resize', this.scheduleFit);
-    document.removeEventListener('fullscreenchange', this.onFsChange);
-    if (document.webkitFullscreenElement !== undefined) {
-      document.removeEventListener('webkitfullscreenchange', this.onFsChange);
-    }
-    if (this.isFullscreen) {
-      try {
-        this.exitFullscreen();
-      } catch (_) {}
-    }
     if (this._fitTimer) clearTimeout(this._fitTimer);
     if (this._rsTimer) clearTimeout(this._rsTimer);
-    if (this._fsHintTimer) clearTimeout(this._fsHintTimer);
     this.teardownTerm();
     this.disconnectNow(true);
   },
@@ -555,77 +543,6 @@ export default {
         );
       } catch (e) {
         this.$message.error(e.message || String(e));
-      }
-    },
-
-    /** Enter/exit terminal fullscreen via the Fullscreen API */
-    async onToggleFullscreen() {
-      if (this.isFullscreen) {
-        this.exitFullscreen();
-      } else {
-        await this.enterFullscreen();
-      }
-    },
-
-    async enterFullscreen() {
-      const el = this.$refs.wrapEl;
-      if (!el) return;
-      try {
-        const req =
-          (el.requestFullscreen && el.requestFullscreen.bind(el)) ||
-          (el.webkitRequestFullscreen && el.webkitRequestFullscreen.bind(el));
-        if (req) await req();
-      } catch (_) {}
-      if (this.isFullscreen || document.fullscreenElement) {
-        this.showFsHint();
-        return;
-      }
-      // Fullscreen API unavailable → fall back to hiding the sidebar/statusbar via a CSS class
-      this.isFullscreen = true;
-      el.classList.add('is-terminal-fullscreen');
-      this.showFsHint();
-    },
-
-    showFsHint() {
-      this.fsHint = true;
-      if (this._fsHintTimer) clearTimeout(this._fsHintTimer);
-      this._fsHintTimer = setTimeout(() => {
-        this.fsHint = false;
-      }, 3000);
-    },
-
-    async exitFullscreen() {
-      const doc = document;
-      const exit =
-        (doc.exitFullscreen && doc.exitFullscreen.bind(doc)) ||
-        (doc.webkitExitFullscreen && doc.webkitExitFullscreen.bind(doc));
-      if (exit) {
-        try {
-          await exit();
-        } catch (_) {}
-      }
-      if (this.isFullscreen) {
-        this.isFullscreen = false;
-        this.$refs.wrapEl && this.$refs.wrapEl.classList.remove('is-terminal-fullscreen');
-        this.scheduleFit();
-      }
-    },
-
-    onFsChange() {
-      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-      const el = this.$refs.wrapEl;
-      const now = !!fsEl && (fsEl === el);
-      if (now === this.isFullscreen) {
-        // Entered via API: still show the Esc hint
-        if (now) this.showFsHint();
-        return;
-      }
-      this.isFullscreen = now;
-      if (now) {
-        this.scheduleFit();
-        this.showFsHint();
-      } else if (el) {
-        el.classList.remove('is-terminal-fullscreen');
       }
     },
 

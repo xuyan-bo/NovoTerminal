@@ -51,10 +51,7 @@ const ADVANCED_DEFAULTS = {
 };
 
 function protocolKey(id) {
-  const s = String(id || '').toLowerCase();
-  if (s === 'rdp') return 'rdp';
-  if (s === 'ssh') return 'ssh';
-  return 'vnc';
+  return String(id || '').toLowerCase();
 }
 
 function resolveAdvanced(methodId, saved) {
@@ -263,7 +260,7 @@ function registerIpc() {
     const advanced = resolveAdvanced(req.methodId, method.advanced);
     const meta = {
       id: req.methodId,
-      protocol: req.methodId === 'rdp' ? 'rdp' : req.methodId === 'vnc' ? 'vnc' : 'ssh',
+      protocol: protocolKey(req.methodId),
       port: method.port,
       primary: !!method.primary,
       advanced,

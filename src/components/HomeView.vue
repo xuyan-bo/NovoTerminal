@@ -80,7 +80,7 @@
 
 <script>
 import * as echarts from 'echarts';
-import { store, findAsset, openSshSession, openVncSession, api, unwrap, refresh } from '../store';
+import { store, findAsset, connectAsset, connectionErrorMessage, api, unwrap, refresh } from '../store';
 import { OS_SVG, formatTime } from '../constants';
 import { t } from '../i18n';
 
@@ -305,41 +305,10 @@ export default {
       const hit = findAsset(r.id);
       if (!hit) return;
       const method = String(r.method || 'rdp').toLowerCase();
-      const proto = this.protoLabel(r);
-      if (method === 'ssh') {
-        openSshSession({
-          assetId: hit.asset.id,
-          assetName: hit.asset.name,
-          host: hit.asset.host,
-          port: r.port,
-          methodId: 'ssh',
-        });
-        return;
-      }
-      if (method === 'vnc') {
-        openVncSession({
-          assetId: hit.asset.id,
-          assetName: hit.asset.name,
-          host: hit.asset.host,
-          port: r.port,
-          methodId: 'vnc',
-        });
-        return;
-      }
       try {
-        unwrap(await api.sessionConnect({ assetId: hit.asset.id, methodId: method }));
-        refresh().catch(() => {});
-        if (method !== 'rdp') {
-          this.$message.warning(t('msg.notImpl', { name: proto }));
-        }
+        await connectAsset(hit.asset, { id: method, name: this.protoLabel(r), port: r.port });
       } catch (e) {
-        const map = {
-          TCP_TIMEOUT: t('msg.tcpFail'),
-          NOT_IMPLEMENTED: e.message,
-          NO_BRIDGE: e.message,
-          PLATFORM: e.message,
-        };
-        this.$message.error(map[e.code] || e.message || t('err.connect'));
+        this.$message.error(connectionErrorMessage(e));
       }
     },
     async exportJson() {

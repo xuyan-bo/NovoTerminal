@@ -1,3 +1,5 @@
+import { PROTOCOLS, getProtocol } from './protocols';
+
 // OS marks — windows/apple/linux icon sources
 export const OS_SVG = {
   win: `<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><path d="M426.285714 574.857143v372l-389.714285-53.714286v-318.285714h389.714285z m0-424.571429v376.571429H36.571429V204z m561.142857 424.571429v449.142857l-518.285714-71.428571v-377.714286h518.285714z m0-501.714286v453.714286H469.142857V144.571429z" fill="#1296db"></path></svg>`,
@@ -17,23 +19,24 @@ export function isUngroupedGroup(g) {
 
 export const CATALOG = {
   win: [
-    { id: 'rdp', name: 'RDP', desc: 'Windows 远程桌面', defaultPort: 3389, rec: true },
-    { id: 'ssh', name: 'SSH', desc: '终端 / 命令行（OpenSSH）', defaultPort: 22, rec: false },
-    { id: 'vnc', name: 'VNC', desc: 'VNC Server 兼容', defaultPort: 5900, rec: false },
+    { id: 'rdp', name: 'RDP', desc: 'Windows 远程桌面', defaultPort: PROTOCOLS.rdp.defaultPort, rec: true },
+    { id: 'ssh', name: 'SSH', desc: '终端 / 命令行（OpenSSH）', defaultPort: PROTOCOLS.ssh.defaultPort, rec: false },
+    { id: 'vnc', name: 'VNC', desc: 'VNC Server 兼容', defaultPort: PROTOCOLS.vnc.defaultPort, rec: false },
   ],
   mac: [
-    { id: 'vnc', name: 'VNC 屏幕共享', desc: 'macOS 自带共享', defaultPort: 5900, rec: true },
-    { id: 'ssh', name: 'SSH', desc: '终端 / SFTP', defaultPort: 22, rec: false },
+    { id: 'vnc', name: 'VNC 屏幕共享', desc: 'macOS 自带共享', defaultPort: PROTOCOLS.vnc.defaultPort, rec: true },
+    { id: 'ssh', name: 'SSH', desc: '终端 / SFTP', defaultPort: PROTOCOLS.ssh.defaultPort, rec: false },
   ],
   linux: [
-    { id: 'ssh', name: 'SSH', desc: '终端 / SFTP', defaultPort: 22, rec: true },
-    { id: 'vnc', name: 'VNC', desc: 'x11vnc / TurboVNC', defaultPort: 5900, rec: false },
-    { id: 'rdp', name: 'RDP (xrdp)', desc: '需安装 xrdp', defaultPort: 3389, rec: false },
+    { id: 'ssh', name: 'SSH', desc: '终端 / SFTP', defaultPort: PROTOCOLS.ssh.defaultPort, rec: true },
+    { id: 'vnc', name: 'VNC', desc: 'x11vnc / TurboVNC', defaultPort: PROTOCOLS.vnc.defaultPort, rec: false },
+    { id: 'rdp', name: 'RDP (xrdp)', desc: '需安装 xrdp', defaultPort: PROTOCOLS.rdp.defaultPort, rec: false },
   ],
 };
 
 export function methodPillClass(id) {
-  return id === 'rdp' ? 'rd' : id === 'ssh' ? 'ssh' : 'vnc';
+  const protocol = getProtocol(id);
+  return protocol ? protocol.pillClass : '';
 }
 
 /** Advanced settings defaults — used when user leaves fields empty / never opens the dialog */
@@ -238,12 +241,9 @@ export const ADVANCED_FIELDS = {
   ],
 };
 
-/** Normalize method id → advanced schema key (rdp / ssh / vnc) */
 export function advancedKey(methodId) {
   const id = String(methodId || '').toLowerCase();
-  if (id === 'rdp') return 'rdp';
-  if (id === 'ssh') return 'ssh';
-  return 'vnc';
+  return Object.prototype.hasOwnProperty.call(ADVANCED_DEFAULTS, id) ? id : '';
 }
 
 /** Merge saved advanced over defaults; blank strings / null fall back to default */
@@ -255,10 +255,7 @@ export function resolveAdvanced(methodId, saved) {
   fields.forEach((f) => {
     const v = saved[f.key];
     if (v === undefined || v === null) return;
-    if (f.type === 'text' && String(v).trim() === '') {
-      base[f.key] = base[f.key];
-      return;
-    }
+    if (f.type === 'text' && String(v).trim() === '') return;
     if (f.type === 'number') {
       const n = Number(v);
       if (Number.isNaN(n) || String(v).trim() === '') return;

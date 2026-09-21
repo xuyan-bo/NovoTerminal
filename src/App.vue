@@ -54,32 +54,18 @@
             <asset-detail-view :asset-id="t.assetId" />
           </div>
           <div
-            v-for="t in sshTabs"
+            v-for="t in sessionTabs"
             :key="t.id"
-            class="view ssh-view"
-            :class="{ show: activeTab === t.id }"
+            class="view"
+            :class="[t.kind + '-view', { show: activeTab === t.id }]"
           >
-            <!-- v-show keeps the xterm instance (and SSH session) alive across tab switches -->
-            <terminal-view
+            <!-- Keep protocol instances alive when switching tabs. -->
+            <component
+              :is="sessionComponent(t)"
               v-show="activeTab === t.id"
               :session-id="t.id"
               :asset-id="t.assetId"
-              :method-id="t.methodId || 'ssh'"
-              :title="(t.host || '') + (t.port ? ':' + t.port : '')"
-              :active="activeTab === t.id"
-            />
-          </div>
-          <div
-            v-for="t in vncTabs"
-            :key="t.id"
-            class="view vnc-view"
-            :class="{ show: activeTab === t.id }"
-          >
-            <vnc-view
-              v-show="activeTab === t.id"
-              :session-id="t.id"
-              :asset-id="t.assetId"
-              :method-id="t.methodId || 'vnc'"
+              :method-id="t.methodId"
               :title="(t.host || '') + (t.port ? ':' + t.port : '')"
               :active="activeTab === t.id"
             />
@@ -100,25 +86,21 @@
     <asset-dialog />
     <group-dialog />
     <method-advanced-dialog />
-    <div class="ctx-menu" ref="ctxRoot"></div>
     </template>
   </div>
 </template>
 
 <script>
 import SideBar from './components/SideBar.vue';
-import HomeView from './components/HomeView.vue';
 import AssetDetailView from './components/AssetDetailView.vue';
 import SettingsDialog from './components/SettingsDialog.vue';
 import AssetDialog from './components/AssetDialog.vue';
 import GroupDialog from './components/GroupDialog.vue';
 import MethodAdvancedDialog from './components/MethodAdvancedDialog.vue';
-import TerminalView from './components/TerminalView.vue';
-import VncView from './components/VncView.vue';
-import SftpPage from './components/SftpPage.vue';
 import { store, closeTab, api, refresh } from './store';
 import { t, applySettings } from './i18n';
 import { OS_SVG } from './constants';
+import { getProtocol } from './protocols';
 
 const MIN_SIDEBAR_W = 180;
 const MAX_SIDEBAR_W = 640;
@@ -142,15 +124,13 @@ export default {
   name: 'App',
   components: {
     SideBar,
-    HomeView,
+    HomeView: () => import('./components/HomeView.vue'),
     AssetDetailView,
     SettingsDialog,
     AssetDialog,
     GroupDialog,
     MethodAdvancedDialog,
-    TerminalView,
-    VncView,
-    SftpPage,
+    SftpPage: () => import('./components/SftpPage.vue'),
   },
   data() {
     return {
@@ -175,13 +155,13 @@ export default {
       return store.activeTab;
     },
     assetTabs() {
-      return store.tabs.filter((t) => t.assetId && t.kind !== 'ssh');
+      return store.tabs.filter((t) => t.kind === 'asset');
     },
-    sshTabs() {
-      return store.tabs.filter((t) => t.kind === 'ssh');
-    },
-    vncTabs() {
-      return store.tabs.filter((t) => t.kind === 'vnc');
+    sessionTabs() {
+      return store.tabs.filter((t) => {
+        const protocol = getProtocol(t.kind);
+        return protocol && protocol.component;
+      });
     },
     localeTick() {
       return store.localeTick;
@@ -230,7 +210,9 @@ export default {
     }
   },
   methods: {
-    $t: t,
+    sessionComponent(tab) {
+      return getProtocol(tab.kind).component;
+    },
     osSvg(os) {
       return OS_SVG[os] || '';
     },
