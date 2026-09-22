@@ -202,6 +202,21 @@ class SftpManager {
     }
   }
 
+  /** Enumerate Windows logical drives for the "This PC" view; [] on other platforms. */
+  drives() {
+    if (process.platform !== 'win32') return [];
+    const out = [];
+    for (let i = 65; i <= 90; i++) {
+      const letter = String.fromCharCode(i);
+      try {
+        if (fs.existsSync(letter + ':\\')) {
+          out.push({ name: letter + ':', path: letter + ':\\', isDir: true, sizeText: '—', mtime: '', isDrive: true });
+        }
+      } catch (_) {}
+    }
+    return out;
+  }
+
   mkdir(connId, remotePath) {
     return new Promise((resolve, reject) => {
       const c = this._conn(connId);
@@ -404,8 +419,13 @@ class SftpManager {
       let localFd = null;
       let handle = null;
       const CHUNK = 64 * 1024;
-      const buf = Buffer.alloc(CHUNK);
-      let pos = 0;
+      // Keep multiple writes in flight (pipelining) so throughput is not
+      // bounded by one request's round-trip latency on high-RTT links.
+      const MAX_FLIGHT = 16;
+      let queued = 0;
+      let donePos = 0;
+      let inFlight = 0;
+      let finished = false;
 
       const release = () => {
         try {
@@ -446,6 +466,7 @@ class SftpManager {
           handle = h;
 
           const pump = () => {
+            if (finished) return;
             if (task.status === 'canceled') {
               release();
               return;
@@ -454,38 +475,49 @@ class SftpManager {
               task._resume = pump;
               return;
             }
-            let n = 0;
-            try {
-              n = fs.readSync(localFd, buf, 0, CHUNK, pos);
-            } catch (e) {
-              return fail(e);
+            while (inFlight < MAX_FLIGHT && queued < size) {
+              const start = queued;
+              const n = Math.min(CHUNK, size - start);
+              queued += n;
+              const cbuf = Buffer.allocUnsafe(n);
+              try {
+                fs.readSync(localFd, cbuf, 0, n, start);
+              } catch (e) {
+                finished = true;
+                return fail(e);
+              }
+              inFlight++;
+              sftp.write(handle, cbuf, 0, n, start, (werr) => {
+                if (finished) return;
+                inFlight--;
+                if (werr) {
+                  finished = true;
+                  return fail(werr);
+                }
+                donePos = Math.max(donePos, start + n);
+                task.transferred = donePos;
+                if (!task.size) task.size = donePos;
+                this._progress(task);
+                pump();
+              });
             }
-            if (n <= 0) {
+            if (queued >= size && inFlight === 0) {
+              finished = true;
               try {
                 fs.closeSync(localFd);
+                localFd = null;
               } catch (_) {}
               sftp.close(handle, (ce) => {
                 handle = null;
                 if (ce) return fail(ce);
-                task.transferred = size || pos;
+                task.transferred = size || donePos;
                 if (task.status !== 'canceled' && task.status !== 'error') {
                   task.status = 'done';
                   task.speed = 0;
                   this._progress(task);
                 }
               });
-              return;
             }
-            const slice = n === CHUNK ? buf : buf.slice(0, n);
-            const curPos = pos;
-            sftp.write(handle, slice, 0, n, curPos, (werr) => {
-              if (werr) return fail(werr);
-              pos += n;
-              task.transferred = pos;
-              if (!task.size) task.size = pos;
-              this._progress(task);
-              setImmediate(pump);
-            });
           };
           pump();
         });
@@ -515,18 +547,29 @@ class SftpManager {
         targetPath: localPath,
         connId,
       });
+      // Distinguish an authoritative length (from stat) from a size inferred
+      // from received bytes, so the loop/completion only trusts the real size.
+      let knownSize = false;
 
       c.sftp.stat(remotePath, (statErr, st) => {
         if (!statErr && st) {
-          task.size = Number(st.size) || 0;
+          const stSize = Number(st.size) || 0;
+          task.size = stSize;
+          if (stSize > 0) knownSize = true;
           this._progress(task);
         }
         resolve({ taskId: task.taskId });
 
         const sftp = c.sftp;
         const CHUNK = 64 * 1024;
-        const buf = Buffer.alloc(CHUNK);
-        let pos = 0;
+        // Pipelined reads: keep several in flight so throughput is not bounded
+        // by per-request round-trip latency.
+        const MAX_FLIGHT = 16;
+        let queued = 0;
+        let donePos = 0;
+        let inFlight = 0;
+        let eof = false;
+        let finished = false;
         let handle = null;
         let outFd = null;
 
@@ -565,6 +608,7 @@ class SftpManager {
           if (err) return fail(err);
           handle = h;
           const pump = () => {
+            if (finished) return;
             if (task.status === 'canceled') {
               release();
               return;
@@ -573,54 +617,52 @@ class SftpManager {
               task._resume = pump;
               return;
             }
-            const want = task.size > 0 ? Math.min(CHUNK, task.size - pos) : CHUNK;
-            if (want <= 0) {
+            while (inFlight < MAX_FLIGHT && !eof && (queued < (knownSize ? task.size : Number.MAX_SAFE_INTEGER))) {
+              const want = knownSize ? Math.min(CHUNK, task.size - queued) : CHUNK;
+              const start = queued;
+              queued += want;
+              const cbuf = Buffer.allocUnsafe(want);
+              inFlight++;
+              sftp.read(handle, cbuf, 0, want, start, (rerr, br) => {
+                if (finished) return;
+                inFlight--;
+                if (rerr) {
+                  finished = true;
+                  return fail(rerr);
+                }
+                if (br > 0) {
+                  try {
+                    fs.writeSync(outFd, cbuf, 0, br, start);
+                  } catch (e) {
+                    finished = true;
+                    return fail(e);
+                  }
+                  donePos = Math.max(donePos, start + br);
+                  task.transferred = donePos;
+                  if (!task.size) task.size = donePos;
+                  this._progress(task);
+                }
+                if (!br) eof = true;
+                pump();
+              });
+            }
+            if (inFlight === 0 && (eof || (knownSize && queued >= task.size))) {
+              finished = true;
               try {
                 fs.closeSync(outFd);
+                outFd = null;
               } catch (_) {}
               sftp.close(handle, (ce) => {
                 handle = null;
                 if (ce) return fail(ce);
-                task.transferred = task.size || pos;
+                task.transferred = task.size || donePos;
                 if (task.status !== 'canceled' && task.status !== 'error') {
                   task.status = 'done';
                   task.speed = 0;
                   this._progress(task);
                 }
               });
-              return;
             }
-            const curPos = pos;
-            sftp.read(handle, buf, 0, want, curPos, (rerr, br) => {
-              if (rerr) return fail(rerr);
-              if (!br) {
-                try {
-                  fs.closeSync(outFd);
-                } catch (_) {}
-                sftp.close(handle, (ce) => {
-                  handle = null;
-                  if (ce) return fail(ce);
-                  task.transferred = pos;
-                  if (!task.size) task.size = pos;
-                  if (task.status !== 'canceled' && task.status !== 'error') {
-                    task.status = 'done';
-                    task.speed = 0;
-                    this._progress(task);
-                  }
-                });
-                return;
-              }
-              try {
-                fs.writeSync(outFd, buf, 0, br, curPos);
-              } catch (e) {
-                return fail(e);
-              }
-              pos += br;
-              task.transferred = pos;
-              if (!task.size) task.size = pos;
-              this._progress(task);
-              setImmediate(pump);
-            });
           };
           pump();
         });

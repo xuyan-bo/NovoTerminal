@@ -5,7 +5,6 @@
     width="520px"
     top="10vh"
     :close-on-click-modal="false"
-    append-to-body
   >
     <div class="theme-sec-title">{{ $t('theme.textColors') }}</div>
     <div class="theme-row" v-for="row in basicRows" :key="row.key">
@@ -13,6 +12,7 @@
       <el-color-picker
         v-model="form[row.key]"
         :predefine="predefine"
+        :append-to-body="!inFullscreen"
         size="small"
       />
       <span class="theme-row-hex">{{ form[row.key] }}</span>
@@ -30,6 +30,7 @@
           v-model="form.ansi[i]"
           size="mini"
           :predefine="predefine"
+          :append-to-body="!inFullscreen"
         >
           <div
             slot="trigger"
@@ -78,6 +79,9 @@ export default {
   name: 'SshThemeDialog',
   props: {
     assetId: { type: String, default: '' },
+    /** When the SSH view is fullscreen, keep dialog + color pickers inside the
+     * fullscreen element; body-appended popups are otherwise hidden/masked. */
+    inFullscreen: { type: Boolean, default: false },
   },
   data() {
     return {

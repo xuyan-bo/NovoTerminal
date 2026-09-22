@@ -9,7 +9,7 @@
     :show-close="!saving"
     append-to-body
   >
-    <el-form label-width="120px" size="small" :disabled="saving" @submit.native.prevent>
+    <el-form label-width="186px" size="small" :disabled="saving" @submit.native.prevent>
       <el-form-item
           v-for="f in fields"
           :key="f.key"

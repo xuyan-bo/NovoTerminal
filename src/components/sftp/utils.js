@@ -9,14 +9,23 @@ export function formatSize(n) {
 }
 
 export function joinRemote(dir, name) {
-  if (!dir || dir === '/') return '/' + name;
-  return String(dir).replace(/\/+$/, '') + '/' + name;
+  const clean = String(name != null ? name : '').replace(/[\\/]+$/, '');
+  // Windows OpenSSH lists drives (C:, D:) under the POSIX root '/' without a
+  // leading slash, e.g. C:/Users. A drive-letter root must not get '/' prepended.
+  if (!dir || dir === '/') return /^[A-Za-z]:$/.test(clean) ? clean : '/' + clean;
+  return String(dir).replace(/\/+$/, '') + '/' + clean;
 }
 export function parentRemote(p) {
   if (!p || p === '/') return '/';
   const s = String(p).replace(/\/+$/, '');
   const i = s.lastIndexOf('/');
   return i <= 0 ? '/' : s.slice(0, i) || '/';
+}
+
+/** Normalize a Windows drive path the server reports (e.g. /C:/Users -> C:/Users). */
+export function normalizeRemotePath(p) {
+  if (typeof p !== 'string') return p;
+  return /^\/[A-Za-z]:(?=[\\/]|$)/.test(p) ? p.slice(1) : p;
 }
 export function joinLocal(dir, name) {
   if (!dir) return name;

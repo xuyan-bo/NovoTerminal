@@ -3,19 +3,12 @@ const { RdpProxy } = require('../session/RdpProxy');
 const ADVANCED_RDP_DEFAULTS = {
   engine: 'ironrdp',
   client: '',
-  quality: 'auto',
   resolution: 'auto',
   screenMode: 'window',
   monitors: 'single',
-  colorDepth: '32',
   clipboard: true,
-  drives: false,
-  printers: false,
-  audio: 'local',
   promptCredentials: false,
   adminSession: false,
-  autoReconnect: true,
-  // IronRDP-WASM 引擎专属
   nla: true,
 };
 

@@ -91,7 +91,7 @@ import { api, unwrap } from '../store';
 import { t } from '../i18n';
 import SftpFilePanel from './sftp/SftpFilePanel.vue';
 import SftpTransferQueue from './sftp/SftpTransferQueue.vue';
-import { PARENT_ROW, joinLocal, joinRemote, parentLocal, parentRemote } from './sftp/utils';
+import { PARENT_ROW, joinLocal, joinRemote, parentLocal, parentRemote, normalizeRemotePath } from './sftp/utils';
 import taskMethods from './sftp/taskMethods';
 import transferMethods from './sftp/transferMethods';
 import dragDropMethods from './sftp/dragDropMethods';
@@ -113,6 +113,7 @@ export default {
       localPath: '',
       localPathInput: '',
       localHome: '',
+      localComputer: false,
       localItems: [],
       localSel: '',
       localLoading: false,
@@ -342,7 +343,10 @@ export default {
     },
 
     async goLocal(p) {
+      // On Windows, '/' in the local panel means "all drives", not a filesystem root.
+      if (p === '/' && api.platform === 'win32') return this.loadDrives();
       if (this.localLoading) return;
+      this.localComputer = false;
       this.localLoading = true;
       try {
         const r = unwrap(await api.sftpLocalList(p));
@@ -358,13 +362,29 @@ export default {
         this.localLoading = false;
       }
     },
+    async loadDrives() {
+      if (this.localLoading) return;
+      this.localLoading = true;
+      try {
+        const drives = unwrap(await api.sftpDrives()) || [];
+        this.localComputer = true;
+        this.localPath = '/';
+        this.localPathInput = '/';
+        this.localItems = [PARENT_ROW, ...drives.map((d) => ({ ...d, name: `${t('sftp.disk')} (${String(d.name || '').slice(0, 1)}:)` }))];
+        this.localSel = '';
+      } catch (e) {
+        this.$message.error(e.message);
+      } finally {
+        this.localLoading = false;
+      }
+    },
     async goRemote(p) {
       if (!this.connId || this.remoteLoading) return;
-      const target = p || '/';
+      const target = normalizeRemotePath(p) || '/';
       this.remoteLoading = true;
       try {
         const r = unwrap(await api.sftpList(this.connId, target));
-        this.remotePath = r.path || target;
+        this.remotePath = normalizeRemotePath(r.path || target);
         this.remotePathInput = this.remotePath;
         const items = (r.items || []).filter((x) => x.name !== '.' && x.name !== '..');
         this.remoteItems = [PARENT_ROW, ...items];
@@ -376,6 +396,9 @@ export default {
       }
     },
     localUp() {
+      if (this.localComputer) return;
+      // From a drive root (C:\) up once -> show all drives (This PC).
+      if (/^[A-Za-z]:[\\/]?$/.test(this.localPath)) return this.loadDrives();
       this.goLocal(parentLocal(this.localPath) || this.localHome);
     },
     remoteUp() {
@@ -383,6 +406,7 @@ export default {
     },
     onLocalDbl(f) {
       if (f.isParent) return this.localUp();
+      if (f.isDrive) return this.goLocal(f.path);
       if (f.isDir) return this.goLocal(joinLocal(this.localPath, f.name));
       this.uploadPaths([joinLocal(this.localPath, f.name)]);
     },

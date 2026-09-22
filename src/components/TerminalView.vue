@@ -66,7 +66,7 @@
         <kbd>Esc</kbd><span>{{ $t('ssh.fullscreenExitHint') }}</span>
       </div>
     </transition>
-    <ssh-theme-dialog ref="themeDialog" :asset-id="assetId" @saved="onThemeSaved" />
+    <ssh-theme-dialog ref="themeDialog" :asset-id="assetId" :in-fullscreen="isFullscreen" @saved="onThemeSaved" />
   </div>
 </template>
 

@@ -127,6 +127,9 @@ export const api = hasBridge
       async sftpLocalList() {
         return { path: '', items: [], home: '' };
       },
+      async sftpDrives() {
+        return [];
+      },
       onSftpProgress() {
         return () => {};
       },

@@ -112,6 +112,7 @@ const api = {
   sftpStat: (connId, remotePath) => ipcRenderer.invoke('sftp:stat', connId, remotePath),
   sftpLocalExists: (p) => ipcRenderer.invoke('sftp:local-exists', p),
   sftpLocalList: (p) => ipcRenderer.invoke('sftp:local-list', p),
+  sftpDrives: () => ipcRenderer.invoke('sftp:drives'),
   sftpMkdir: (connId, remotePath) => ipcRenderer.invoke('sftp:mkdir', connId, remotePath),
   sftpMkdirp: (connId, remotePath) => ipcRenderer.invoke('sftp:mkdirp', connId, remotePath),
   sftpRename: (connId, oldPath, newPath) => ipcRenderer.invoke('sftp:rename', connId, oldPath, newPath),

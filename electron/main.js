@@ -629,6 +629,7 @@ function registerIpc() {
   handle('sftp:stat', (connId, remotePath) => sftpManager.stat(connId, remotePath));
   handle('sftp:local-exists', (p) => sftpManager.localExists(p));
   handle('sftp:local-list', (p) => sftpManager.localList(p));
+  handle('sftp:drives', () => sftpManager.drives());
   handle('sftp:mkdir', (connId, remotePath) => sftpManager.mkdir(connId, remotePath));
   handle('sftp:mkdirp', (connId, remotePath) => sftpManager.mkdirp(connId, remotePath));
   handle('sftp:rename', (connId, oldPath, newPath) => sftpManager.rename(connId, oldPath, newPath));
