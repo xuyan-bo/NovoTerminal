@@ -305,8 +305,15 @@ export default {
       const hit = findAsset(r.id);
       if (!hit) return;
       const method = String(r.method || 'rdp').toLowerCase();
+      // 从资产读取真实方法配置，确保 RDP advanced.engine（ironrdp/external）随最近入口一起生效
+      const conf = (hit.asset.methods && hit.asset.methods[method]) || {};
       try {
-        await connectAsset(hit.asset, { id: method, name: this.protoLabel(r), port: r.port });
+        await connectAsset(hit.asset, {
+          id: method,
+          name: this.protoLabel(r),
+          port: conf.port || r.port,
+          advanced: conf.advanced || null,
+        });
       } catch (e) {
         this.$message.error(connectionErrorMessage(e));
       }

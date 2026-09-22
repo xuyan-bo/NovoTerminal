@@ -39,21 +39,48 @@ export function methodPillClass(id) {
   return protocol ? protocol.pillClass : '';
 }
 
+/**
+ * RDP 外部客户端程序目录：按客户机系统区分可选程序。
+ * 当前仅实现 Windows 的 mstsc，其余系统为空（后续扩展 FreeRDP/Remmina 等）。
+ * key 与 OS_KEY 一致（win/mac/linux）。
+ */
+export const RDP_CLIENT_CATALOG = {
+  win: [{ value: 'mstsc', labelKey: 'adv.rdp.client.mstsc' }],
+  mac: [],
+  linux: [],
+};
+
+/** 将 process.platform / api.platform 归一化为 OS_KEY（win/mac/linux） */
+export function osKeyFromPlatform(platform) {
+  const p = String(platform || '').toLowerCase();
+  if (p === 'win32' || p === 'win' || p === 'windows') return 'win';
+  if (p === 'darwin' || p === 'mac' || p === 'macos') return 'mac';
+  if (p === 'linux') return 'linux';
+  // 浏览器预览（无 Electron 桥）场景：按 UA 推断客户机系统，避免误报"无可选客户端"
+  if (!platform) {
+    const nav = typeof navigator !== 'undefined' ? navigator : null;
+    const ua = nav && navigator.userAgent ? navigator.userAgent : '';
+    if (nav && (nav.platform === 'Win32' || /windows|win32/i.test(ua))) return 'win';
+    if (nav && (nav.platform === 'MacIntel' || /macintosh|mac os|mac os x/i.test(ua))) return 'mac';
+    if (nav && /linux/i.test(ua)) return 'linux';
+  }
+  return '';
+}
+
 /** Advanced settings defaults — used when user leaves fields empty / never opens the dialog */
 export const ADVANCED_DEFAULTS = {
   rdp: {
-    quality: 'auto',
+    // engine: 'ironrdp' 走内置 IronRDP-WASM（默认）；'external' 走外部客户端程序（如 mstsc）
+    engine: 'ironrdp',
+    client: '', // 外部客户端 id，按客户机系统选择，见 RDP_CLIENT_CATALOG
     resolution: 'auto',
     screenMode: 'window',
     monitors: 'single',
-    colorDepth: '32',
-    clipboard: true,
-    drives: false,
-    printers: false,
-    audio: 'local',
     promptCredentials: false,
     adminSession: false,
-    autoReconnect: true,
+    // IronRDP-WASM 引擎专属
+    clipboard: true,
+    nla: true,
   },
   ssh: {
     charset: 'UTF-8',
@@ -83,22 +110,27 @@ export const ADVANCED_DEFAULTS = {
 export const ADVANCED_FIELDS = {
   rdp: [
     {
-      key: 'quality',
-      type: 'select',
-      labelKey: 'adv.rdp.quality',
+      key: 'engine',
+      type: 'engineRadio',
+      labelKey: 'adv.rdp.engine',
       options: [
-        { value: 'auto', labelKey: 'adv.rdp.quality.auto' },
-        { value: 'high', labelKey: 'adv.rdp.quality.high' },
-        { value: 'balanced', labelKey: 'adv.rdp.quality.balanced' },
-        { value: 'low', labelKey: 'adv.rdp.quality.low' },
+        { value: 'ironrdp', labelKey: 'adv.rdp.engine.ironrdp' },
+        { value: 'external', labelKey: 'adv.rdp.engine.external' },
       ],
+    },
+    {
+      key: 'client',
+      type: 'clientSelect',
+      labelKey: 'adv.rdp.client',
+      engines: ['external'],
     },
     {
       key: 'resolution',
       type: 'select',
       labelKey: 'adv.rdp.resolution',
+      engines: ['external', 'ironrdp'],
       options: [
-        { value: 'auto', labelKey: 'adv.rdp.resolution.auto' },
+        { value: 'auto', labelKey: 'adv.rdp.resolution.auto', externalLabelKey: 'adv.rdp.resolution.system' },
         { value: '1024x768', label: '1024 × 768' },
         { value: '1280x800', label: '1280 × 800' },
         { value: '1366x768', label: '1366 × 768' },
@@ -112,8 +144,9 @@ export const ADVANCED_FIELDS = {
       key: 'screenMode',
       type: 'select',
       labelKey: 'adv.rdp.screenMode',
+      engines: ['external'],
       options: [
-        { value: 'window', labelKey: 'adv.screenMode.window' },
+        { value: 'window', labelKey: 'adv.rdp.screenMode.default' },
         { value: 'fullscreen', labelKey: 'adv.screenMode.fullscreen' },
       ],
     },
@@ -121,39 +154,27 @@ export const ADVANCED_FIELDS = {
       key: 'monitors',
       type: 'select',
       labelKey: 'adv.rdp.monitors',
+      engines: ['external'],
       options: [
-        { value: 'single', labelKey: 'adv.rdp.monitors.single' },
+        { value: 'single', labelKey: 'adv.rdp.monitors.default' },
         { value: 'multi', labelKey: 'adv.rdp.monitors.multi' },
       ],
     },
     {
-      key: 'colorDepth',
-      type: 'select',
-      labelKey: 'adv.rdp.colorDepth',
-      options: [
-        { value: 'auto', labelKey: 'adv.auto' },
-        { value: '32', label: '32 bit' },
-        { value: '24', label: '24 bit' },
-        { value: '16', label: '16 bit' },
-        { value: '15', label: '15 bit' },
-      ],
+      key: 'clipboard',
+      type: 'switch',
+      labelKey: 'adv.rdp.clipboard',
+      engines: ['ironrdp'],
     },
     {
-      key: 'audio',
-      type: 'select',
-      labelKey: 'adv.rdp.audio',
-      options: [
-        { value: 'local', labelKey: 'adv.rdp.audio.local' },
-        { value: 'remote', labelKey: 'adv.rdp.audio.remote' },
-        { value: 'none', labelKey: 'adv.rdp.audio.none' },
-      ],
+      key: 'promptCredentials',
+      type: 'switch',
+      labelKey: 'adv.rdp.promptCredentials',
+      engines: ['external'],
     },
-    { key: 'clipboard', type: 'switch', labelKey: 'adv.rdp.clipboard' },
-    { key: 'drives', type: 'switch', labelKey: 'adv.rdp.drives' },
-    { key: 'printers', type: 'switch', labelKey: 'adv.rdp.printers' },
-    { key: 'promptCredentials', type: 'switch', labelKey: 'adv.rdp.promptCredentials' },
-    { key: 'adminSession', type: 'switch', labelKey: 'adv.rdp.adminSession' },
-    { key: 'autoReconnect', type: 'switch', labelKey: 'adv.rdp.autoReconnect' },
+    { key: 'adminSession', type: 'switch', labelKey: 'adv.rdp.adminSession', engines: ['external'] },
+    // IronRDP-WASM 引擎专属能力
+    { key: 'nla', type: 'switch', labelKey: 'adv.rdp.nla', engines: ['ironrdp'] },
   ],
   ssh: [
     {

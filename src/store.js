@@ -1,7 +1,7 @@
 import Vue from 'vue';
 import { api, unwrap } from './api';
 import { applySettings, t } from './i18n';
-import { CATALOG } from './constants';
+import { CATALOG, resolveAdvanced } from './constants';
 import { getProtocol, protocolLabel } from './protocols';
 
 export const store = Vue.observable({
@@ -177,7 +177,12 @@ export async function connectAsset(asset, method) {
       code: 'NOT_IMPLEMENTED',
     });
   }
-  if (protocol.component) {
+  // RDP 引擎分流：IronRDP-WASM 用内嵌会话；external 用外部客户端（mstsc）流程
+  const _rdpEngine = resolveAdvanced('rdp', (method.advanced && method.advanced) || {}).engine;
+  // 注意：协议对象并无 id 字段，须用 method.id 判断是否为 RDP
+  const useEmbedded =
+    !!protocol.component && (method.id !== 'rdp' || _rdpEngine === 'ironrdp');
+  if (useEmbedded) {
     const id = `${method.id}-${asset.id}-${method.id}`;
     const assetName = asset.name || asset.host || asset.id;
     openTab({

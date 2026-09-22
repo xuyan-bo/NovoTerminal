@@ -2,23 +2,49 @@
   <el-dialog
     :title="title"
     :visible.sync="visible"
-    width="560px"
+    width="620px"
     top="8vh"
     :close-on-click-modal="false"
     append-to-body
   >
-    <div class="hint adv-hint">{{ $t('adv.hint') }}</div>
     <el-form label-width="120px" size="small" @submit.native.prevent>
       <el-form-item
-        v-for="f in fields"
-        :key="f.key"
-        :label="fieldLabel(f)"
-      >
-        <el-select
-          v-if="f.type === 'select'"
-          v-model="form[f.key]"
-          style="width: 100%"
+          v-for="f in fields"
+          :key="f.key"
+          :label="fieldLabel(f)"
         >
+          <el-radio-group
+            v-if="f.type === 'engineRadio'"
+            v-model="form[f.key]"
+            class="adv-engine"
+          >
+            <el-radio v-for="opt in f.options" :key="opt.value" :label="opt.value">
+              {{ optLabel(opt) }}
+            </el-radio>
+          </el-radio-group>
+          <template v-else-if="f.type === 'clientSelect'">
+            <el-select
+              v-model="form[f.key]"
+              style="width: 100%"
+              :placeholder="$t('adv.rdp.client.placeholder')"
+              :disabled="!clientOptions.length"
+            >
+              <el-option
+                v-for="opt in clientOptions"
+                :key="opt.value"
+                :label="optLabel(opt)"
+                :value="opt.value"
+              />
+            </el-select>
+            <div v-if="!clientOptions.length" class="hint client-none">
+              {{ $t('adv.rdp.client.none') }}
+            </div>
+          </template>
+          <el-select
+            v-else-if="f.type === 'select'"
+            v-model="form[f.key]"
+            style="width: 100%"
+          >
           <el-option
             v-for="opt in f.options"
             :key="opt.value"
@@ -51,6 +77,9 @@
         />
       </el-form-item>
     </el-form>
+    <p v-if="schemaKey === 'rdp' && form.engine === 'external'" class="hint">
+      {{ $t('adv.rdp.mstscTip') }}
+    </p>
     <template #footer>
       <span class="hint adv-default-tip">{{ $t('adv.defaultTip') }}</span>
       <el-button size="mini" @click="reset">{{ $t('adv.reset') }}</el-button>
@@ -62,7 +91,14 @@
 
 <script>
 import { store, api, unwrap, refresh, findAsset } from '../store';
-import { ADVANCED_FIELDS, ADVANCED_DEFAULTS, advancedKey, resolveAdvanced } from '../constants';
+import {
+  ADVANCED_FIELDS,
+  ADVANCED_DEFAULTS,
+  advancedKey,
+  resolveAdvanced,
+  RDP_CLIENT_CATALOG,
+  osKeyFromPlatform,
+} from '../constants';
 import { t } from '../i18n';
 
 export default {
@@ -92,7 +128,18 @@ export default {
       return advancedKey(this.methodId);
     },
     fields() {
+      const engine = this.form.engine;
+      return this.allFields.filter((f) => !f.engines || f.engines.includes(engine));
+    },
+    allFields() {
       return ADVANCED_FIELDS[this.schemaKey] || [];
+    },
+    platformKey() {
+      const p = (window.omniDesk && window.omniDesk.platform) || '';
+      return osKeyFromPlatform(p);
+    },
+    clientOptions() {
+      return RDP_CLIENT_CATALOG[this.platformKey] || [];
     },
     title() {
       return t('adv.title', { name: this.methodName });
@@ -111,7 +158,8 @@ export default {
       return t(f.labelKey);
     },
     optLabel(opt) {
-      return opt.labelKey ? t(opt.labelKey) : opt.label;
+      const key = this.form.engine === 'external' && opt.externalLabelKey ? opt.externalLabelKey : opt.labelKey;
+      return key ? t(key) : opt.label;
     },
     ph(f) {
       if (!f.placeholderKey) return '';
@@ -129,8 +177,10 @@ export default {
     },
     async confirm() {
       const payload = {};
-      this.fields.forEach((f) => {
+      // 遍历完整 schema（含 engine/client 及两套引擎字段），切换引擎不丢另一套的配置
+      this.allFields.forEach((f) => {
         const v = this.form[f.key];
+        if (v === undefined || v === null) return;
         if (f.type === 'number') {
           const n = Number(v);
           payload[f.key] = Number.isNaN(n) || String(v).trim() === '' ? this.defaults()[f.key] : n;
@@ -145,7 +195,10 @@ export default {
       this.saving = true;
       try {
         const ctx = this.context;
-        const assetId = (ctx && ctx.type === 'detail' && ctx.assetId) || store.assetDialog.editId || null;
+        // 仅「资产详情」由本对话框直接写资产；「新建/编辑资产对话框」只回传 result，
+        // 由 AssetDialog 保存时统一把 draft.advanced 写入资产，避免双写不一致/覆盖未保存改动
+        const isDetail = ctx && ctx.type === 'detail';
+        const assetId = isDetail && ctx.assetId ? ctx.assetId : null;
         if (assetId) {
           const hit = findAsset(assetId);
           if (!hit) throw new Error(t('detail.empty'));
@@ -186,9 +239,21 @@ export default {
 </script>
 
 <style scoped>
-.adv-hint {
-  margin-bottom: 12px;
-  line-height: 1.5;
+/* 引擎单选组为行内 flex，参与行内基线，与左侧标签同一水平线并对齐 */
+.adv-engine {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  vertical-align: middle;
+  gap: 12px;
+}
+.adv-engine .el-radio {
+  white-space: nowrap;
+  margin-right: 0;
+}
+.client-none {
+  margin-top: 6px;
+  font-size: 12px;
 }
 .adv-default-tip {
   float: left;

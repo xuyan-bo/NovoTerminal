@@ -8,6 +8,7 @@ const { AssetStore } = require('./store/assetStore');
 const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
 const { VncSessionManager } = require('./vnc/VncSessionManager');
+const { RdpSessionManager } = require('./rdp/RdpSessionManager');
 const { SftpManager } = require('./sftp/SftpManager');
 const { LogStore } = require('./logs/logStore');
 const { verifySystemAuth, resetAuthCache } = require('./auth/systemAuth');
@@ -15,18 +16,11 @@ const { verifySystemAuth, resetAuthCache } = require('./auth/systemAuth');
 /** Advanced defaults mirrored from renderer constants — used when method.advanced is missing */
 const ADVANCED_DEFAULTS = {
   rdp: {
-    quality: 'auto',
     resolution: 'auto',
     screenMode: 'window',
     monitors: 'single',
-    colorDepth: '32',
-    clipboard: true,
-    drives: false,
-    printers: false,
-    audio: 'local',
     promptCredentials: false,
     adminSession: false,
-    autoReconnect: true,
   },
   ssh: {
     charset: 'UTF-8',
@@ -93,20 +87,7 @@ function mapRdpDisplay(advanced) {
       display.height = h;
     }
   }
-  if (adv.colorDepth && adv.colorDepth !== 'auto') {
-    display.colorDepth = Number(adv.colorDepth) || undefined;
-  }
   return display;
-}
-
-function mapRdpRedirect(advanced) {
-  const adv = advanced || ADVANCED_DEFAULTS.rdp;
-  return {
-    clipboard: adv.clipboard !== false,
-    drives: !!adv.drives,
-    printers: !!adv.printers,
-    audio: adv.audio || 'local',
-  };
 }
 
 let win = null;
@@ -114,6 +95,7 @@ let store = null;
 let sessions = null;
 let sshSessions = null;
 let vncSessions = null;
+let rdpSessions = null;
 let sftpManager = null;
 let tray = null;
 let trayDestroying = false;
@@ -424,7 +406,6 @@ function registerIpc() {
       asset: hit.asset,
       method: meta,
       display: mapRdpDisplay(advanced),
-      redirect: mapRdpRedirect(advanced),
       auth: { mode: 'keytar' },
     });
   });
@@ -480,6 +461,29 @@ function registerIpc() {
   });
   handle('vnc:disconnect', (sid) => vncSessions.disconnect(sid));
   handle('vnc:list', () => vncSessions.list());
+
+  // ---- RDP embedded sessions (IronRDP-WASM via RDCleanPath proxy) ----
+  handle('rdp:connect', async (req) => {
+    const hit = store.findAsset(req.assetId);
+    if (!hit) throw new Error('asset not found');
+    const method = hit.asset.methods && hit.asset.methods[req.methodId];
+    if (!method || !method.enabled) throw new Error('method not enabled');
+    store.pushRecent(hit.asset, {
+      id: 'rdp',
+      proto: 'RDP',
+      port: method.port || 3389,
+    });
+    send('store:changed', { reason: 'recent' });
+    const result = await rdpSessions.connect({
+      assetId: hit.asset.id,
+      asset: { host: hit.asset.host, user: hit.asset.user, pass: hit.asset.pass },
+      method: { id: req.methodId, port: method.port || 3389, advanced: method.advanced },
+      advanced: method.advanced,
+    });
+    return result;
+  });
+  handle('rdp:disconnect', (sid) => rdpSessions.disconnect(sid));
+  handle('rdp:list', () => rdpSessions.list());
 
   // ---- SFTP window & transfers ----
   handle('sftp:open-window', async (req) => {
@@ -691,6 +695,7 @@ app.whenReady().then(() => {
   sessions = new SessionManager({ store, send, log: logger });
   sshSessions = new SshSessionManager({ send, log: logger });
   vncSessions = new VncSessionManager({ send, log: logger });
+  rdpSessions = new RdpSessionManager({ send, log: logger });
   sftpManager = new SftpManager({ send, store, log: logger });
   registerIpc();
   createWindow();
@@ -719,6 +724,7 @@ app.on('before-quit', (e) => {
   // before-quit fires for both tray-initiated quit AND programmatic quit.
   // Clean up sessions always. Tray cleanup must happen so macOS doesn't leak it.
   if (vncSessions) vncSessions.destroyAll();
+  if (rdpSessions) rdpSessions.destroyAll();
   destroyTray();
 });
 

@@ -1,5 +1,12 @@
 export const PROTOCOLS = {
-  rdp: { label: 'RDP', defaultPort: 3389, pillClass: 'rd' },
+  rdp: {
+    label: 'RDP',
+    defaultPort: 3389,
+    pillClass: 'rd',
+    icon: '\u{1F5A5}',
+    // 内嵌会话仅用于 IronRDP-WASM 引擎；external 引擎由 store.connectAsset 走外部 mstsc 流程
+    component: () => import('./components/RdpView.vue'),
+  },
   ssh: {
     label: 'SSH',
     defaultPort: 22,

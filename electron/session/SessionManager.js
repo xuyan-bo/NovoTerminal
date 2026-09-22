@@ -77,7 +77,7 @@ class SessionManager {
     try {
       const result = await adapter.connect(payload, sessionId);
       this.active.set(sessionId, { assetId: req.assetId, protocol, startedAt: Date.now() });
-      this.log && this.log.info(protocol, 'session connected', { ...logMeta, sessionId });
+      this.log && this.log.info(protocol, 'external client launched', { ...logMeta, sessionId });
 
       const hit = this.store.findAsset(req.assetId);
       if (hit && adapter.id === 'rdp-windows-mstsc') {

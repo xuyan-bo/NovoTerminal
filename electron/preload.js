@@ -83,6 +83,16 @@ const api = {
     return () => ipcRenderer.removeListener('vnc:state', handler);
   },
 
+  // RDP embedded sessions (IronRDP-WASM via RDCleanPath WebSocket proxy)
+  rdpConnect: (req) => ipcRenderer.invoke('rdp:connect', req),
+  rdpDisconnect: (sessionId) => ipcRenderer.invoke('rdp:disconnect', sessionId),
+  rdpList: () => ipcRenderer.invoke('rdp:list'),
+  onRdpState: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('rdp:state', handler);
+    return () => ipcRenderer.removeListener('rdp:state', handler);
+  },
+
   // SFTP
   sftpOpenWindow: (req) => ipcRenderer.invoke('sftp:open-window', req),
   sftpOpen: (req) => ipcRenderer.invoke('sftp:open', req),

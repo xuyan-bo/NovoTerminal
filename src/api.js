@@ -81,6 +81,18 @@ export const api = hasBridge
       onSshState() {
         return () => {};
       },
+      async rdpConnect() {
+        throw Object.assign(new Error('浏览器预览模式无法打开 RDP'), { code: 'NO_BRIDGE' });
+      },
+      async rdpDisconnect() {
+        return { ok: true };
+      },
+      async rdpList() {
+        return [];
+      },
+      onRdpState() {
+        return () => {};
+      },
       async sftpOpenWindow() {
         throw Object.assign(new Error('浏览器预览模式无法打开 SFTP'), { code: 'NO_BRIDGE' });
       },
