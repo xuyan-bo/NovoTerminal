@@ -510,16 +510,39 @@ button {
   min-width: 0;
 }
 
+.tabbar-wrap {
+  flex: 0 0 auto;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.tabbar-wrap::-webkit-scrollbar {
+  height: 6px;
+}
+
+.tabbar-wrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tabbar-wrap::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.tabbar-wrap::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+
 .tabbar {
   height: 38px;
-  flex: 0 0 38px;
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
   padding: 0;
-  overflow-x: auto;
 }
 
 .tab {
@@ -1094,26 +1117,6 @@ button {
   background: rgba(64, 158, 255, 0.15);
   color: var(--accent);
   border: 1px solid rgba(64, 158, 255, 0.35);
-}
-
-.statusbar {
-  height: 26px;
-  flex: 0 0 26px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 0 12px;
-  background: var(--bg-panel);
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--text-2);
-}
-
-.statusbar .sp {
-  margin-left: auto;
-  display: flex;
-  gap: 14px;
-  font-family: Consolas, monospace;
 }
 
 /* settings */

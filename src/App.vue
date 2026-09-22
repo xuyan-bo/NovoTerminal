@@ -17,27 +17,29 @@
         @mousedown="startResize"
       ></div>
       <section class="main">
-        <div class="tabbar">
-          <div
-            v-for="t in tabs"
-            :key="t.id"
-            class="tab"
-            :class="{ active: activeTab === t.id }"
-            @click="onTabClick(t)"
-          >
-            <span
-              v-if="t.os"
-              class="tab-os"
-              :class="'os-' + t.os"
-              v-html="osSvg(t.os)"
-            ></span>
-            <span v-else class="tab-glyph">{{ t.icon }}</span>
-            <span>{{ tabTitle(t) }}</span>
-            <span
-              v-if="t.closable"
-              class="x"
-              @click.stop="closeTabById(t.id)"
-            >✕</span>
+        <div class="tabbar-wrap">
+          <div class="tabbar">
+            <div
+              v-for="t in tabs"
+              :key="t.id"
+              class="tab"
+              :class="{ active: activeTab === t.id }"
+              @click="onTabClick(t)"
+            >
+              <span
+                v-if="t.os"
+                class="tab-os"
+                :class="'os-' + t.os"
+                v-html="osSvg(t.os)"
+              ></span>
+              <span v-else class="tab-glyph">{{ t.icon }}</span>
+              <span>{{ tabTitle(t) }}</span>
+              <span
+                v-if="t.closable"
+                class="x"
+                @click.stop="closeTabById(t.id)"
+              >✕</span>
+            </div>
           </div>
         </div>
 
@@ -70,14 +72,6 @@
               :active="activeTab === t.id"
             />
           </div>
-        </div>
-
-        <div class="statusbar">
-          <span>Hello OmniDesk</span>
-          <span class="sp">
-            <span>{{ clock }}</span>
-            <span>v0.1.0</span>
-          </span>
         </div>
       </section>
     </div>
@@ -140,7 +134,6 @@ export default {
   },
   data() {
     return {
-      clock: '',
       sidebarWidth: 268,
       resizing: false,
       sftpQuery: parseSftpHash() || {},
@@ -186,8 +179,6 @@ export default {
     } catch (_) {}
     if (!this.isSftpRoute) {
       if (store.snapshot.settings) applySettings(store.snapshot.settings);
-      this.tick();
-      this._timer = setInterval(this.tick, 1000);
       this._off = api.onSessionState && api.onSessionState((payload) => this.onSession(payload));
       this._offStore =
         api.onStoreChanged &&
@@ -208,7 +199,6 @@ export default {
   },
   beforeDestroy() {
     if (this._onHash) window.removeEventListener('hashchange', this._onHash);
-    if (this._timer) clearInterval(this._timer);
     if (this._off) this._off();
     if (this._offStore) this._offStore();
     if (this._mq && this._mqHandler && this._mq.removeEventListener) {
@@ -271,11 +261,6 @@ export default {
       } else {
         closeTab(id);
       }
-    },
-    tick() {
-      const d = new Date();
-      const p = (n) => String(n).padStart(2, '0');
-      this.clock = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
     },
     async onSession(payload) {
       if (payload && payload.type === 'ended') {

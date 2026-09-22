@@ -74,6 +74,12 @@
           <div>
             <div style="font-family:Consolas,monospace;font-weight:600">OmniDesk v0.1.0</div>
             <div class="meta" v-html="$t('settings.aboutBody')"></div>
+            <div class="meta">
+              {{ $t('settings.aboutSource') }}
+              <a class="meta-link" @click="openUrl('https://gitee.com/xu-san333/omni-desk')">Gitee</a>
+              <span class="meta-sep"> · </span>
+              <a class="meta-link" @click="openUrl('https://github.com/xu-san333/omni-desk')">GitHub</a>
+            </div>
           </div>
         </div>
       </div>
@@ -154,6 +160,11 @@ export default {
     },
   },
   methods: {
+    openUrl(url) {
+      if (window.omniDesk && window.omniDesk.openExternal) {
+        window.omniDesk.openExternal(url);
+      }
+    },
     async load() {
       const s = (await api.getSettings()) || store.snapshot.settings || {};
       this.form = {
@@ -264,5 +275,24 @@ export default {
   font-size: 11.5px;
   color: var(--text-2);
   line-height: 1.65;
+}
+.about-box .meta a {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.about-box .meta a:hover {
+  text-decoration: underline;
+}
+.about-box .meta-link {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.about-box .meta-link:hover {
+  text-decoration: underline;
+}
+.about-box .meta-sep {
+  color: var(--text-3);
 }
 </style>

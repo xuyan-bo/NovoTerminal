@@ -38,6 +38,7 @@ const api = {
   browseDataPath: () => ipcRenderer.invoke('app:browse-data-path'),
   clipboardReadText: () => ipcRenderer.invoke('clipboard:read-text'),
   clipboardWriteText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
+  openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
 
   // Logs
   logList: (filter) => ipcRenderer.invoke('log:list', filter),

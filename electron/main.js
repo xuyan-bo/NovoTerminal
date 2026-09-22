@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, Tray, Menu, nativeImage, shell } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -320,6 +320,12 @@ function registerIpc() {
     } catch (_) {
       return false;
     }
+  });
+  handle('app:open-external', (url) => {
+    if (url && typeof url === 'string') {
+      shell.openExternal(url);
+    }
+    return true;
   });
   handle('store:create-group', (p) => unwrap(store.createGroup(p)));
   handle('store:update-group', (gid, p) => unwrap(store.updateGroup(gid, p)));

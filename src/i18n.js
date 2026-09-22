@@ -99,8 +99,8 @@ const dict = {
     'settings.currentDb': '当前库',
     'settings.currentDbVal': 'omnidesk.json · safeStorage 加密（可用时）',
     'settings.about': '关于',
-    'settings.aboutBody':
-      '本地优先远程桌面客户端 · Electron + Vue 2 + Element UI<br />资产模型：分组 → 资产 → 访问方式（1:N）· RDP 走系统 mstsc<br />更多设置将在后续版本加入。',
+    'settings.aboutBody': '技术栈：Electron + Vue 2 + Element UI',
+    'settings.aboutSource': '开源地址：',
     'settings.browse': '浏览…',
     'settings.cancel': '取消',
     'settings.save': '保存',
@@ -425,8 +425,8 @@ const dict = {
     'settings.currentDb': 'Current store',
     'settings.currentDbVal': 'omnidesk.json · safeStorage encrypted (when available)',
     'settings.about': 'About',
-    'settings.aboutBody':
-      'Local-first remote desktop · Electron + Vue 2 + Element UI<br />Model: Group → Asset → Access methods (1:N) · RDP via system mstsc<br />More settings coming later.',
+    'settings.aboutBody': 'Tech stack: Electron + Vue 2 + Element UI',
+    'settings.aboutSource': 'Open source: ',
     'settings.browse': 'Browse…',
     'settings.cancel': 'Cancel',
     'settings.save': 'Save',
