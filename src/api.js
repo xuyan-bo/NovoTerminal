@@ -69,6 +69,18 @@ export const api = hasBridge
       async sshWrite() {
         return false;
       },
+      async sshWriteBinary() {
+        return false;
+      },
+      async sshAuthReply() {
+        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+      },
+      onSshAuthPrompt() {
+        return () => {};
+      },
+      onSshAuthCancel() {
+        return () => {};
+      },
       async sshResize() {
         return false;
       },

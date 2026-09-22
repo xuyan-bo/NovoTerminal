@@ -7,6 +7,10 @@ const APP_BUILD = 'rd2-1647';
 const { AssetStore } = require('./store/assetStore');
 const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
+const { SSH_DEFAULTS } = require('./ssh/connection');
+const { createHostKeyVerifier } = require('./ssh/hostKeys');
+const { SshPrompts } = require('./ssh/SshPrompts');
+const { fileURLToPath } = require('url');
 const { VncSessionManager } = require('./vnc/VncSessionManager');
 const { RdpSessionManager } = require('./rdp/RdpSessionManager');
 const { SftpManager } = require('./sftp/SftpManager');
@@ -22,27 +26,7 @@ const ADVANCED_DEFAULTS = {
     promptCredentials: false,
     adminSession: false,
   },
-  ssh: {
-    charset: 'UTF-8',
-    term: 'xterm-256color',
-    keepAlive: 30,
-    compression: false,
-    authType: 'password',
-    privateKeyPath: '',
-    proxyJump: '',
-    x11Forward: false,
-    hostKeyPolicy: 'ask',
-  },
-  vnc: {
-    quality: 'auto',
-    compressLevel: 6,
-    jpegQuality: 6,
-    shared: true,
-    viewOnly: false,
-    scale: 'fit',
-    clipboard: true,
-    localCursor: true,
-  },
+  ssh: SSH_DEFAULTS,
 };
 
 function protocolKey(id) {
@@ -108,6 +92,67 @@ const logger = {
   error: (source, message, meta) => logStore && logStore.error(source, message, meta),
 };
 const sftpWindows = new Map(); // assetId -> BrowserWindow
+const sshPrompts = new SshPrompts();
+const sshOwners = new Set();
+const sshTests = new Map();
+
+function closeSshOwner(ownerId) {
+  if (sshSessions) sshSessions.closeOwner(ownerId);
+  if (sftpManager) sftpManager.closeOwner(ownerId);
+  const tests = sshTests.get(ownerId);
+  if (tests) for (const connection of tests) connection.close();
+  sshTests.delete(ownerId);
+  sshPrompts.closeOwner(ownerId);
+}
+
+function trackSshOwner(sender) {
+  if (sshOwners.has(sender.id)) return;
+  const ownerId = sender.id;
+  sshOwners.add(ownerId);
+  sender.once('destroyed', () => {
+    closeSshOwner(ownerId);
+    sshOwners.delete(ownerId);
+  });
+  sender.on('render-process-gone', () => closeSshOwner(ownerId));
+  sender.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) closeSshOwner(ownerId);
+  });
+}
+
+function sshRequestContext(sender) {
+  return {
+    ownerId: sender.id,
+    verifyHostKey: createHostKeyVerifier({
+      log: logger,
+      confirm: async ({ host, port, fingerprint, keyType, signal }) => {
+        if (sender.isDestroyed() || signal?.aborted) return false;
+        const parent = BrowserWindow.fromWebContents(sender);
+        if (!parent || parent.isDestroyed()) return false;
+        const en = store.getSettings().lang === 'en';
+        const response = await dialog.showMessageBox(parent, {
+          type: 'warning', title: en ? 'SSH host identity' : 'SSH 主机身份确认',
+          message: en ? 'Trust this new SSH host key?' : '是否信任此 SSH 主机的新密钥？',
+          detail: `${host}:${port}\n${keyType}\nSHA256:${fingerprint}\n\n` + (en ? 'Verify this fingerprint with the server administrator before accepting.' : '请先与服务器管理员核对指纹，再接受并保存。'),
+          buttons: en ? ['Cancel', 'Accept and save'] : ['取消', '接受并保存'],
+          defaultId: 0, cancelId: 0, noLink: true, signal,
+        });
+        return !sender.isDestroyed() && !signal?.aborted && response.response === 1;
+      },
+    }),
+    promptKeyboard: (details) => sshPrompts.request(sender, details),
+    onConnection: (connection) => {
+      if (!sshTests.has(sender.id)) sshTests.set(sender.id, new Set());
+      sshTests.get(sender.id).add(connection);
+      connection.once('closed', () => {
+        const tests = sshTests.get(sender.id);
+        if (tests) {
+          tests.delete(connection);
+          if (!tests.size) sshTests.delete(sender.id);
+        }
+      });
+    },
+  };
+}
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
@@ -262,9 +307,21 @@ function createWindow() {
   }
 }
 
-function handle(channel, fn) {
-  ipcMain.handle(channel, async (_e, ...args) => {
+function handle(channel, fn, withSender = false) {
+  ipcMain.handle(channel, async (event, ...args) => {
     try {
+      if (withSender) {
+        const sender = event.sender;
+        const url = new URL(sender.getURL());
+        const trusted = isDev
+          ? url.origin === new URL(process.env.VITE_DEV_SERVER_URL).origin
+          : url.protocol === 'file:' && path.resolve(fileURLToPath(url)) === path.resolve(__dirname, '..', 'dist', 'index.html');
+        if (!trusted || !BrowserWindow.fromWebContents(sender) || event.senderFrame !== sender.mainFrame) {
+          throw Object.assign(new Error('Untrusted SSH IPC sender'), { code: 'SSH_OWNER' });
+        }
+        trackSshOwner(sender);
+        return await fn(sender, ...args);
+      }
       return await fn(...args);
     } catch (err) {
       logStore &&
@@ -387,7 +444,8 @@ function registerIpc() {
     return logStore.log(level, (p && p.source) || 'renderer', (p && p.message) || '', p && p.meta);
   });
 
-  handle('session:test', (req) => sessions.testConnection(req));
+  handle('session:test', (sender, req) => sessions.testConnection(req, sshRequestContext(sender)), true);
+  handle('ssh:auth-reply', (sender, requestId, answers) => sshPrompts.reply(sender.id, requestId, answers), true);
   handle('session:connect', async (req) => {
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
@@ -413,31 +471,48 @@ function registerIpc() {
   handle('session:list', () => sessions.listActive());
 
   // ---- SSH terminal ----
-  handle('ssh:connect', async (req) => {
+  handle('ssh:connect', async (sender, req) => {
+    if (!req || req.methodId !== 'ssh') throw Object.assign(new Error('Invalid SSH method'), { code: 'SSH_METHOD' });
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
-    const method = hit.asset.methods && hit.asset.methods[req.methodId];
+    const method = hit.asset.methods && hit.asset.methods.ssh;
     if (!method || !method.enabled) throw new Error('method not enabled');
-    store.pushRecent(hit.asset, {
-      id: 'ssh',
-      proto: 'SSH',
-      port: method.port || 22,
-    });
-    send('store:changed', { reason: 'recent' });
     const result = await sshSessions.connect({
+      ...sshRequestContext(sender), requestId: req.requestId,
       assetId: hit.asset.id,
       asset: { host: hit.asset.host, user: hit.asset.user, pass: hit.asset.pass },
-      method: { id: req.methodId, port: method.port || 22, advanced: method.advanced },
-      advanced: method.advanced,
-      cols: req.cols,
-      rows: req.rows,
+      method: { id: 'ssh', port: method.port || 22, advanced: method.advanced },
+      cols: req.cols, rows: req.rows,
     });
+    if (sender.isDestroyed() || !sshSessions.owns(result.sessionId, sender.id)) {
+      sshSessions.disconnect(result.sessionId);
+      throw Object.assign(new Error('SSH connection canceled'), { code: 'SSH_CANCELED' });
+    }
+    store.pushRecent(hit.asset, { id: 'ssh', proto: 'SSH', port: method.port || 22 });
+    send('store:changed', { reason: 'recent' });
     return result;
-  });
-  handle('ssh:write', (sessionId, data) => sshSessions.write(sessionId, data));
-  handle('ssh:resize', (sessionId, cols, rows) => sshSessions.resize(sessionId, cols, rows));
-  handle('ssh:disconnect', (sid) => sshSessions.disconnect(sid));
-  handle('ssh:list', () => sshSessions.list());
+  }, true);
+  const ownSsh = (sender, sessionId) => {
+    if (!sshSessions.owns(sessionId, sender.id)) throw Object.assign(new Error('SSH session is not owned by this window'), { code: 'SSH_OWNER' });
+  };
+  handle('ssh:write', (sender, sessionId, data) => {
+    ownSsh(sender, sessionId);
+    return sshSessions.write(sessionId, data);
+  }, true);
+  handle('ssh:write-binary', (sender, sessionId, data) => {
+    ownSsh(sender, sessionId);
+    return sshSessions.write(sessionId, data, true);
+  }, true);
+  handle('ssh:resize', (sender, sessionId, cols, rows) => {
+    ownSsh(sender, sessionId);
+    return sshSessions.resize(sessionId, cols, rows);
+  }, true);
+  handle('ssh:disconnect', (sender, sid) => {
+    if (!sshSessions.sessions.has(sid)) return { ok: true, existed: false };
+    ownSsh(sender, sid);
+    return sshSessions.disconnect(sid);
+  }, true);
+  handle('ssh:list', (sender) => sshSessions.list().filter((s) => sshSessions.owns(s.sessionId, sender.id)), true);
 
   // ---- VNC terminal (noVNC via WebSocket proxy) ----
   handle('vnc:connect', async (req) => {
@@ -549,7 +624,7 @@ function registerIpc() {
     return { ok: true, reused: false };
   });
 
-  handle('sftp:open', (req) => sftpManager.openSession(req));
+  handle('sftp:open', (sender, req) => sftpManager.openSession({ assetId: req && req.assetId, ...sshRequestContext(sender) }), true);
   handle('sftp:list', (connId, remotePath) => sftpManager.list(connId, remotePath));
   handle('sftp:stat', (connId, remotePath) => sftpManager.stat(connId, remotePath));
   handle('sftp:local-exists', (p) => sftpManager.localExists(p));
@@ -589,7 +664,11 @@ function registerIpc() {
   handle('sftp:pause', (taskId, pause) => sftpManager.pauseTask(taskId, !!pause));
   handle('sftp:cancel', async (taskId) => sftpManager.cancelTask(taskId));
   handle('sftp:tasks', () => sftpManager.listTasks());
-  handle('sftp:close', (connId) => sftpManager.closeSession(connId));
+  handle('sftp:close', (sender, connId) => {
+    const rec = sftpManager.conns.get(connId);
+    if (rec && rec.ownerId !== sender.id) throw Object.assign(new Error('SFTP session is not owned by this window'), { code: 'SSH_OWNER' });
+    return sftpManager.closeSession(connId);
+  }, true);
   handle('sftp:pick-local-files', async () => {
     const r = await dialog.showOpenDialog(win || BrowserWindow.getFocusedWindow(), {
       properties: ['openFile', 'multiSelections'],
@@ -693,7 +772,13 @@ app.whenReady().then(() => {
   });
   store = new AssetStore();
   sessions = new SessionManager({ store, send, log: logger });
-  sshSessions = new SshSessionManager({ send, log: logger });
+  sshSessions = new SshSessionManager({
+    log: logger,
+    send: (channel, payload, ownerId) => {
+      const owner = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.webContents.id === ownerId);
+      if (owner) owner.webContents.send(channel, payload);
+    },
+  });
   vncSessions = new VncSessionManager({ send, log: logger });
   rdpSessions = new RdpSessionManager({ send, log: logger });
   sftpManager = new SftpManager({ send, store, log: logger });
@@ -725,6 +810,11 @@ app.on('before-quit', (e) => {
   // Clean up sessions always. Tray cleanup must happen so macOS doesn't leak it.
   if (vncSessions) vncSessions.destroyAll();
   if (rdpSessions) rdpSessions.destroyAll();
+  if (sshSessions) sshSessions.destroyAll();
+  if (sftpManager) sftpManager.destroyAll();
+  for (const tests of sshTests.values()) for (const connection of tests) connection.close();
+  sshTests.clear();
+  sshPrompts.destroyAll();
   destroyTray();
 });
 

@@ -154,6 +154,11 @@ export default {
       }
     },
   },
+  created() {
+    this._disposed = false;
+    this._connectVersion = 0;
+    this._inputSubscriptions = [];
+  },
   mounted() {
     this._fitTimer = null;
     this._rsTimer = null;
@@ -170,11 +175,12 @@ export default {
     this.scheduleFit();
   },
   beforeDestroy() {
+    this._disposed = true;
     window.removeEventListener('resize', this.scheduleFit);
     if (this._fitTimer) clearTimeout(this._fitTimer);
     if (this._rsTimer) clearTimeout(this._rsTimer);
-    this.teardownTerm();
     this.disconnectNow(true);
+    this.teardownTerm();
   },
   methods: {
     /** Read this asset's saved SSH color scheme (or defaults if unset) */
@@ -232,10 +238,8 @@ export default {
         term.focus();
       } catch (_) {}
 
-      term.onData((data) => {
-        if (!this.liveSessionId) return;
-        api.sshWrite && api.sshWrite(this.liveSessionId, data);
-      });
+      this._inputSubscriptions.push(term.onData((data) => this.sendInput(data)));
+      this._inputSubscriptions.push(term.onBinary((data) => this.sendInput(data, true)));
 
       // Xshell-style right click: copy selection, or paste if none
       this._onTermCtx = (e) => this.onTermContextmenu(e);
@@ -252,6 +256,17 @@ export default {
       }
     },
 
+    async sendInput(data, binary = false) {
+      const sid = this.liveSessionId;
+      if (!sid || this.status !== 'ready') return;
+      try {
+        const write = binary ? api.sshWriteBinary : api.sshWrite;
+        unwrap(await write(sid, data));
+        if (this.liveSessionId === sid) this.statusDetail = '';
+      } catch (error) {
+        if (this.liveSessionId === sid && !this._disposed) this.statusDetail = error.message || error.code;
+      }
+    },
     onTermContextmenu(e) {
       e.preventDefault();
       e.stopPropagation();
@@ -330,8 +345,8 @@ export default {
       try {
         if (typeof term.paste === 'function') {
           term.paste(text);
-        } else if (this.liveSessionId && api.sshWrite) {
-          api.sshWrite(this.liveSessionId, text.replace(/\r?\n/g, '\r'));
+        } else {
+          await this.sendInput(text.replace(/\r?\n/g, '\r'));
         }
       } catch (err) {
         this.$message.error('粘贴失败');
@@ -339,6 +354,7 @@ export default {
     },
 
     scheduleFit() {
+      if (this._disposed) return;
       if (this._fitTimer) clearTimeout(this._fitTimer);
       this._fitTimer = setTimeout(() => this.doFit(), FIT_DEBOUNCE_MS);
     },
@@ -374,20 +390,32 @@ export default {
 
     /** Only push TIOCSWINSZ to remote when cols/rows actually changed */
     scheduleRemoteResize() {
+      if (this._disposed) return;
       if (this._rsTimer) clearTimeout(this._rsTimer);
-      this._rsTimer = setTimeout(() => {
-        if (!this.liveSessionId || !this.term) return;
+      this._rsTimer = setTimeout(async () => {
+        const sid = this.liveSessionId;
+        if (!sid || !this.term || this.status !== 'ready') return;
         const cols = this.term.cols;
         const rows = this.term.rows;
         if (!cols || !rows) return;
         if (this._sentCols === cols && this._sentRows === rows) return;
-        this._sentCols = cols;
-        this._sentRows = rows;
-        api.sshResize && api.sshResize(this.liveSessionId, cols, rows);
+        try {
+          const resized = unwrap(await api.sshResize(sid, cols, rows));
+          if (resized && this.liveSessionId === sid && !this._disposed) {
+            this._sentCols = cols;
+            this._sentRows = rows;
+          }
+        } catch (error) {
+          if (this.liveSessionId === sid && this.status === 'ready' && !this._disposed) {
+            this.statusDetail = error.message || error.code;
+          }
+        }
       }, REMOTE_RESIZE_DEBOUNCE_MS);
     },
 
     teardownTerm() {
+      for (const subscription of this._inputSubscriptions) subscription.dispose();
+      this._inputSubscriptions = [];
       if (this.offData) {
         this.offData();
         this.offData = null;
@@ -435,8 +463,10 @@ export default {
     },
 
     async connect() {
+      if (this._disposed) return;
       if (!this.term) this.initTerm();
       this.disconnectNow(true);
+      const version = this._connectVersion;
       this.status = 'connecting';
       this.statusDetail = '';
       this._sentCols = 0;
@@ -453,67 +483,57 @@ export default {
         return;
       }
 
+      const sid = 'ssh-' + crypto.randomUUID();
+      const isCurrent = () => !this._disposed && this._connectVersion === version && this.liveSessionId === sid;
+      this.liveSessionId = sid;
       try {
-        // ensure local size is current before opening remote shell
-        this.doFit();
-        const cols = (this.term && this.term.cols) || 120;
-        const rows = (this.term && this.term.rows) || 32;
-        const r = unwrap(
-          await api.sshConnect({
-            assetId: this.assetId,
-            methodId: this.methodId,
-            cols,
-            rows,
-          })
-        );
-        const sid = r.sessionId;
-        this.liveSessionId = sid;
-        this._sentCols = cols;
-        this._sentRows = rows;
-
+        // Subscribe before connecting so the first shell output cannot be lost.
         this.offData = api.onSshData(sid, (payload) => {
-          if (!this.term) return;
+          if (!isCurrent() || !this.term) return;
           const chunk = this.chunkToWrite(payload);
           if (chunk != null) this.term.write(chunk);
         });
-
         this.offState = api.onSshState((ev) => {
-          if (!ev || ev.sessionId !== sid) return;
+          if (!isCurrent() || !ev || ev.sessionId !== sid) return;
           if (ev.type === 'ready') {
             this.status = 'ready';
             this.statusDetail = '';
-          } else if (ev.type === 'ended') {
-            this.status = 'ended';
-            this.writeOut(t('ssh.endedHint'));
-          } else if (ev.type === 'error') {
-            this.status = 'error';
-            this.statusDetail = ev.message || ev.code || '';
-            this.writeOut((t('ssh.errorPrefix') + ' ' + (ev.message || ev.code || '')).trim());
-          } else if (ev.type === 'hostkey-saved') {
-            this.writeOut(t('ssh.hostkeySaved', { fp: ev.fp || '' }));
-          } else if (ev.type === 'hostkey-mismatch') {
-            this.writeOut(t('ssh.hostkeyMismatch'));
-          } else if (ev.type === 'hostkey-unknown') {
-            this.writeOut(t('ssh.hostkeyUnknown'));
+          } else if (ev.type === 'ended' || ev.type === 'error') {
+            this.disconnectNow(true);
+            this.status = ev.type === 'error' ? 'error' : 'ended';
+            this.statusDetail = ev.type === 'error' ? ev.message || ev.code || '' : '';
+            this.writeOut(ev.type === 'error'
+              ? (t('ssh.errorPrefix') + ' ' + this.statusDetail).trim()
+              : t('ssh.endedHint'));
           }
         });
-
+        this.doFit();
+        const cols = (this.term && this.term.cols) || 120;
+        const rows = (this.term && this.term.rows) || 32;
+        const result = unwrap(await api.sshConnect({
+          requestId: sid,
+          assetId: this.assetId,
+          methodId: this.methodId,
+          cols,
+          rows,
+        }));
+        if (!isCurrent()) {
+          await api.sshDisconnect(result.sessionId);
+          return;
+        }
+        this._sentCols = cols;
+        this._sentRows = rows;
         this.status = 'ready';
         this.statusDetail = '';
-        // pull latest snapshot so home “recent” shows this SSH connect
         refresh().catch(() => {});
-        // one delayed sync in case layout settled after mount/fullscreen
         this.scheduleRemoteResize();
-        // focus after the shell is ready so the user can type right away
-        if (this.term) {
-          try {
-            this.term.focus();
-          } catch (_) {}
-        }
+        if (this.active && this.term) this.term.focus();
       } catch (e) {
+        if (!isCurrent()) return;
+        this.disconnectNow(true);
         this.status = 'error';
-        this.statusDetail = e.message || '';
-        this.writeOut((t('ssh.errorPrefix') + ' ' + (e.message || e.code || '')).trim());
+        this.statusDetail = e.message || e.code || '';
+        this.writeOut((t('ssh.errorPrefix') + ' ' + this.statusDetail).trim());
       }
     },
 
@@ -547,6 +567,8 @@ export default {
     },
 
     disconnectNow(silent) {
+      this._connectVersion += 1;
+      if (this._rsTimer) clearTimeout(this._rsTimer);
       const sid = this.liveSessionId;
       this.liveSessionId = null;
       if (this.offData) {

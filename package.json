@@ -20,6 +20,7 @@
     "@xterm/xterm": "5.5.0",
     "echarts": "^6.1.0",
     "element-ui": "^2.15.14",
+    "iconv-lite": "0.6.3",
     "ironrdp-wasm": "^1.1.0",
     "ssh2": "^1.17.0",
     "vue": "^2.7.16",

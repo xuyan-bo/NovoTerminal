@@ -1,44 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Client } = require('ssh2');
-
-const ADVANCED_SSH_DEFAULTS = {
-  charset: 'UTF-8',
-  term: 'xterm-256color',
-  keepAlive: 30,
-  compression: false,
-  authType: 'password',
-  privateKeyPath: '',
-  proxyJump: '',
-  hostKeyPolicy: 'ask',
-};
-
-function expandHome(p) {
-  return String(p || '').replace(/^~(?=[/\\])/, os.homedir());
-}
-
-function resolveAdvanced(saved) {
-  const base = { ...ADVANCED_SSH_DEFAULTS };
-  if (!saved || typeof saved !== 'object') return base;
-  Object.keys(base).forEach((k) => {
-    const v = saved[k];
-    if (v === undefined || v === null) return;
-    if (typeof base[k] === 'string' && String(v).trim() === '') return;
-    if (typeof base[k] === 'number') {
-      const n = Number(v);
-      if (Number.isNaN(n) || String(v).trim() === '') return;
-      base[k] = n;
-      return;
-    }
-    if (typeof base[k] === 'boolean') {
-      base[k] = !!v;
-      return;
-    }
-    if (v !== '') base[k] = v;
-  });
-  return base;
-}
+const { createSshConnection } = require('../ssh/connection');
 
 function formatSize(n) {
   const num = Number(n) || 0;
@@ -63,6 +26,7 @@ class SftpManager {
     this.store = store;
     this.log = log;
     this.conns = new Map(); // connId -> { client, sftp, assetId, host, port }
+    this.pending = new Map();
     this.tasks = new Map(); // taskId -> state
     this._seq = 0;
   }
@@ -105,96 +69,65 @@ class SftpManager {
     });
   }
 
-  _buildAuth(asset, method) {
-    const adv = resolveAdvanced(method && method.advanced);
-    const username = asset.user || '';
-    const password = asset.pass;
-    const opts = {
-      host: asset.host,
-      port: (method && method.port) || 22,
-      username,
-      readyTimeout: 20000,
-      keepaliveInterval: Number(adv.keepAlive) > 0 ? Number(adv.keepAlive) * 1000 : 0,
-      compress: !!adv.compression,
-    };
-    if (adv.authType === 'publickey' && adv.privateKeyPath) {
-      opts.privateKey = fs.readFileSync(expandHome(adv.privateKeyPath));
-    } else if (password) {
-      opts.password = password;
-    }
-    return opts;
-  }
-
-  openSession({ assetId }) {
+  async openSession({ assetId, ownerId, verifyHostKey, promptKeyboard }) {
     const hit = this.store.findAsset(assetId);
-    if (!hit) {
-      return Promise.reject(Object.assign(new Error('asset not found'), { code: 'NOT_FOUND' }));
-    }
+    if (!hit) throw Object.assign(new Error('asset not found'), { code: 'NOT_FOUND' });
     const asset = hit.asset;
-    const methods = asset.methods || {};
-    const sshConf =
-      methods.ssh ||
-      Object.keys(methods)
-        .map((k) => methods[k])
-        .find((c) => c && c.enabled);
-    if (!sshConf || !sshConf.enabled) {
-      // still try default port 22
-    }
-    const method = {
-      id: 'ssh',
-      port: (sshConf && sshConf.port) || 22,
-      advanced: (sshConf && sshConf.advanced) || null,
-    };
-
-    return new Promise((resolve, reject) => {
-      const client = new Client();
-      const fail = (err) => {
-        this.log &&
-          this.log.error('sftp', 'sftp connect failed', {
-            assetId,
-            host: asset.host,
-            port: method.port,
-            code: err.code || 'SFTP_ERROR',
-            message: err.message,
-          });
-        try {
-          client.end();
-        } catch (_) {}
-        reject(Object.assign(new Error(err.message || String(err)), { code: err.code || 'SFTP_ERROR' }));
-      };
-
-      client.on('ready', () => {
-        client.sftp((err, sftp) => {
-          if (err) return fail(err);
-          const connId = `sftp-${Date.now()}-${(++this._seq).toString(36)}`;
-          this.conns.set(connId, {
-            client,
-            sftp,
-            assetId,
-            host: asset.host,
-            port: method.port,
-          });
-          this.log &&
-            this.log.info('sftp', 'sftp connected', {
-              assetId,
-              host: asset.host,
-              port: method.port,
-              connId,
-            });
-          // probe home
-          sftp.realpath('.', (e2, abs) => {
-            const home = !e2 && abs ? String(abs) : '/';
-            resolve({ connId, host: asset.host, port: method.port, home });
-          });
-        });
-      });
-      client.on('error', fail);
-      try {
-        client.connect(this._buildAuth(asset, method));
-      } catch (e) {
-        fail(e);
-      }
+    const method = asset.methods && asset.methods.ssh;
+    if (!method || !method.enabled) throw Object.assign(new Error('SSH method not enabled'), { code: 'SSH_DISABLED' });
+    const connId = `sftp-${Date.now()}-${(++this._seq).toString(36)}`;
+    const connection = createSshConnection({
+      host: asset.host, port: Number(method.port) || 22, username: asset.user || '', password: asset.pass,
+      advanced: method.advanced, verifyHostKey, promptKeyboard, log: this.log,
     });
+    const rec = { connection, ownerId, assetId, host: asset.host, port: Number(method.port) || 22, closedError: null };
+    this.pending.set(connId, rec);
+    let rejectClosed;
+    const closed = new Promise((_, reject) => { rejectClosed = reject; });
+    closed.catch(() => {});
+    const onClosed = (error) => {
+      rec.closedError = rec.closedError || error || Object.assign(new Error('SFTP connection closed'), { code: 'SSH_CLOSED' });
+      rejectClosed(rec.closedError);
+      if (this.conns.has(connId)) this.closeSession(connId);
+    };
+    connection.on('closed', onClosed);
+    let timer;
+    try {
+      const client = await Promise.race([connection.ready, closed]);
+      if (rec.closedError) throw rec.closedError;
+      if (!this.pending.has(connId)) throw Object.assign(new Error('SFTP canceled'), { code: 'SSH_CANCELED' });
+      rec.client = client;
+      const home = await Promise.race([
+        new Promise((resolve, reject) => {
+          timer = setTimeout(() => reject(Object.assign(new Error('SFTP initialization timed out'), { code: 'SFTP_TIMEOUT' })), 20000);
+          client.sftp((error, sftp) => {
+            if (rec.closedError || !this.pending.has(connId)) {
+              if (sftp) sftp.end();
+              return reject(rec.closedError || Object.assign(new Error('SFTP canceled'), { code: 'SSH_CANCELED' }));
+            }
+            if (error) return reject(error);
+            rec.sftp = sftp;
+            sftp.on('error', onClosed);
+            sftp.on('close', () => onClosed(Object.assign(new Error('SFTP channel closed'), { code: 'SFTP_CLOSED' })));
+            sftp.realpath('.', (err, abs) => resolve(!err && abs ? String(abs) : '/'));
+          });
+        }),
+        closed,
+      ]);
+      if (rec.closedError) throw rec.closedError;
+      if (!this.pending.has(connId)) throw Object.assign(new Error('SFTP canceled'), { code: 'SSH_CANCELED' });
+      this.pending.delete(connId);
+      this.conns.set(connId, rec);
+      this.log && this.log.info('sftp', 'sftp connected', { assetId, host: rec.host, port: rec.port, connId });
+      return { connId, host: rec.host, port: rec.port, home };
+    } catch (error) {
+      this.pending.delete(connId);
+      connection.close();
+      this.log && this.log.error('sftp', 'sftp connect failed', { assetId, host: rec.host, port: rec.port, code: error.code || 'SFTP_ERROR' });
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   _conn(connId) {
@@ -869,9 +802,7 @@ class SftpManager {
     [...this.tasks.entries()].forEach(([id, t]) => {
       if (t.connId === connId) this.cancelTask(id);
     });
-    try {
-      c.client.end();
-    } catch (_) {}
+    c.connection.close();
     this.log &&
       this.log.info('sftp', 'sftp closed', {
         assetId: c.assetId,
@@ -880,6 +811,23 @@ class SftpManager {
         connId,
       });
     return { ok: true };
+  }
+
+  closeOwner(ownerId) {
+    for (const [id, rec] of this.pending) {
+      if (rec.ownerId !== ownerId) continue;
+      this.pending.delete(id);
+      rec.connection.close();
+    }
+    for (const [id, rec] of this.conns) {
+      if (rec.ownerId === ownerId) this.closeSession(id);
+    }
+  }
+
+  destroyAll() {
+    for (const rec of this.pending.values()) rec.connection.close();
+    this.pending.clear();
+    for (const id of this.conns.keys()) this.closeSession(id);
   }
 }
 

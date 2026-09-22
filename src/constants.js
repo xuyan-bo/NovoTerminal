@@ -89,13 +89,14 @@ export const ADVANCED_DEFAULTS = {
     compression: false,
     authType: 'password',
     privateKeyPath: '',
+    privateKeyPassphrase: '',
     proxyJump: '',
     x11Forward: false,
+    x11Display: '',
     hostKeyPolicy: 'ask',
   },
   vnc: {
     password: '',
-    quality: 'auto',
     compressLevel: 6,
     jpegQuality: 6,
     shared: true,
@@ -181,6 +182,7 @@ export const ADVANCED_FIELDS = {
       key: 'charset',
       type: 'select',
       labelKey: 'adv.ssh.charset',
+      hintKey: 'adv.ssh.charsetHint',
       options: [
         { value: 'UTF-8', label: 'UTF-8' },
         { value: 'GBK', label: 'GBK' },
@@ -202,7 +204,7 @@ export const ADVANCED_FIELDS = {
         { value: 'ansi', label: 'ansi' },
       ],
     },
-    { key: 'keepAlive', type: 'number', labelKey: 'adv.ssh.keepAlive', min: 0, max: 3600, placeholderKey: 'adv.ssh.keepAlivePh' },
+    { key: 'keepAlive', type: 'number', labelKey: 'adv.ssh.keepAlive', min: 0, max: 3600, integer: true, placeholderKey: 'adv.ssh.keepAlivePh' },
     { key: 'compression', type: 'switch', labelKey: 'adv.ssh.compression' },
     {
       key: 'authType',
@@ -213,9 +215,11 @@ export const ADVANCED_FIELDS = {
         { value: 'publickey', labelKey: 'adv.ssh.auth.publickey' },
       ],
     },
-    { key: 'privateKeyPath', type: 'text', labelKey: 'adv.ssh.privateKeyPath', placeholderKey: 'adv.ssh.privateKeyPathPh' },
-    { key: 'proxyJump', type: 'text', labelKey: 'adv.ssh.proxyJump', placeholderKey: 'adv.ssh.proxyJumpPh' },
-    { key: 'x11Forward', type: 'switch', labelKey: 'adv.ssh.x11Forward' },
+    { key: 'privateKeyPath', type: 'text', labelKey: 'adv.ssh.privateKeyPath', placeholderKey: 'adv.ssh.privateKeyPathPh', showWhen: { authType: 'publickey' }, required: true },
+    { key: 'privateKeyPassphrase', type: 'password', labelKey: 'adv.ssh.privateKeyPassphrase', placeholderKey: 'adv.ssh.privateKeyPassphrasePh', showWhen: { authType: 'publickey' } },
+    { key: 'proxyJump', type: 'text', labelKey: 'adv.ssh.proxyJump', placeholderKey: 'adv.ssh.proxyJumpPh', hintKey: 'adv.ssh.proxyJumpHint' },
+    { key: 'x11Forward', type: 'switch', labelKey: 'adv.ssh.x11Forward', hintKey: 'adv.ssh.x11Hint' },
+    { key: 'x11Display', type: 'text', labelKey: 'adv.ssh.x11Display', placeholderKey: 'adv.ssh.x11DisplayPh', showWhen: { x11Forward: true } },
     {
       key: 'hostKeyPolicy',
       type: 'select',
@@ -229,17 +233,6 @@ export const ADVANCED_FIELDS = {
   ],
   vnc: [
     { key: 'password', type: 'password', labelKey: 'adv.vnc.password', placeholderKey: 'adv.vnc.passwordPh' },
-    {
-      key: 'quality',
-      type: 'select',
-      labelKey: 'adv.vnc.quality',
-      options: [
-        { value: 'auto', labelKey: 'adv.rdp.quality.auto' },
-        { value: 'high', labelKey: 'adv.rdp.quality.high' },
-        { value: 'medium', labelKey: 'adv.vnc.quality.medium' },
-        { value: 'low', labelKey: 'adv.rdp.quality.low' },
-      ],
-    },
     { key: 'compressLevel', type: 'number', labelKey: 'adv.vnc.compressLevel', min: 0, max: 9, placeholderKey: 'adv.vnc.levelPh' },
     { key: 'jpegQuality', type: 'number', labelKey: 'adv.vnc.jpegQuality', min: 0, max: 9, placeholderKey: 'adv.vnc.levelPh' },
     {
@@ -311,7 +304,6 @@ const XTERM_ANSI_DEFAULT = [
 export const SSH_THEME_DEFAULT = {
   background: '#000000',
   foreground: '#c0c0c0',
-  bold: '#ffffff',
   cursor: '#ffffff',
   ansi: XTERM_ANSI_DEFAULT.slice(),
 };
@@ -321,14 +313,12 @@ export function resolveSshTheme(saved) {
   const base = {
     background: SSH_THEME_DEFAULT.background,
     foreground: SSH_THEME_DEFAULT.foreground,
-    bold: SSH_THEME_DEFAULT.bold,
     cursor: SSH_THEME_DEFAULT.cursor,
     ansi: SSH_THEME_DEFAULT.ansi.slice(),
   };
   if (!saved || typeof saved !== 'object') return base;
   if (typeof saved.background === 'string' && saved.background) base.background = saved.background;
   if (typeof saved.foreground === 'string' && saved.foreground) base.foreground = saved.foreground;
-  if (typeof saved.bold === 'string' && saved.bold) base.bold = saved.bold;
   if (typeof saved.cursor === 'string' && saved.cursor) base.cursor = saved.cursor;
   if (Array.isArray(saved.ansi) && saved.ansi.length === 16) {
     base.ansi = saved.ansi.map((c) => (typeof c === 'string' && c ? c : XTERM_ANSI_DEFAULT[0]));

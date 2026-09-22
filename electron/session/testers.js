@@ -1,12 +1,6 @@
-const fs = require('fs');
-const os = require('os');
 const net = require('net');
 const crypto = require('crypto');
-const { Client } = require('ssh2');
-
-function expandHome(p) {
-  return String(p || '').replace(/^~(?=[/\\])/, os.homedir());
-}
+const { createSshConnection } = require('../ssh/connection');
 
 /** Plain TCP reachability probe. */
 function tcpProbe(host, port, timeoutMs = 2500) {
@@ -43,63 +37,25 @@ function result(ok, code, message, latencyMs, extra) {
 
 // ---------- SSH: real authentication handshake ----------
 
-function testSsh({ host, port, username, password, advanced }) {
-  const adv = advanced || {};
-  return new Promise((resolve) => {
-    const t0 = Date.now();
-    const conn = new Client();
-    let done = false;
-    const finish = (ok, code, message, extra) => {
-      if (done) return;
-      done = true;
-      try {
-        conn.end();
-      } catch (_) {}
-      resolve(result(ok, code, message, Date.now() - t0, extra));
-    };
-
-    conn.on('ready', () => finish(true, undefined, undefined, { auth: 'ok' }));
-    conn.on('keyboard-interactive', (name, instr, lang, prompts, cb) => {
-      cb((prompts || []).map(() => password || ''));
-    });
-    conn.on('error', (e) => {
-      const msg = String((e && e.message) || e || '');
-      let code = 'SSH_ERROR';
-      if (/authentication methods failed|authentication failure|permission denied|all configured/i.test(msg)) {
-        code = 'AUTH_FAILED';
-      } else if (/ECONNREFUSED|ETIMEDOUT|timed out|timeout/i.test(msg)) {
-        code = 'TCP_TIMEOUT';
-      } else if (/host denied|host key|verification failed/i.test(msg)) {
-        code = 'HOSTKEY_REJECTED';
-      }
-      finish(false, code, msg);
-    });
-
-    const opts = {
-      host,
-      port: Number(port) || 22,
-      username: username || '',
-      readyTimeout: 8000,
-      // Test mode: accept the host key, do not touch the known_hosts store.
-      hostVerifier: () => true,
-    };
-
-    if (adv.authType === 'publickey' && adv.privateKeyPath) {
-      try {
-        opts.privateKey = fs.readFileSync(expandHome(adv.privateKeyPath));
-      } catch (_) {
-        return finish(false, 'SSH_KEY_READ', '无法读取私钥: ' + adv.privateKeyPath);
-      }
-    } else {
-      opts.password = password || '';
+async function testSsh({ host, port, username, password, advanced, verifyHostKey, promptKeyboard, log, onConnection }) {
+  const started = Date.now();
+  let connection;
+  try {
+    connection = createSshConnection({ host, port: Number(port) || 22, username, password, advanced, verifyHostKey, promptKeyboard, log });
+    if (onConnection) onConnection(connection);
+    await connection.ready;
+    log && log.info('ssh', 'ssh authentication test succeeded', { host, port: Number(port) || 22, durationMs: Date.now() - started });
+    return result(true, undefined, undefined, Date.now() - started, { auth: 'ok', scope: 'authentication' });
+  } catch (error) {
+    const code = error.code || (/authentication methods failed/i.test(error.message) ? 'AUTH_FAILED' : 'SSH_ERROR');
+    log && log.warn('ssh', 'ssh authentication test failed', { host, port: Number(port) || 22, code, durationMs: Date.now() - started });
+    return result(false, code, error.message);
+  } finally {
+    if (connection) {
+      connection.close();
+      await connection.ready.catch(() => {});
     }
-
-    try {
-      conn.connect(opts);
-    } catch (e) {
-      finish(false, 'SSH_ERROR', e.message);
-    }
-  });
+  }
 }
 
 // ---------- VNC: RFB handshake + VNC password (DES) ----------

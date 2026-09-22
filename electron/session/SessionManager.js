@@ -27,7 +27,7 @@ class SessionManager {
     return this.adapters[String(protocol || '').toLowerCase()] || null;
   }
 
-  async testConnection(req) {
+  async testConnection(req, context = {}) {
     const protocol = String((req.method && req.method.protocol) || '').toLowerCase();
     const asset = req.asset || {};
     const method = req.method || {};
@@ -43,6 +43,8 @@ class SessionManager {
         username: asset.user,
         password: asset.pass,
         advanced,
+        ...context,
+        log: this.log,
       });
     }
     if (protocol === 'vnc') {

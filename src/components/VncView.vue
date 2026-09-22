@@ -181,9 +181,6 @@ export default {
         // Apply quality/compression settings
         if (r.jpegQuality != null) {
           rfb.qualityLevel = Number(r.jpegQuality);
-        } else if (r.quality != null) {
-          const qMap = { auto: 6, high: 9, medium: 6, low: 2 };
-          rfb.qualityLevel = qMap[r.quality] ?? 6;
         }
         if (r.compressLevel != null) {
           rfb.compressionLevel = Number(r.compressLevel);

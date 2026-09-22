@@ -1,490 +1,186 @@
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
 const crypto = require('crypto');
-const { Client } = require('ssh2');
+const iconv = require('iconv-lite');
+const { createSshConnection, resolveAdvanced } = require('./connection');
+const { createX11Forwarder } = require('./x11');
 
-const ADVANCED_SSH_DEFAULTS = {
-  charset: 'UTF-8',
-  term: 'xterm-256color',
-  keepAlive: 30,
-  compression: false,
-  authType: 'password',
-  privateKeyPath: '',
-  proxyJump: '',
-  x11Forward: false,
-  hostKeyPolicy: 'ask',
-};
-
-function resolveAdvanced(saved) {
-  const base = { ...ADVANCED_SSH_DEFAULTS };
-  if (!saved || typeof saved !== 'object') return base;
-  Object.keys(base).forEach((k) => {
-    const v = saved[k];
-    if (v === undefined || v === null) return;
-    if (typeof base[k] === 'string' && String(v).trim() === '') return;
-    if (typeof base[k] === 'number') {
-      const n = Number(v);
-      if (Number.isNaN(n) || String(v).trim() === '') return;
-      base[k] = n;
-      return;
-    }
-    if (typeof base[k] === 'boolean') {
-      base[k] = !!v;
-      return;
-    }
-    if (v !== '') base[k] = v;
-  });
-  return base;
-}
-
-function hostKeyFile() {
-  const dir = path.join(os.homedir(), '.omnidesk');
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, 'ssh_known_hosts.json');
-}
-
-function loadHostKeys() {
-  try {
-    const p = hostKeyFile();
-    if (!fs.existsSync(p)) return {};
-    return JSON.parse(fs.readFileSync(p, 'utf8')) || {};
-  } catch (_) {
-    return {};
-  }
-}
-
-function saveHostKey(host, port, key) {
-  try {
-    const map = loadHostKeys();
-    map[`${host}:${port}`] = key;
-    fs.writeFileSync(hostKeyFile(), JSON.stringify(map, null, 2), 'utf8');
-  } catch (_) {}
-}
-
-function fingerprint(keyBuf) {
-  return crypto.createHash('sha256').update(keyBuf).digest('base64');
-}
-
-function expandHome(p) {
-  return String(p || '').replace(/^~(?=[/\\])/, os.homedir());
-}
-
-function parseJump(str) {
-  const s = String(str || '').trim();
-  if (!s) return null;
-  const m = s.match(/^(?:([^@\s]+)@)?([^:\s]+)(?::(\d+))?$/);
-  if (!m) return null;
-  return {
-    username: m[1] || '',
-    host: m[2],
-    port: m[3] ? Number(m[3]) : 22,
-  };
-}
-
-function buildAuthOptions(adv, password, username) {
-  const opts = { username };
-  if (adv.authType === 'publickey' && adv.privateKeyPath) {
-    const keyPath = expandHome(adv.privateKeyPath);
-    opts.privateKey = fs.readFileSync(keyPath);
-  } else if (password) {
-    opts.password = password;
-  }
-  return opts;
-}
-
-/**
- * Xshell-style SSH sessions: ssh2 in main + stream over IPC to xterm.js.
- */
 class SshSessionManager {
   constructor({ send, log }) {
     this.send = send || (() => {});
     this.log = log;
     this.sessions = new Map();
-    this._seq = 0;
   }
 
-  _channel(sessionId) {
-    return 'ssh:data:' + sessionId;
-  }
-
-  _emit(sessionId, type, payload) {
-    this.send('ssh:state', { sessionId, type, ...(payload || {}) });
-    if (!this.log) return;
+  _emit(sessionId, type, payload = {}) {
     const rec = this.sessions.get(sessionId);
-    const meta = {
-      sessionId,
-      host: (payload && payload.host) || (rec && rec.host),
-      port: (payload && payload.port) || (rec && rec.port),
-    };
-    if (type === 'ready') {
-      this.log.info('ssh', 'ssh connected', meta);
-    } else if (type === 'error') {
-      this.log.error('ssh', 'ssh error', {
-        ...meta,
-        code: payload && payload.code,
-        message: payload && payload.message,
-      });
-    } else if (type === 'ended') {
-      this.log.info('ssh', 'ssh closed', meta);
-    } else if (type === 'hostkey-saved') {
-      this.log.info('ssh', 'host key saved', { ...meta, fp: payload && payload.fp });
-    } else if (type === 'hostkey-mismatch') {
-      this.log.warn('ssh', 'host key mismatch', meta);
+    this.send('ssh:state', { ...payload, sessionId, type }, rec && rec.ownerId);
+    const meta = { sessionId, host: payload.host || (rec && rec.host), port: payload.port || (rec && rec.port) };
+    if (!this.log) return;
+    if (type === 'ready') this.log.info('ssh', 'ssh connected', meta);
+    if (type === 'ended') this.log.info('ssh', 'ssh closed', meta);
+    if (type === 'error') this.log.error('ssh', 'ssh error', { ...meta, code: payload.code });
+  }
+
+  async connect(req) {
+    const sessionId = req.requestId || 'ssh-' + crypto.randomUUID();
+    if (typeof sessionId !== 'string' || !/^ssh-[a-zA-Z0-9-]{1,100}$/.test(sessionId) || this.sessions.has(sessionId)) {
+      throw Object.assign(new Error('Invalid SSH request ID'), { code: 'SSH_REQUEST' });
     }
-  }
-
-  _write(sessionId, data) {
-    const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
-    this.send(this._channel(sessionId), buf);
-  }
-
-  _hostVerifier(sessionId, adv) {
-    return (key, callback) => {
-      // ssh2 may call with (key, cb) or sync returning boolean
-      const done = typeof callback === 'function' ? callback : null;
-      try {
-        const keyBuf = key || Buffer.alloc(0);
-        const keyType = (key && key.type) || 'unknown';
-        const fp = fingerprint(keyBuf);
-        const host = (this.sessions.get(sessionId) && this.sessions.get(sessionId).host) || '';
-        const port = (this.sessions.get(sessionId) && this.sessions.get(sessionId).port) || 22;
-        const hostKeyId = `${host}:${port}`;
-        const known = loadHostKeys();
-        const prev = known[hostKeyId];
-        const policy = adv.hostKeyPolicy || 'ask';
-
-        if (prev && prev.fp === fp) {
-          if (done) done(true);
-          return true;
-        }
-        if (prev && prev.fp !== fp) {
-          this._emit(sessionId, 'hostkey-mismatch', {
-            host,
-            port,
-            prev: prev.fp,
-            current: fp,
-            type: keyType,
-          });
-          if (done) done(false);
-          return false;
-        }
-        if (policy === 'strict') {
-          this._emit(sessionId, 'hostkey-unknown', {
-            host,
-            port,
-            fp,
-            type: keyType,
-            policy,
-          });
-          if (done) done(false);
-          return false;
-        }
-        saveHostKey(host, port, { fp, type: keyType, savedAt: Date.now() });
-        this._emit(sessionId, 'hostkey-saved', { host, port, fp, type: keyType });
-        if (done) done(true);
-        return true;
-      } catch (e) {
-        if (done) done(false);
-        return false;
-      }
-    };
-  }
-
-  connect(req) {
-    const sessionId = 'ssh-' + Date.now() + '-' + (++this._seq).toString(36);
     const asset = req.asset || {};
     const method = req.method || {};
     const adv = resolveAdvanced(method.advanced || req.advanced);
-    const host = asset.host;
-    const port = Number(method.port) || 22;
-    const username = asset.user || '';
-    const password = req.password != null ? req.password : asset.pass;
-    const cols = Number(req.cols) || 120;
-    const rows = Number(req.rows) || 32;
-
-    // Pre-register metadata so hostVerifier can resolve host:port
-    this.sessions.set(sessionId, {
-      conn: null,
-      stream: null,
-      assetId: req.assetId,
-      host,
-      port,
-      adv,
-      cols,
-      rows,
-      jumpConn: null,
-    });
-
-    return new Promise((resolve, reject) => {
-      let settled = false;
-
-      const cleanupAll = () => {
-        const s = this.sessions.get(sessionId);
-        this.sessions.delete(sessionId);
-        if (!s) return;
-        try {
-          if (s.stream) s.stream.close();
-        } catch (_) {}
-        try {
-          if (s.conn) s.conn.end();
-        } catch (_) {}
-        try {
-          if (s.jumpConn) s.jumpConn.end();
-        } catch (_) {}
-      };
-
-      const fail = (err) => {
-        if (settled) return;
-        settled = true;
-        const s0 = this.sessions.get(sessionId);
-        cleanupAll();
-        const e = Object.assign(new Error(err && err.message ? err.message : String(err)), {
-          code: (err && err.code) || 'SSH_ERROR',
-        });
-        this._emit(sessionId, 'error', {
-          code: e.code,
-          message: e.message,
-          host: s0 && s0.host,
-          port: s0 && s0.port,
-        });
-        reject(e);
-      };
-
-      const attachShell = (conn) => {
-        conn.on('keyboard-interactive', (name, instr, lang, prompts, finish) => {
-          finish(password ? prompts.map(() => password) : []);
-        });
-        conn.on('ready', () => {
-          conn.shell(
-            { term: adv.term || 'xterm-256color', cols, rows },
-            (err, stream) => {
-              if (err) return fail(err);
-              const s = this.sessions.get(sessionId);
-              if (!s) return fail(new Error('session gone'));
-              s.conn = conn;
-              s.stream = stream;
-
-              stream.on('data', (d) => this._write(sessionId, d));
-              if (stream.stderr) {
-                stream.stderr.on('data', (d) => this._write(sessionId, d));
-              }
-              stream.on('close', () => {
-                if (this.sessions.has(sessionId)) {
-                  cleanupAll();
-                  this._emit(sessionId, 'ended', { host, port });
-                }
-              });
-
-              settled = true;
-              this._emit(sessionId, 'ready', {
-                sessionId,
-                host,
-                port,
-                username,
-                term: adv.term,
-              });
-              resolve({
-                sessionId,
-                host,
-                port,
-                username,
-                term: adv.term,
-                charset: adv.charset,
-              });
-            }
-          );
-        });
-        conn.on('error', (err) => fail(err));
-        conn.on('end', () => {
-          if (!settled) {
-            fail(Object.assign(new Error('SSH connection ended'), { code: 'SSH_ENDED' }));
-          } else if (this.sessions.has(sessionId)) {
-            cleanupAll();
-            this._emit(sessionId, 'ended', { host, port });
-          }
-        });
-      };
-
-      const targetConnect = (sock) => {
-        const conn = new Client();
-        attachShell(conn);
-        const opts = {
-          sock,
-          host,
-          port,
-          username,
-          readyTimeout: 20000,
-          keepaliveInterval: Number(adv.keepAlive) > 0 ? Number(adv.keepAlive) * 1000 : 0,
-          keepaliveCountMax: 3,
-          compress: !!adv.compression,
-          hostVerifier: this._hostVerifier(sessionId, adv),
-        };
-        try {
-          const auth = buildAuthOptions(adv, password, username);
-          Object.assign(opts, auth);
-        } catch (e) {
-          return fail(
-            Object.assign(new Error('无法读取私钥: ' + adv.privateKeyPath), {
-              code: 'SSH_KEY_READ',
-            })
-          );
+    const dimension = (value, fallback) => Number.isInteger(value) && value > 0 && value <= 1000 ? value : fallback;
+    const rec = {
+      ownerId: req.ownerId, assetId: req.assetId, host: asset.host, port: Number(method.port) || 22,
+      cols: dimension(req.cols, 120), rows: dimension(req.rows, 32), adv,
+      connection: null, stream: null, x11: null, ready: false, shellTimer: null, closedError: null,
+      stdout: iconv.getDecoder(adv.charset), stderr: iconv.getDecoder(adv.charset),
+    };
+    this.sessions.set(sessionId, rec);
+    let rejectClosed;
+    const closed = new Promise((_, reject) => { rejectClosed = reject; });
+    closed.catch(() => {});
+    rec.rejectClosed = rejectClosed;
+    const canceled = () => Object.assign(new Error('SSH connection canceled'), { code: 'SSH_CANCELED' });
+    try {
+      if (adv.x11Forward) {
+        const x11 = await createX11Forwarder({ display: adv.x11Display, log: this.log, sessionId });
+        if (this.sessions.get(sessionId) !== rec) {
+          x11.close();
+          throw canceled();
         }
-        // when sock is provided, host/port used for logging; ssh2 uses sock
-        if (!sock) {
-          delete opts.sock;
-        } else {
-          delete opts.host;
-          delete opts.port;
-        }
-        try {
-          conn.connect(opts);
-        } catch (e) {
-          fail(e);
-        }
-      };
-
-      const jump = parseJump(adv.proxyJump);
-      if (jump) {
-        const jumpConn = new Client();
-        const s = this.sessions.get(sessionId);
-        if (s) s.jumpConn = jumpConn;
-        jumpConn.on('ready', () => {
-          jumpConn.forwardOut('127.0.0.1', 0, host, port, (err, stream) => {
-            if (err) return fail(err);
-            targetConnect(stream);
-          });
-        });
-        jumpConn.on('error', (err) => fail(err));
-        try {
-          const jumpUser = jump.username || username;
-          let jumpAuth;
-          try {
-            jumpAuth = buildAuthOptions(
-              { ...adv, username: jumpUser },
-              password,
-              jumpUser
-            );
-          } catch (e) {
-            return fail(e);
-          }
-          jumpConn.connect({
-            host: jump.host,
-            port: jump.port,
-            username: jumpUser,
-            ...jumpAuth,
-            readyTimeout: 20000,
-            keepaliveInterval: Number(adv.keepAlive) > 0 ? Number(adv.keepAlive) * 1000 : 0,
-          });
-        } catch (e) {
-          fail(e);
-        }
-      } else {
-        // direct TCP — pass host/port so hostVerifier id is correct
-        const conn = new Client();
-        attachShell(conn);
-        const s = this.sessions.get(sessionId);
-        if (s) s.conn = conn;
-        const opts = {
-          host,
-          port,
-          username,
-          readyTimeout: 20000,
-          keepaliveInterval: Number(adv.keepAlive) > 0 ? Number(adv.keepAlive) * 1000 : 0,
-          keepaliveCountMax: 3,
-          compress: !!adv.compression,
-          hostVerifier: this._hostVerifier(sessionId, adv),
-        };
-        try {
-          Object.assign(opts, buildAuthOptions(adv, password, username));
-        } catch (e) {
-          return fail(
-            Object.assign(new Error('无法读取私钥: ' + adv.privateKeyPath), {
-              code: 'SSH_KEY_READ',
-            })
-          );
-        }
-        try {
-          conn.connect(opts);
-        } catch (e) {
-          fail(e);
-        }
+        rec.x11 = x11;
       }
-    });
+      if (this.sessions.get(sessionId) !== rec) throw canceled();
+      rec.connection = createSshConnection({
+        host: rec.host, port: rec.port, username: asset.user || '',
+        password: req.password != null ? req.password : asset.pass,
+        advanced: adv, verifyHostKey: req.verifyHostKey, promptKeyboard: req.promptKeyboard, log: this.log,
+      });
+      const onClosed = (error) => {
+        rec.closedError = rec.closedError || error || Object.assign(new Error('SSH connection closed'), { code: 'SSH_CLOSED' });
+        rejectClosed(rec.closedError);
+        if (rec.ready && this.sessions.get(sessionId) === rec) {
+          this._emit(sessionId, error ? 'error' : 'ended', error ? { code: error.code || 'SSH_ERROR', message: error.message } : {});
+          this.cleanup(sessionId);
+        }
+      };
+      rec.connection.on('closed', onClosed);
+      const client = await Promise.race([rec.connection.ready, closed]);
+      if (rec.closedError) throw rec.closedError;
+      if (this.sessions.get(sessionId) !== rec) throw canceled();
+      if (rec.x11) rec.x11.attach(client);
+      const write = (decoder, data) => {
+        if (this.sessions.get(sessionId) !== rec || rec.closedError) return;
+        const text = decoder.write(Buffer.from(data));
+        if (text) this.send('ssh:data:' + sessionId, text, rec.ownerId);
+      };
+      await Promise.race([
+        new Promise((resolve, reject) => {
+          rec.shellTimer = setTimeout(() => reject(Object.assign(new Error('SSH shell request timed out'), { code: 'SSH_SHELL_TIMEOUT' })), 20000);
+          client.shell({ term: adv.term, cols: rec.cols, rows: rec.rows }, rec.x11 ? { x11: rec.x11.options } : {}, (err, channel) => {
+            clearTimeout(rec.shellTimer);
+            rec.shellTimer = null;
+            if (rec.closedError || this.sessions.get(sessionId) !== rec) {
+              if (channel) channel.destroy();
+              return reject(rec.closedError || canceled());
+            }
+            if (err) return reject(err);
+            rec.stream = channel;
+            channel.on('error', onClosed);
+            channel.on('close', () => {
+              if (this.sessions.get(sessionId) !== rec) return;
+              for (const decoder of [rec.stdout, rec.stderr]) {
+                const text = decoder.end();
+                if (text) this.send('ssh:data:' + sessionId, text, rec.ownerId);
+              }
+              onClosed(null);
+            });
+            channel.on('data', (data) => write(rec.stdout, data));
+            if (channel.stderr) channel.stderr.on('data', (data) => write(rec.stderr, data));
+            resolve();
+          });
+        }),
+        closed,
+      ]);
+      if (rec.closedError) throw rec.closedError;
+      if (this.sessions.get(sessionId) !== rec) throw canceled();
+      rec.ready = true;
+      this._emit(sessionId, 'ready', { term: adv.term });
+      return { sessionId, host: rec.host, port: rec.port, charset: adv.charset, term: adv.term };
+    } catch (error) {
+      if (this.sessions.get(sessionId) === rec) {
+        this._emit(sessionId, error.code === 'SSH_CANCELED' ? 'ended' : 'error', { code: error.code || 'SSH_ERROR', message: error.message });
+        this.cleanup(sessionId);
+      }
+      throw error;
+    }
   }
 
-  write(sessionId, data) {
-    const s = this.sessions.get(sessionId);
-    if (!s || !s.stream) return false;
-    try {
-      const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data);
-      return s.stream.write(buf);
-    } catch (_) {
-      return false;
+  owns(sessionId, ownerId) {
+    const rec = this.sessions.get(sessionId);
+    return !!rec && rec.ownerId === ownerId;
+  }
+
+  write(sessionId, data, binary = false) {
+    const rec = this.sessions.get(sessionId);
+    if (!rec || !rec.stream) return false;
+    if (typeof data !== 'string' || data.length > 1024 * 1024) {
+      throw Object.assign(new Error('Invalid terminal input'), { code: 'SSH_INPUT' });
     }
+    if (binary && /[^\x00-\xff]/.test(data)) {
+      throw Object.assign(new Error('Invalid binary terminal input'), { code: 'SSH_INPUT' });
+    }
+    const bytes = binary ? Buffer.from(data, 'latin1') : iconv.encode(data, rec.adv.charset);
+    if (!binary && iconv.decode(bytes, rec.adv.charset, { stripBOM: false }) !== data) {
+      this.log && this.log.warn('ssh', 'terminal input cannot be encoded', { sessionId, charset: rec.adv.charset });
+      throw Object.assign(new Error('Input cannot be represented in ' + rec.adv.charset), { code: 'SSH_ENCODING' });
+    }
+    rec.stream.write(bytes);
+    return true;
   }
 
   resize(sessionId, cols, rows) {
-    const s = this.sessions.get(sessionId);
-    if (!s || !s.stream) return false;
-    const c = Number(cols) || s.cols;
-    const r = Number(rows) || s.rows;
-    // Skip identical winsize — repeated setWindow reprints the prompt and
-    // interrupts in-progress command lines.
-    if (c === s.cols && r === s.rows) return true;
-    try {
-      s.stream.setWindow(r, c, 0, 0);
-      s.cols = c;
-      s.rows = r;
-      return true;
-    } catch (_) {
-      return false;
-    }
+    const rec = this.sessions.get(sessionId);
+    if (!rec || !rec.stream) return false;
+    if (![cols, rows].every((n) => Number.isInteger(n) && n > 0 && n <= 1000)) return false;
+    if (cols === rec.cols && rows === rec.rows) return true;
+    rec.stream.setWindow(rows, cols, 0, 0);
+    rec.cols = cols;
+    rec.rows = rows;
+    return true;
   }
 
   cleanup(sessionId) {
-    const s = this.sessions.get(sessionId);
-    if (!s) return;
+    const rec = this.sessions.get(sessionId);
+    if (!rec) return;
     this.sessions.delete(sessionId);
-    try {
-      if (s.stream) {
-        try {
-          s.stream.write('exit\n');
-        } catch (_) {}
-        try {
-          if (s.stream.signal) s.stream.signal('TERM');
-        } catch (_) {}
-        try {
-          s.stream.close();
-        } catch (_) {}
-        try {
-          s.stream.end();
-        } catch (_) {}
-      }
-    } catch (_) {}
-    try {
-      if (s.conn) s.conn.end();
-    } catch (_) {}
-    try {
-      if (s.jumpConn) s.jumpConn.end();
-    } catch (_) {}
+    clearTimeout(rec.shellTimer);
+    rec.closedError = rec.closedError || Object.assign(new Error('SSH connection canceled'), { code: 'SSH_CANCELED' });
+    rec.rejectClosed(rec.closedError);
+    if (rec.x11) rec.x11.close();
+    if (rec.stream) rec.stream.destroy();
+    if (rec.connection) rec.connection.close();
   }
 
   disconnect(sessionId) {
     const existed = this.sessions.has(sessionId);
-    const s = this.sessions.get(sessionId);
+    if (existed) this._emit(sessionId, 'ended');
     this.cleanup(sessionId);
-    this._emit(sessionId, 'ended', { host: s && s.host, port: s && s.port });
     return { ok: true, existed };
   }
 
+  closeOwner(ownerId) {
+    for (const [id, rec] of this.sessions) {
+      if (rec.ownerId === ownerId) this.disconnect(id);
+    }
+  }
+
+  destroyAll() {
+    for (const id of this.sessions.keys()) this.disconnect(id);
+  }
+
   list() {
-    return [...this.sessions.entries()].map(([sessionId, s]) => ({
-      sessionId,
-      assetId: s.assetId,
-      host: s.host,
-      port: s.port,
-    }));
+    return [...this.sessions.entries()].map(([sessionId, rec]) => ({ sessionId, assetId: rec.assetId, host: rec.host, port: rec.port }));
   }
 }
 

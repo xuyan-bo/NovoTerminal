@@ -2,7 +2,6 @@ const { VncProxy } = require('../session/VncProxy');
 
 const ADVANCED_VNC_DEFAULTS = {
   password: '',
-  quality: 'auto',
   compressLevel: 6,
   jpegQuality: 6,
   shared: true,
@@ -79,14 +78,10 @@ class VncSessionManager {
     const adv = resolveAdvanced(method.advanced || req.advanced);
     const host = asset.host;
     const port = Number(method.port) || 5900;
-    const password = adv.password || (req.password != null ? req.password : asset.pass);
 
     const proxy = new VncProxy({
       host,
       port,
-      password,
-      shared: adv.shared,
-      viewOnly: adv.viewOnly,
       onState: (state, detail) => {
         this._emit(sessionId, state, detail || {});
       },
@@ -123,7 +118,6 @@ class VncSessionManager {
         localCursor: adv.localCursor,
         shared: adv.shared,
         jpegQuality: adv.jpegQuality,
-        quality: adv.quality,
         compressLevel: adv.compressLevel,
       };
     } catch (e) {

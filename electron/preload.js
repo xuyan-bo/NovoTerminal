@@ -58,6 +58,18 @@ const api = {
   // SSH terminal sessions (xterm)
   sshConnect: (req) => ipcRenderer.invoke('ssh:connect', req),
   sshWrite: (sessionId, data) => ipcRenderer.invoke('ssh:write', sessionId, data),
+  sshWriteBinary: (sessionId, data) => ipcRenderer.invoke('ssh:write-binary', sessionId, data),
+  sshAuthReply: (requestId, answers) => ipcRenderer.invoke('ssh:auth-reply', requestId, answers),
+  onSshAuthPrompt: (cb) => {
+    const handler = (_event, data) => cb(data);
+    ipcRenderer.on('ssh:auth-prompt', handler);
+    return () => ipcRenderer.removeListener('ssh:auth-prompt', handler);
+  },
+  onSshAuthCancel: (cb) => {
+    const handler = (_event, data) => cb(data);
+    ipcRenderer.on('ssh:auth-cancel', handler);
+    return () => ipcRenderer.removeListener('ssh:auth-cancel', handler);
+  },
   sshResize: (sessionId, cols, rows) => ipcRenderer.invoke('ssh:resize', sessionId, cols, rows),
   sshDisconnect: (sessionId) => ipcRenderer.invoke('ssh:disconnect', sessionId),
   sshList: () => ipcRenderer.invoke('ssh:list'),

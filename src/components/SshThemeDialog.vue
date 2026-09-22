@@ -45,7 +45,6 @@
     <div class="theme-preview" :style="previewStyle">
       <div class="preview-line">
         <span class="preview-normal">{{ $t('theme.previewNormal') }}</span>
-        <span class="preview-bold" :style="{ color: form.bold }">{{ $t('theme.previewBold') }}</span>
       </div>
       <div class="preview-ansi">
         <span
@@ -56,6 +55,7 @@
         ></span>
       </div>
     </div>
+    <p class="hint theme-note">{{ $t('theme.boldUnsupported') }}</p>
 
     <template #footer>
       <el-button size="mini" @click="reset">{{ $t('theme.reset') }}</el-button>
@@ -91,7 +91,6 @@ export default {
     basicRows() {
       return [
         { key: 'foreground', label: t('theme.normal') },
-        { key: 'bold', label: t('theme.bold') },
         { key: 'background', label: t('theme.background') },
         { key: 'cursor', label: t('theme.cursor') },
       ];
@@ -120,13 +119,15 @@ export default {
       this.form = resolveSshTheme(null);
     },
     async confirm() {
+      if (this.saving) return;
       this.saving = true;
       try {
         const hit = findAsset(this.assetId);
         if (!hit) throw new Error(t('detail.empty'));
-        const colors = resolveSshTheme(this.form);
         const methods = JSON.parse(JSON.stringify(hit.asset.methods || {}));
         const prev = methods.ssh || {};
+        // 保留旧记录的额外字段（包括 bold），但只编辑、应用 xterm 支持的颜色。
+        const colors = { ...(prev.advanced?.colors || {}), ...resolveSshTheme(this.form) };
         methods.ssh = {
           ...prev,
           enabled: true,
@@ -147,10 +148,18 @@ export default {
           })
         );
         await refresh();
+        api.logWrite?.({
+          level: 'info', source: 'settings', message: 'ssh theme saved',
+          meta: { assetId: this.assetId },
+        }).catch(() => {});
         this.$emit('saved', colors);
         this.visible = false;
         this.$message.success(t('msg.advSaved'));
       } catch (e) {
+        api.logWrite?.({
+          level: 'error', source: 'settings', message: 'ssh theme save failed',
+          meta: { assetId: this.assetId, code: e.code },
+        }).catch(() => {});
         this.$message.error(e.message || t('err.connect'));
       } finally {
         this.saving = false;
@@ -161,6 +170,10 @@ export default {
 </script>
 
 <style scoped>
+.theme-note {
+  font-size: 12px;
+  line-height: 1.5;
+}
 .theme-sec-title {
   font-size: 12px;
   color: var(--text-3, #6b7789);

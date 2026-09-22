@@ -83,6 +83,7 @@
     <method-advanced-dialog />
     <close-prompt-dialog />
     </template>
+    <ssh-auth-dialog />
   </div>
 </template>
 
@@ -95,6 +96,7 @@ import AssetDialog from './components/AssetDialog.vue';
 import GroupDialog from './components/GroupDialog.vue';
 import MethodAdvancedDialog from './components/MethodAdvancedDialog.vue';
 import ClosePromptDialog from './components/ClosePromptDialog.vue';
+import SshAuthDialog from './components/SshAuthDialog.vue';
 import { store, closeTab, api, refresh } from './store';
 import { t, applySettings } from './i18n';
 import { OS_SVG } from './constants';
@@ -130,6 +132,7 @@ export default {
     GroupDialog,
     MethodAdvancedDialog,
     ClosePromptDialog,
+    SshAuthDialog,
     SftpPage: () => import('./components/SftpPage.vue'),
   },
   data() {

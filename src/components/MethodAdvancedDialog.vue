@@ -5,14 +5,23 @@
     width="620px"
     top="8vh"
     :close-on-click-modal="false"
+    :close-on-press-escape="!saving"
+    :show-close="!saving"
     append-to-body
   >
-    <el-form label-width="120px" size="small" @submit.native.prevent>
+    <el-form label-width="120px" size="small" :disabled="saving" @submit.native.prevent>
       <el-form-item
           v-for="f in fields"
           :key="f.key"
           :label="fieldLabel(f)"
         >
+          <template #label>
+            {{ fieldLabel(f) }}
+            <el-tooltip v-if="f.hintKey" placement="top">
+              <span slot="content" class="adv-field-hint">{{ $t(f.hintKey) }}</span>
+              <i class="el-icon-info" tabindex="0" :aria-label="$t(f.hintKey)"></i>
+            </el-tooltip>
+          </template>
           <el-radio-group
             v-if="f.type === 'engineRadio'"
             v-model="form[f.key]"
@@ -77,14 +86,11 @@
         />
       </el-form-item>
     </el-form>
-    <p v-if="schemaKey === 'rdp' && form.engine === 'external'" class="hint">
-      {{ $t('adv.rdp.mstscTip') }}
-    </p>
     <template #footer>
       <span class="hint adv-default-tip">{{ $t('adv.defaultTip') }}</span>
-      <el-button size="mini" @click="reset">{{ $t('adv.reset') }}</el-button>
-      <el-button size="mini" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
-      <el-button size="mini" type="primary" @click="confirm">{{ $t('settings.save') }}</el-button>
+      <el-button size="mini" :disabled="saving" @click="reset">{{ $t('adv.reset') }}</el-button>
+      <el-button size="mini" :disabled="saving" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
+      <el-button size="mini" type="primary" :loading="saving" :disabled="saving" @click="confirm">{{ $t('settings.save') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -129,7 +135,10 @@ export default {
     },
     fields() {
       const engine = this.form.engine;
-      return this.allFields.filter((f) => !f.engines || f.engines.includes(engine));
+      return this.allFields.filter((f) =>
+        (!f.engines || f.engines.includes(engine)) &&
+        (!f.showWhen || Object.entries(f.showWhen).every(([key, value]) => this.form[key] === value))
+      );
     },
     allFields() {
       return ADVANCED_FIELDS[this.schemaKey] || [];
@@ -144,13 +153,10 @@ export default {
     title() {
       return t('adv.title', { name: this.methodName });
     },
-    context() {
-      return this.dlg && this.dlg.context;
-    },
   },
   watch: {
-    visible(v) {
-      if (v) this.loadForm();
+    dlg(v) {
+      if (v.visible) this.loadForm();
     },
   },
   methods: {
@@ -173,28 +179,61 @@ export default {
       this.form = resolveAdvanced(this.methodId, saved);
     },
     reset() {
+      if (this.saving) return;
       this.form = this.defaults();
     },
+    validate() {
+      if (this.schemaKey !== 'ssh') return true;
+      const defaults = this.defaults();
+      for (const f of this.fields) {
+        const v = this.form[f.key];
+        const blank = v == null || (typeof v === 'string' && v.trim() === '');
+        let error = '';
+        if (f.type === 'select' && !f.options.some((opt) => opt.value === v)) {
+          error = t('adv.ssh.invalidOption', { name: t(f.labelKey) });
+        } else if (f.type === 'number') {
+          const n = blank ? defaults[f.key] : Number(v);
+          if (!Number.isFinite(n) || (f.integer && !Number.isInteger(n)) || n < f.min || n > f.max) {
+            error = t('adv.ssh.keepAliveInvalid');
+          }
+        } else if (f.required && (typeof v !== 'string' || blank)) {
+          error = t('adv.ssh.privateKeyRequired');
+        }
+        if (error) {
+          this.$message.error(error);
+          return false;
+        }
+      }
+      return true;
+    },
     async confirm() {
+      if (this.saving || !this.validate()) return;
+      const dlg = this.dlg;
+      const methodId = this.methodId;
+      const started = Date.now();
+      const defaults = this.defaults();
       const payload = {};
-      // 遍历完整 schema（含 engine/client 及两套引擎字段），切换引擎不丢另一套的配置
+      // 隐藏字段仍参与保存；显式空值覆盖旧值，不能因合并配色而恢复已清除的凭据。
       this.allFields.forEach((f) => {
         const v = this.form[f.key];
-        if (v === undefined || v === null) return;
-        if (f.type === 'number') {
+        if (v === undefined || v === null) {
+          payload[f.key] = defaults[f.key];
+        } else if (f.type === 'number') {
           const n = Number(v);
-          payload[f.key] = Number.isNaN(n) || String(v).trim() === '' ? this.defaults()[f.key] : n;
+          payload[f.key] = Number.isNaN(n) || String(v).trim() === '' ? defaults[f.key] : n;
         } else if (f.type === 'switch') {
           payload[f.key] = !!v;
+        } else if (f.type === 'password' && this.schemaKey === 'ssh') {
+          payload[f.key] = v;
         } else {
-          const s = v == null ? '' : String(v);
-          payload[f.key] = s.trim() === '' ? this.defaults()[f.key] : v;
+          payload[f.key] = String(v).trim() === '' ? defaults[f.key] : v;
         }
       });
 
+      let advanced = { ...(dlg.advanced || {}), ...payload };
       this.saving = true;
       try {
-        const ctx = this.context;
+        const ctx = dlg.context;
         // 仅「资产详情」由本对话框直接写资产；「新建/编辑资产对话框」只回传 result，
         // 由 AssetDialog 保存时统一把 draft.advanced 写入资产，避免双写不一致/覆盖未保存改动
         const isDetail = ctx && ctx.type === 'detail';
@@ -203,8 +242,9 @@ export default {
           const hit = findAsset(assetId);
           if (!hit) throw new Error(t('detail.empty'));
           const methods = JSON.parse(JSON.stringify(hit.asset.methods || {}));
-          const prev = methods[this.methodId] || {};
-          methods[this.methodId] = { ...prev, enabled: true, advanced: payload };
+          const prev = methods[methodId] || {};
+          advanced = { ...(prev.advanced || {}), ...payload };
+          methods[methodId] = { ...prev, enabled: true, advanced };
           unwrap(
             await api.updateAsset(assetId, {
               methods,
@@ -221,15 +261,25 @@ export default {
           );
           await refresh();
         }
+        api.logWrite?.({
+          level: 'info', source: 'settings',
+          message: assetId ? 'advanced settings saved' : 'advanced settings staged',
+          meta: { methodId, assetId, durationMs: Date.now() - started },
+        }).catch(() => {});
+        if (this.dlg !== dlg || !this.visible) return;
         store.methodAdvancedResult = {
-          methodId: this.methodId,
-          advanced: payload,
+          methodId,
+          advanced,
           ts: Date.now(),
         };
         this.$message.success(t('msg.advSaved'));
         this.visible = false;
       } catch (e) {
-        this.$message.error(e.message || t('err.connect'));
+        api.logWrite?.({
+          level: 'error', source: 'settings', message: 'advanced settings save failed',
+          meta: { methodId, code: e.code, durationMs: Date.now() - started },
+        }).catch(() => {});
+        if (this.dlg === dlg && this.visible) this.$message.error(e.message || t('err.connect'));
       } finally {
         this.saving = false;
       }
@@ -239,6 +289,11 @@ export default {
 </script>
 
 <style scoped>
+.adv-field-hint {
+  display: block;
+  max-width: 320px;
+  line-height: 1.5;
+}
 /* 引擎单选组为行内 flex，参与行内基线，与左侧标签同一水平线并对齐 */
 .adv-engine {
   display: inline-flex;

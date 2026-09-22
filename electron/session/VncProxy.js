@@ -11,12 +11,9 @@ const { WebSocketServer, WebSocket } = require('ws');
  * and forwards every frame to a TCP socket connected to the remote VNC server.
  */
 class VncProxy {
-  constructor({ host, port, password, shared, viewOnly, onState, onEnd }) {
+  constructor({ host, port, onState, onEnd }) {
     this.host = host;
     this.port = Number(port) || 5900;
-    this.password = password || '';
-    this.shared = shared !== false;
-    this.viewOnly = !!viewOnly;
     this.onState = onState || (() => {});
     this.onEnd = onEnd || (() => {});
 
