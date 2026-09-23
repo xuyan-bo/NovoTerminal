@@ -1,0 +1,24 @@
+version: '1.0'
+name: build-linux
+displayName: Linux 打包
+triggers:
+  push:
+    branches:
+      refs:
+        - master
+stages:
+  - name: build
+    displayName: 构建 Linux 包
+    steps:
+      - step: build@node
+        name: package
+        displayName: electron-builder
+        nodeVersion: 20.11.0
+        commands:
+          - npm install
+          - npm run pack:linux
+artifacts:
+  - name: linux-packages
+    path:
+      - release/*.deb
+      - release/*.rpm
