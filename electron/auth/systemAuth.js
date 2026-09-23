@@ -21,6 +21,8 @@ const os = require('os');
 /** Chrome-style: cache a successful auth for 30 s to avoid re-prompting */
 const AUTH_CACHE_MS = 30 * 1000;
 let lastVerifiedAt = 0;
+let authGeneration = 0;
+let macAuthProcess = null;
 
 function resultMessage(code) {
   const map = {
@@ -264,24 +266,11 @@ function runPsFile(psContent, psArgs, options) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Dispatch
-// ---------------------------------------------------------------------------
-
-async function verifySystemAuth(reason, hwnd) {
-  if (process.platform !== 'win32') {
-    return { ok: false, code: 'UnsupportedPlatform', method: 'system', message: resultMessage('UnsupportedPlatform') };
-  }
-
-  if (Date.now() - lastVerifiedAt < AUTH_CACHE_MS) {
-    return { ok: true, code: 'Verified', method: 'cached', message: '验证通过' };
-  }
-
+async function verifyWindowsAuth(reason, hwnd) {
   // Step 1 — Windows Hello (face / fingerprint / PIN).
   const hello = await runPs(buildHelloScript(reason), { timeout: 190000 }).catch(() => null);
   const helloCode = hello && hello.out ? hello.out : '';
   if (helloCode === 'Verified') {
-    lastVerifiedAt = Date.now();
     return { ok: true, code: 'Verified', method: 'hello', message: '验证通过' };
   }
   if (['Canceled', 'UserCanceled', 'DisabledByPolicy', 'RetriesExhausted', 'DeviceBusy'].includes(helloCode)) {
@@ -298,7 +287,6 @@ async function verifySystemAuth(reason, hwnd) {
   const out = pw.out || 'Failed';
 
   if (out === 'Verified') {
-    lastVerifiedAt = Date.now();
     return { ok: true, code: 'Verified', method: 'password', message: '验证通过' };
   }
   if (out === 'Canceled') {
@@ -317,6 +305,80 @@ async function verifySystemAuth(reason, hwnd) {
   return { ok: false, code: 'Failed', method: 'password', message: '密码错误或验证失败' };
 }
 
-function resetAuthCache() { lastVerifiedAt = 0; }
+function macAuthResult(code, lang) {
+  const messages = {
+    Verified: ['验证通过', 'Identity verified'],
+    Canceled: ['已取消验证', 'Identity verification canceled'],
+    BadCredentials: ['系统身份验证未通过', 'System authentication failed'],
+    Unavailable: ['macOS 系统身份验证不可用，请检查登录密码和系统设置', 'macOS authentication is unavailable. Check your login password and system settings'],
+    RetriesExhausted: ['验证次数过多，请稍后重试', 'Too many authentication attempts. Try again later'],
+    DeviceBusy: ['系统身份验证正在进行，请稍后重试', 'System authentication is already in progress'],
+    HelperMissing: ['macOS 身份验证组件缺失，请重新构建或安装应用', 'The macOS authentication helper is missing. Rebuild or reinstall the app'],
+    TimedOut: ['系统身份验证超时，请重试', 'System authentication timed out. Try again'],
+    Failed: ['系统身份验证失败', 'System identity verification failed'],
+  };
+  return { ok: code === 'Verified', code, method: 'macos', message: messages[code][lang === 'en' ? 1 : 0] };
+}
+
+function verifyMacAuth(reason, lang) {
+  if (macAuthProcess) return Promise.resolve(macAuthResult('DeviceBusy', lang));
+  const message = reason || (lang === 'en' ? 'OmniDesk needs to verify your identity' : 'OmniDesk 需要验证您的身份');
+  if (typeof message !== 'string' || message.length > 1024 || message.includes('\0')) {
+    return Promise.resolve(macAuthResult('Failed', lang));
+  }
+  const { app } = require('electron');
+  const helper = app.isPackaged
+    ? path.join(process.resourcesPath, 'auth', 'omnidesk-auth')
+    : path.join(app.getAppPath(), 'build', 'auth', 'omnidesk-auth');
+  return new Promise((resolve) => {
+    macAuthProcess = execFile(helper, [message], {
+      timeout: 130000, killSignal: 'SIGKILL', maxBuffer: 4096,
+    }, (err, stdout) => {
+      macAuthProcess = null;
+      let code = String(stdout || '').trim();
+      if (err) {
+        code = err.code === 'ENOENT' ? 'HelperMissing' : (err.killed ? 'TimedOut' : 'Failed');
+      } else if (!['Verified', 'Canceled', 'BadCredentials', 'Unavailable', 'RetriesExhausted', 'Failed', 'TimedOut'].includes(code)) {
+        code = 'Failed';
+      }
+      resolve(macAuthResult(code, lang));
+    });
+  });
+}
+
+async function verifySystemAuth(reason, hwnd, { force = false, lang = 'zh', log } = {}) {
+  const startedAt = Date.now();
+  const generation = authGeneration;
+  let result;
+  if (process.platform === 'linux') {
+    result = { ok: true, code: 'Skipped', method: 'skipped', message: lang === 'en' ? 'System authentication is skipped on Linux' : 'Linux 跳过系统身份验证' };
+  } else if (process.platform !== 'win32' && process.platform !== 'darwin') {
+    result = { ok: false, code: 'UnsupportedPlatform', method: 'system', message: resultMessage('UnsupportedPlatform') };
+  } else if (!force && Date.now() - lastVerifiedAt < AUTH_CACHE_MS) {
+    result = { ok: true, code: 'Verified', method: 'cached', message: lang === 'en' ? 'Identity verified' : '验证通过' };
+  } else {
+    result = process.platform === 'darwin' ? await verifyMacAuth(reason, lang) : await verifyWindowsAuth(reason, hwnd);
+    if (generation !== authGeneration) {
+      result = { ok: false, code: 'Canceled', method: result.method, message: lang === 'en' ? 'Identity verification canceled' : '已取消验证' };
+    } else if (result.ok) {
+      lastVerifiedAt = Date.now();
+    }
+  }
+  if (log) {
+    const skipped = result.code === 'Skipped';
+    const canceled = result.code === 'Canceled' || result.code === 'UserCanceled';
+    const level = skipped || (!result.ok && !canceled) ? 'warn' : 'info';
+    log[level]('auth', skipped ? 'system authentication skipped' : 'system authentication completed', {
+      platform: process.platform, method: result.method, code: result.code, durationMs: Date.now() - startedAt,
+    });
+  }
+  return result;
+}
+
+function resetAuthCache() {
+  lastVerifiedAt = 0;
+  authGeneration++;
+  if (macAuthProcess) macAuthProcess.kill();
+}
 
 module.exports = { verifySystemAuth, resetAuthCache };

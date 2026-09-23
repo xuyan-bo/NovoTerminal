@@ -9,4 +9,5 @@ electron-dl/
 .vite/
 *.local
 generated-*.png
+/build/auth/
 

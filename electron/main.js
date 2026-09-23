@@ -297,6 +297,11 @@ function createWindow() {
     e.preventDefault();
     handleCloseIntent();
   });
+  win.on('closed', resetAuthCache);
+  win.webContents.on('render-process-gone', resetAuthCache);
+  win.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) resetAuthCache();
+  });
 
   if (isDev) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
@@ -379,6 +384,7 @@ function registerIpc() {
   handle('store:update-settings', (patch) => unwrap(store.updateSettings(patch)));
   /** Get the current main window HWND so the native auth dialog can be parented to it */
   function mainWindowHwnd() {
+    if (process.platform !== 'win32') return 0;
     try {
       const bw = BrowserWindow.getFocusedWindow() || win;
       if (!bw || bw.isDestroyed()) return 0;
@@ -389,7 +395,9 @@ function registerIpc() {
     }
   }
 
-  handle('app:verify-system-auth', async (reason) => verifySystemAuth(reason, mainWindowHwnd()));
+  handle('app:verify-system-auth', async (reason) => verifySystemAuth(reason, mainWindowHwnd(), {
+    lang: store.getSettings().lang, log: logger,
+  }));
 
   // Renderer resolved the "close window" custom prompt
   handle('app:resolve-close', (payload) => {
@@ -405,8 +413,11 @@ function registerIpc() {
     return true;
   });
   handle('store:export', async () => {
-    // sensitive: require OS identity verification like Chrome password export
-    const auth = await verifySystemAuth('导出 OmniDesk 配置（包含敏感信息）', mainWindowHwnd());
+    const lang = store.getSettings().lang;
+    const reason = lang === 'en' ? 'Export OmniDesk settings (includes sensitive information)' : '导出 OmniDesk 配置（包含敏感信息）';
+    const auth = await verifySystemAuth(reason, mainWindowHwnd(), {
+      force: process.platform === 'darwin', lang, log: logger,
+    });
     if (!auth.ok) {
       const e = new Error(auth.message || '系统身份验证失败');
       e.code = auth.code || 'AUTH_FAILED';
@@ -415,8 +426,11 @@ function registerIpc() {
     return store.exportJson();
   });
   handle('store:import', async (text) => {
-    // sensitive: require OS identity verification like export (overwrites data)
-    const auth = await verifySystemAuth('导入 OmniDesk 配置（将覆盖当前数据）', mainWindowHwnd());
+    const lang = store.getSettings().lang;
+    const reason = lang === 'en' ? 'Import OmniDesk settings (replaces current data)' : '导入 OmniDesk 配置（将覆盖当前数据）';
+    const auth = await verifySystemAuth(reason, mainWindowHwnd(), {
+      force: process.platform === 'darwin', lang, log: logger,
+    });
     if (!auth.ok) {
       const e = new Error(auth.message || '系统身份验证失败');
       e.code = auth.code || 'AUTH_FAILED';
@@ -788,7 +802,7 @@ app.whenReady().then(() => {
   createTray();
 
   // Reset auth cache on screen lock / suspend (Chrome-style: re-verify after lock)
-  if (process.platform === 'win32') {
+  if (process.platform === 'win32' || process.platform === 'darwin') {
     try {
       const { powerMonitor } = require('electron');
       powerMonitor.on('lock-screen', resetAuthCache);
@@ -809,6 +823,7 @@ app.whenReady().then(() => {
 app.on('before-quit', (e) => {
   // before-quit fires for both tray-initiated quit AND programmatic quit.
   // Clean up sessions always. Tray cleanup must happen so macOS doesn't leak it.
+  resetAuthCache();
   if (vncSessions) vncSessions.destroyAll();
   if (rdpSessions) rdpSessions.destroyAll();
   if (sshSessions) sshSessions.destroyAll();

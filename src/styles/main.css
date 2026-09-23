@@ -543,9 +543,14 @@ button {
   align-items: flex-end;
   gap: 2px;
   padding: 0;
+  width: max-content;
+  min-width: 100%;
 }
 
 .tab {
+  position: relative;
+  flex: 0 0 auto;
+  user-select: none;
   height: 30px;
   padding: 0 10px 0 12px;
   display: flex;
@@ -602,7 +607,37 @@ button {
   border-color: var(--border);
 }
 
+.tab[draggable='true'] {
+  cursor: grab;
+}
+
+.tab.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.tab.drop-before::before,
+.tab.drop-after::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.tab.drop-before::before {
+  left: 0;
+}
+
+.tab.drop-after::after {
+  right: 0;
+}
+
 .tab .x {
+  cursor: pointer;
   width: 16px;
   height: 16px;
   border-radius: 3px;

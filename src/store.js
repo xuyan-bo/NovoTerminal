@@ -56,6 +56,24 @@ export function closeTab(id) {
   }
 }
 
+export function moveTab(id, beforeId) {
+  const from = store.tabs.findIndex((tab) => tab.id === id);
+  const before = beforeId === null ? store.tabs.length : store.tabs.findIndex((tab) => tab.id === beforeId);
+  if (from < 0 || !store.tabs[from].closable || before < 0 || id === beforeId) return;
+  const to = Math.max(1, before > from ? before - 1 : before);
+  if (from === to) return;
+  const tabs = store.tabs.slice();
+  const [tab] = tabs.splice(from, 1);
+  tabs.splice(to, 0, tab);
+  store.tabs = tabs;
+  if (api.logWrite) {
+    api.logWrite({
+      level: 'info', source: 'tabs', message: 'tab reordered',
+      meta: { kind: tab.kind, fromIndex: from, toIndex: to },
+    }).catch((error) => console.warn('Tab reorder log failed', error.code));
+  }
+}
+
 export async function createGroup(payload) {
   unwrap(await api.createGroup(payload));
   await refresh();

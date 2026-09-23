@@ -17,13 +17,28 @@
         @mousedown="startResize"
       ></div>
       <section class="main">
-        <div class="tabbar-wrap">
+        <div
+          ref="tabbarWrap"
+          class="tabbar-wrap"
+          @dragover="onTabDragOver"
+          @dragleave="onTabDragLeave"
+          @drop="onTabDrop"
+        >
           <div class="tabbar">
             <div
-              v-for="t in tabs"
+              v-for="(t, index) in tabs"
               :key="t.id"
               class="tab"
-              :class="{ active: activeTab === t.id }"
+              :class="{
+                active: activeTab === t.id,
+                dragging: draggedTabId === t.id,
+                'drop-before': tabDragOver && dropBeforeTabId === t.id,
+                'drop-after': tabDragOver && dropBeforeTabId === null && index === tabs.length - 1,
+              }"
+              :data-tab-id="t.id"
+              :draggable="!!t.closable"
+              @dragstart.stop="onTabDragStart($event, t)"
+              @dragend.stop="endTabDrag"
               @click="onTabClick(t)"
             >
               <span
@@ -37,6 +52,8 @@
               <span
                 v-if="t.closable"
                 class="x"
+                @mousedown.stop.prevent
+                @dragstart.stop.prevent
                 @click.stop="closeTabById(t.id)"
               >✕</span>
             </div>
@@ -97,7 +114,7 @@ import GroupDialog from './components/GroupDialog.vue';
 import MethodAdvancedDialog from './components/MethodAdvancedDialog.vue';
 import ClosePromptDialog from './components/ClosePromptDialog.vue';
 import SshAuthDialog from './components/SshAuthDialog.vue';
-import { store, closeTab, api, refresh } from './store';
+import { store, closeTab, moveTab, api, refresh } from './store';
 import { t, applySettings } from './i18n';
 import { OS_SVG } from './constants';
 import { getProtocol } from './protocols';
@@ -105,6 +122,7 @@ import { getProtocol } from './protocols';
 const MIN_SIDEBAR_W = 180;
 const MAX_SIDEBAR_W = 640;
 const SIDEBAR_W_KEY = 'omnidesk.sidebarWidth';
+const TAB_DRAG_TYPE = 'application/x-omnidesk-tab';
 
 function parseSftpHash() {
   const h = String((typeof location !== 'undefined' && location.hash) || '').replace(/^#\/?/, '');
@@ -139,6 +157,9 @@ export default {
     return {
       sidebarWidth: 268,
       resizing: false,
+      draggedTabId: '',
+      dropBeforeTabId: null,
+      tabDragOver: false,
       sftpQuery: parseSftpHash() || {},
       isSftpRoute: !!parseSftpHash(),
     };
@@ -170,7 +191,11 @@ export default {
     },
   },
   created() {
+    this._tabScrollFrame = 0;
+    this._tabDragX = 0;
+    this._tabClickBlockedUntil = 0;
     this._onHash = () => {
+      this.endTabDrag();
       const q = parseSftpHash();
       this.sftpQuery = q || {};
       this.isSftpRoute = !!q;
@@ -201,6 +226,7 @@ export default {
     }
   },
   beforeDestroy() {
+    this.endTabDrag();
     if (this._onHash) window.removeEventListener('hashchange', this._onHash);
     if (this._off) this._off();
     if (this._offStore) this._offStore();
@@ -247,10 +273,74 @@ export default {
       if (tab.id === 'home') return this.$t('nav.home');
       return tab.title;
     },
+    onTabDragStart(event, tab) {
+      if (!tab.closable || !event.dataTransfer) {
+        event.preventDefault();
+        return;
+      }
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData(TAB_DRAG_TYPE, tab.id);
+      this.draggedTabId = tab.id;
+    },
+    onTabDragOver(event) {
+      if (!this.draggedTabId || !event.dataTransfer || !Array.from(event.dataTransfer.types).includes(TAB_DRAG_TYPE)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      this.tabDragOver = true;
+      this._tabDragX = event.clientX;
+      this.updateTabDropTarget();
+      if (!this._tabScrollFrame) this._tabScrollFrame = requestAnimationFrame(this.scrollTabsForDrag);
+    },
+    updateTabDropTarget() {
+      const tabs = this.$refs.tabbarWrap.querySelectorAll('.tab[draggable="true"]');
+      const before = Array.from(tabs).find((tab) => {
+        const rect = tab.getBoundingClientRect();
+        return this._tabDragX < rect.left + rect.width / 2;
+      });
+      this.dropBeforeTabId = before ? before.dataset.tabId : null;
+    },
+    scrollTabsForDrag() {
+      this._tabScrollFrame = 0;
+      const wrap = this.$refs.tabbarWrap;
+      if (!wrap || !this.draggedTabId || !this.tabDragOver) return;
+      const rect = wrap.getBoundingClientRect();
+      const direction = this._tabDragX < rect.left + 40 ? -1 : (this._tabDragX > rect.right - 40 ? 1 : 0);
+      const previous = wrap.scrollLeft;
+      wrap.scrollLeft += direction * 12;
+      if (wrap.scrollLeft !== previous) {
+        this.updateTabDropTarget();
+        this._tabScrollFrame = requestAnimationFrame(this.scrollTabsForDrag);
+      }
+    },
+    onTabDragLeave(event) {
+      if (event.currentTarget.contains(event.relatedTarget)) return;
+      this.tabDragOver = false;
+      cancelAnimationFrame(this._tabScrollFrame);
+      this._tabScrollFrame = 0;
+    },
+    onTabDrop(event) {
+      if (!this.draggedTabId || !event.dataTransfer || !Array.from(event.dataTransfer.types).includes(TAB_DRAG_TYPE)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this._tabDragX = event.clientX;
+      this.updateTabDropTarget();
+      moveTab(this.draggedTabId, this.dropBeforeTabId);
+      this.endTabDrag();
+    },
+    endTabDrag() {
+      if (this.draggedTabId) this._tabClickBlockedUntil = Date.now() + 150;
+      this.draggedTabId = '';
+      this.dropBeforeTabId = null;
+      this.tabDragOver = false;
+      cancelAnimationFrame(this._tabScrollFrame);
+      this._tabScrollFrame = 0;
+    },
     onTabClick(tab) {
+      if (this.draggedTabId || Date.now() < this._tabClickBlockedUntil) return;
       store.activeTab = tab.id;
     },
     closeTabById(id) {
+      if (this.draggedTabId || Date.now() < this._tabClickBlockedUntil) return;
       const tab = store.tabs.find((t) => t.id === id);
       if (!tab) return;
       if (tab.connected) {
