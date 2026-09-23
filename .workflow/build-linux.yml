@@ -10,7 +10,7 @@ stages:
   - name: build
     displayName: 构建 Linux 包
     steps:
-      - step: build@node
+      - step: build@nodejs
         name: package
         displayName: electron-builder
         nodeVersion: 20.11.0
