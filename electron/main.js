@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, clipboard, Tray, Menu, nativeImage,
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { execFile } = require('child_process');
 /** Bump when shipping renderer changes — shown in every window title */
 const APP_BUILD = 'rd2-1647';
 const { AssetStore } = require('./store/assetStore');
@@ -363,6 +364,23 @@ function createWindow() {
     const htmlPath = path.join(__dirname, '..', 'dist', 'index.html');
     win.loadURL('file://' + htmlPath.replace(/\\/g, '/') + '?t=' + Date.now());
   }
+}
+
+/**
+ * Explorer's CF_HDROP never reaches Electron — Chromium only surfaces formats it knows, so
+ * readBuffer('CF_HDROP') is empty and FileNameW carries one item. Ask the shell for the list.
+ */
+function readWinClipboardFiles() {
+  const cmd = '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;(Get-Clipboard -Format FileDropList).FullName';
+  return new Promise((resolve) => {
+    execFile('powershell.exe', ['-NoProfile', '-Command', cmd], { timeout: 4000, windowsHide: true }, (err, stdout) => {
+      if (err) {
+        logger.warn('sftp', 'clipboard file list failed', { code: err.code, message: err.message });
+        return resolve([]);
+      }
+      resolve(String(stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
+    });
+  });
 }
 
 function handle(channel, fn, withSender = false) {
@@ -976,7 +994,7 @@ function registerIpc() {
     });
     return r.canceled ? [] : r.filePaths;
   });
-  handle('sftp:clipboard-files', () => {
+  handle('sftp:clipboard-files', async (fullList) => {
     const out = [];
     const pushFile = (p) => {
       if (!p) return;
@@ -1012,43 +1030,18 @@ function registerIpc() {
       } catch (_) {}
     }
     if (process.platform === 'win32') {
-      try {
-        const w = clipboard.readBuffer('FileNameW');
-        if (w && w.length >= 2) pushFile(w.toString('ucs2').replace(/\0.*$/, '').trim());
-      } catch (_) {}
+      // Only the real paste pays for the shell round trip; the menu just needs a yes/no.
+      if (fullList) (await readWinClipboardFiles()).forEach(pushFile);
       if (!out.length) {
         try {
-          const a = clipboard.readBuffer('FileName');
-          if (a && a.length >= 1) pushFile(a.toString('utf8').replace(/\0.*$/, '').trim());
+          const w = clipboard.readBuffer('FileNameW');
+          if (w && w.length >= 2) pushFile(w.toString('ucs2').replace(/\0.*$/, '').trim());
         } catch (_) {}
       }
       if (!out.length) {
         try {
-          const buf = clipboard.readBuffer('CF_HDROP');
-          if (buf && buf.length > 20) {
-            const pFiles = buf.readUInt32LE(0);
-            const fWide = buf.readUInt32LE(16);
-            let offset = pFiles;
-            if (fWide) {
-              while (offset + 2 <= buf.length) {
-                let end = offset;
-                while (end + 1 < buf.length && !(buf[end] === 0 && buf[end + 1] === 0)) end += 2;
-                const s = buf.toString('ucs2', offset, end);
-                offset = end + 2;
-                if (!s) break;
-                pushFile(s);
-              }
-            } else {
-              while (offset < buf.length) {
-                let end = offset;
-                while (end < buf.length && buf[end] !== 0) end += 1;
-                const s = buf.toString('utf8', offset, end);
-                offset = end + 1;
-                if (!s) break;
-                pushFile(s);
-              }
-            }
-          }
+          const a = clipboard.readBuffer('FileName');
+          if (a && a.length >= 1) pushFile(a.toString('utf8').replace(/\0.*$/, '').trim());
         } catch (_) {}
       }
     }

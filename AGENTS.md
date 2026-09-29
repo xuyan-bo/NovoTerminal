@@ -38,7 +38,7 @@
 - 普通页面使用 store 页签；SFTP 使用独立窗口的 `#sftp?assetId=...` 入口，拆分出去的会话窗口使用 `#session?kind=...&tabId=...`，两者都不擅自迁移为另一套路由。
 - SSH 实际使用主进程 ssh2 与渲染进程 xterm；VNC 使用主进程代理与 noVNC；不能把 `SessionManager` 的 SSH/VNC 占位适配器当作真实连接实现。
 - 重型会话组件通过异步 import 按需加载，不能为了读取常量反向引入整个视图或主进程模块。
-- `README.md`、`DESIGN.md`、`ROADMAP.md` 和 `docs/` 可作背景参考，实现与其不一致时应核对代码。
+- `README.md` 可作背景参考，实现与其不一致时应核对代码；项目不再维护设计说明、路线图与交互原型，历史目标一律以当前代码为准，不得据此推断已实现功能。
 
 ## 3. 编码风格
 
@@ -117,6 +117,7 @@
 - 面板、根节点和 document 的多层监听不能导致同一次 drop 重复传输；保持事件传播控制和去重锁。
 - 不随意合并 `onZoneDrop` 与 `runDrop`：前者处理面板直传，后者是区域判定与 document 兜底；两者的文件/文件夹分发统一收敛在 `transferMethods.runTransfers(items, zoneSide, destDir)`（文件走 `uploadPaths`/`downloadPaths`，文件夹走 `transferFolderUpload`/`transferFolderDownload` 聚合任务），目标目录由 `dragDropMethods.localDropDir` 解析。
 - 面板 `selected` 是名称数组，选中状态由 `selectionMethods` 持有：普通单击替换、多选修饰键切换（macOS 用 Cmd、其他平台用 Ctrl）、Shift 按锚点范围选、空白区橡皮筋框选、Ctrl/Cmd+A 全选、Escape 清空；导航与刷新必须同时清空选中与锚点。框选只能从 `.file-list` 空白处起手，行上按下要保持 HTML5 拖拽语义。
+- 本机文件管理器复制的文件用 Ctrl/Cmd+V 上传到远端当前目录（`transferMethods.pasteFromClipboard`，与远端空白区右键「粘贴」共用同一条路径），未连接时不劫持按键。Windows 下 Electron 读不到 `CF_HDROP`（Chromium 不透出该格式，`FileNameW` 只有首项），完整列表由主进程经 `Get-Clipboard -Format FileDropList` 获取，仅在真正粘贴时调用；菜单置灰判断走廉价的 `FileNameW` 探测。
 - 拖拽载荷是 `{ side, list }`：被拖行属于选中集时携带全部选中项，否则只携带该行；右键菜单项随选中数量变化（多项时不提供重命名，删除按数量切换确认文案）。空白处右键固定包含新建目录、刷新、全选（远端侧另有粘贴）。
 - 列头排序由页面按侧持有 `{ key: 'name'|'size'|'time', dir }`，统一经 `utils.sortItems` 排序：`..` 恒在首位、目录先于文件、组内按列排序。按时间排序依赖主进程 `SftpManager.list`/`localList` 返回的原始 `mtimeMs`，不要用本地化后的 `mtime` 字符串比较；新增列表字段时同步两处。
 - 保持本机/远端路径规则独立，不能用 Windows 分隔符拼远端路径，也不能让路径工具变更悄悄改变已有目标位置。

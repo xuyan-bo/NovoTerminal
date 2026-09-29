@@ -46,6 +46,30 @@ export default {
     for (const x of dirs) await this.transferFolderUpload(x.path, dir);
   },
 
+  /** Paste files copied in the OS file manager into the current remote directory. */
+  async pasteFromClipboard() {
+    if (!api.sftpClipboardFiles) {
+      this.$message.error(t('msg.needElectron'));
+      return;
+    }
+    if (this._pasting) return;
+    this._pasting = true;
+    let files = [];
+    try {
+      files = unwrap(await api.sftpClipboardFiles(true)) || [];
+    } catch (_) {
+      files = [];
+    } finally {
+      this._pasting = false;
+    }
+    if (!files.length) {
+      this.$message.warning(t('sftp.clipboardEmpty'));
+      return;
+    }
+    this.pushDlog(`paste-clipboard n=${files.length} → ${this.remotePath}`);
+    await this.uploadPaths(files, this.remotePath);
+  },
+
   /** Folder upload: the task row shows up at once, directories are listed and sent one by one. */
   async transferFolderUpload(localDir, remoteDir) {
     if (!this.connId) return;

@@ -132,7 +132,7 @@ const api = {
   sftpPickLocalFiles: () => ipcRenderer.invoke('sftp:pick-local-files'),
   sftpPickLocalDir: () => ipcRenderer.invoke('sftp:pick-local-dir'),
   sftpLocalHome: () => ipcRenderer.invoke('sftp:local-home'),
-  sftpClipboardFiles: () => ipcRenderer.invoke('sftp:clipboard-files'),
+  sftpClipboardFiles: (fullList) => ipcRenderer.invoke('sftp:clipboard-files', !!fullList),
   sftpLocalCopy: (src, destDir) => ipcRenderer.invoke('sftp:local-copy', src, destDir),
   /** Native drag out to Explorer: main downloads remote → temp then startDrag */
   sftpStartDrag: (payload) => ipcRenderer.send('sftp:start-drag', payload),

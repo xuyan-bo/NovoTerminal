@@ -1,58 +1,281 @@
-# OmniDesk 开发说明（v0.1）
+# OmniDesk
 
-## 环境
+本地优先（local-first）的一体化远程运维工作台：把 SSH 终端、VNC / RDP 远程桌面、SFTP 文件传输和资产凭据管理收进同一个桌面应用，会话以页签编排、可拆成独立窗口，数据全部存在你自己机器上。
 
-- Node.js 18+（本机可用 `node -v`）
-- Windows 首发；RDP 通过系统 `mstsc.exe`
+A local-first remote operations workbench: SSH terminals, VNC / RDP remote desktops, SFTP transfers and asset/credential management in one desktop app. Sessions live in tabs, can be detached into their own windows, and all data stays on your machine.
 
-## 常用命令
+[![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![version](https://img.shields.io/badge/version-0.1.0-informational)
 
-```powershell
-# 安装依赖（国内可设镜像）
-$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+仓库主页 / Homepage：<https://gitee.com/xu-san333/omni-desk>
+
+> 目录 / Contents：[中文](#中文) · [English](#english) · [开发约定](#开发与约定)
+
+---
+
+## 中文
+
+### 界面预览
+
+> 以下图片位待补充：把截图按同名放入 `screenshots/` 即可显示。
+
+| 首页与资产 | SSH 终端 |
+| --- | --- |
+| ![首页与资产](screenshots/home.png) | ![SSH 终端](screenshots/ssh.png) |
+
+| VNC 远程桌面 | RDP 远程桌面 |
+| --- | --- |
+| ![VNC 远程桌面](screenshots/vnc.png) | ![RDP 远程桌面](screenshots/rdp.png) |
+
+| SFTP 双栏传输 | 传输队列 |
+| --- | --- |
+| ![SFTP 双栏](screenshots/sftp.png) | ![传输队列](screenshots/transfer-queue.png) |
+
+| 会话页签拆分为独立窗口 | 运行日志 |
+| --- | --- |
+| ![独立会话窗口](screenshots/detached-window.png) | ![运行日志](screenshots/logs.png) |
+
+| 设置 | 资产高级参数 |
+| --- | --- |
+| ![设置](screenshots/settings.png) | ![高级参数](screenshots/advanced.png) |
+
+### 核心能力
+
+**会话与协议**
+
+- **SSH**：主进程 `ssh2` + 渲染端 xterm 真连接，支持密码 / 私钥交互、首次连接主机密钥确认与保存、终端配色方案、复制粘贴与自适应尺寸。
+- **VNC**：主进程建立本地代理，渲染端用 noVNC 内嵌显示，凭据由应用保管，无需外部客户端。
+- **RDP 双引擎**：既可以调用系统 `mstsc.exe`（独立窗口），也可以选择内嵌 IronRDP-WASM 画布；引擎与分辨率、色深等参数在资产的高级设置里配置。
+- **页签编排**：会话以页签打开，同资产重复打开只激活已有实例；栏内拖拽排序；把会话页签拖出栏外或右键菜单可拆成独立窗口，SSH 会话迁移不断连、输出尾巴会重放，拖回页签栏即重新挂载。
+
+**文件传输（SFTP）**
+
+- 独立窗口承载双栏面板：本机侧与远端侧各自的导航、路径跳转、列头排序（名称 / 大小 / 时间）、`..` 与目录优先。
+- 选择交互对齐系统文件管理器：单击替换、Ctrl / Cmd 切换、Shift 范围选、空白处橡皮筋框选、Ctrl / Cmd+A 全选、Esc 清空。
+- 传输：单个文件批量上传下载，文件夹聚合成一个可展开的任务树（懒加载渲染、边扫边传），支持暂停 / 恢复 / 取消、覆盖确认、终态任务延时回收。
+- 双向拖拽：从系统文件管理器拖入即上传 / 下载；选中多行一起拖动；远端文件可拖出到本机目录。
+- 系统剪贴板粘贴：在本机文件管理器复制文件后，在远端目录按 Ctrl / Cmd+V（或右键「粘贴」）上传。
+
+**数据与安全**
+
+- 资产、分组、最近连接与设置统一持久化，凭据经 `safeStorage` 加密后以 JSON 存放；数据路径可自定义并自动迁移。
+- 备份与还原：导出 / 导入配置前先做系统身份验证——Windows 走 Hello / 账号密码，macOS 用原生 `LocalAuthentication`（查看可复用 30 秒缓存，导入导出重新认证），Linux 经确认后跳过。
+- 运行日志持久化到本地，应用内可查看：连接建立 / 断开 / 失败、IPC 错误、SFTP 任务起止都留有记录，日志不含密码与私钥。
+
+**界面与体验**
+
+- 明暗主题，默认跟随系统；中英双语，文案即时切换；支持页面缩放与字体设置。
+- 所有可滚动区域统一为细滚动条（含终端、桌面画布与文件列表）。
+- 关闭页签 / 窗口时若有活动会话会二次确认，避免误断连。
+
+### 快速开始
+
+```bash
+# 1. 安装依赖（国内建议设置 Electron 镜像）
 npm install
 
-# 构建渲染层 + 启动 Electron（生产预览）
+# 2. 开发：开两个终端，先起 Vite 再起 Electron
+npm run dev          # Vite @ http://127.0.0.1:5173
+npm run electron     # 另一个终端，连接 dev server
+
+# 3. 生产预览：先构建渲染层，再启动 Electron
 npm start
 
-# 开发：两个终端
+# 4. 打包
+npm run pack:win     # Windows x64（nsis + 7z）
+npm run pack:mac     # macOS（dmg + zip，需在 macOS 上执行）
+npm run pack:linux   # Linux（deb + rpm + AppImage，需在 Linux 上执行）
+```
+
+要求 Node.js 18 以上（Electron 33 / Vite 5）。国内网络安装 Electron 或 electron-builder 二进制慢时：
+
+```bash
+export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+export ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/
+```
+
+| 命令 | 说明 |
+| --- | --- |
+| `npm run dev` | 只启动 Vite，单独运行没有 Electron 能力 |
+| `npm run electron` | 依赖已运行的 5173 端口；macOS 启动前自动编译认证组件 |
+| `npm run build:renderer` | 生产渲染构建，会生成 `dist/`，不是轻量语法检查 |
+| `npm start` | 构建 + 启动 Electron，不是开发服务 |
+| `npm run build:auth:mac` | 仅在 macOS 编译认证组件到 `build/auth`，需要 Xcode Command Line Tools |
+| `npm run lint` | 当前只打印占位消息，不能作为静态检查通过的证据 |
+
+### 平台支持
+
+| 能力 | Windows | macOS | Linux |
+| --- | :---: | :---: | :---: |
+| SSH / VNC / SFTP | ✅ | ✅ | ✅ |
+| RDP 系统客户端 | ✅ `mstsc.exe` | ❌ | ❌ |
+| RDP 内嵌画布（IronRDP-WASM） | ✅ | ✅ | ✅ |
+| 系统身份验证（导入导出） | Hello / 账号密码 | 原生弹窗 | 跳过并记为 `Skipped` |
+| 从系统文件管理器复制后粘贴 | ✅ 多文件 | 单文件 | 尽力（取决于 `text/uri-list`） |
+| 把远端文件拖出到系统文件夹 | ✅ | ✅ | ❌ 不支持（`startDrag` 限制） |
+| 安装包 | nsis / 7z | dmg / zip | deb / rpm / AppImage |
+
+打包环境不可互换：macOS 包必须在 Mac 上打，Linux 包必须在 Linux 上打。
+
+Linux 包由仓库自带的 Gitee Go 流水线 `.workflow/build-linux.yml` 构建（Node 24，`npm install` + `npm run pack:linux`），产物归档在 `release/`；Windows 与 macOS 安装包仍需在本机对应系统上执行 `pack:win` / `pack:mac`。
+
+### 项目结构
+
+```
+electron/            主进程（CommonJS）
+  main.js            窗口与应用生命周期、IPC 编排
+  preload.js         contextBridge 暴露受限 API
+  session/           会话管理、TCP 探测、mstsc 适配器
+  ssh/ vnc/ rdp/     各协议的连接、代理与会话管理
+  sftp/SftpManager   SFTP 连接、目录列举与传输队列
+  store/assetStore   资产持久化（备份、自定义路径）
+  auth/ logs/        系统身份验证、持久化运行日志
+src/                 渲染层（Vue 2.7 Options API）
+  App.vue            页面 / 页签编排
+  store.js           共享状态（Vue.observable，无 Vuex）
+  protocols.js       协议标识、默认端口、异步会话组件
+  constants.js       访问方式目录与高级参数 schema
+  components/        视图组件；sftp/ 下放面板、队列与纯逻辑模块
+  i18n.js styles/    双语文案、主题变量与公共样式
+build/ scripts/      图标与认证组件构建、离线校验脚本
+```
+
+### 技术栈
+
+| 层 | 选型 |
+| --- | --- |
+| 桌面容器 | Electron 33 |
+| 视图 | Vue 2.7（Options API）+ Element UI 2.15 + Vite 5 |
+| 状态 | `Vue.observable`，无 Vuex / Pinia / vue-router |
+| 终端 | `@xterm/xterm` 5.5 + fit 插件 |
+| 远程桌面 | `ironrdp-wasm` 1.1、系统 `mstsc.exe`、`@novnc/novnc` 1.7 |
+| 连接 | `ssh2` 1.17（SSH / SFTP）、`ws` 8（本地代理） |
+| 其他 | `echarts` 6、`iconv-lite` 0.6 |
+| 打包 | `electron-builder` 25 |
+
+### 已知限制
+
+- 内嵌 RDP 与部分服务端（如 xrdp）存在编码兼容问题，必要时改用系统 `mstsc` 引擎。
+- `mstsc` 只能带到命令行支持的程度，剪贴板与文件复制行为跟随本机设置。
+- 导出 / 导入目前不含设置与最近连接，凭据字段存在明文情况；改动前请看仓库内说明。
+- `scripts/` 下的 `test-ssh-*.cjs` 是离线校验，可用 `node --test scripts/` 运行；项目没有浏览器端测试套件。
+- 渲染层 `npm run dev` 单独运行时不具备 Electron 能力，连接类操作会明确提示不可用。
+
+---
+
+## English
+
+### Screenshots
+
+> Placeholders below are awaiting uploads — drop the images into `screenshots/` with the same names.
+
+| Home & assets | SSH terminal |
+| --- | --- |
+| ![Home & assets](screenshots/home.png) | ![SSH terminal](screenshots/ssh.png) |
+
+| VNC desktop | RDP desktop |
+| --- | --- |
+| ![VNC desktop](screenshots/vnc.png) | ![RDP desktop](screenshots/rdp.png) |
+
+| SFTP dual pane | Transfer queue |
+| --- | --- |
+| ![SFTP dual pane](screenshots/sftp.png) | ![Transfer queue](screenshots/transfer-queue.png) |
+
+| Detached session window | Runtime logs |
+| --- | --- |
+| ![Detached session window](screenshots/detached-window.png) | ![Runtime logs](screenshots/logs.png) |
+
+| Settings | Advanced options |
+| --- | --- |
+| ![Settings](screenshots/settings.png) | ![Advanced options](screenshots/advanced.png) |
+
+### Features
+
+**Sessions & protocols**
+
+- **SSH**: real connections through `ssh2` in the main process with xterm in the renderer — password / key prompts, first-run host key confirmation and storage, terminal themes, copy & paste, fit-to-window.
+- **VNC**: a local proxy is started by the main process and rendered inline with noVNC; credentials never leave the app.
+- **RDP, two engines**: launch the system `mstsc.exe` in its own window, or render an inline IronRDP-WASM canvas. Engine, resolution and colour depth are configured per asset.
+- **Tab orchestration**: sessions open as tabs and reopening an asset activates the existing instance. Drag tabs to reorder inside the bar, or drag a session tab out of the bar (or use its context menu) to detach it into a standalone window — SSH keeps its connection alive and replays its output tail; dropping the window back onto the tab bar re-hosts it.
+
+**File transfer (SFTP)**
+
+- Its own window with two panes: independent navigation, path jumping, column sorting (name / size / time), `..` and directories first.
+- Selection matches the native file manager: click to replace, Ctrl / Cmd to toggle, Shift for a range, rubber-band marquee on empty space, Ctrl / Cmd+A, Esc to clear.
+- Transfers: batch upload / download, folders aggregated into one expandable task tree (lazily rendered, scanned and sent incrementally), pause / resume / cancel, overwrite confirmation, finished tasks reclaimed after a delay.
+- Drag both ways: drop files in from the OS file manager, drag a whole selection, or drag remote files out to a local folder.
+- Clipboard paste: copy files in the OS file manager, then press Ctrl / Cmd+V (or use the remote context menu) to upload them.
+
+**Data & security**
+
+- Assets, groups, recent connections and settings persist together; credentials are encrypted with `safeStorage` before being written as JSON. The data path is configurable and migrates automatically.
+- Backup and restore require system authentication first — Windows Hello / password on Windows, native `LocalAuthentication` on macOS (a 30-second cache is reusable for viewing; import and export re-authenticate), explicitly skipped on Linux.
+- Runtime logs are persisted and browsable in-app: connect / disconnect / failure, IPC errors and SFTP task lifecycle are all recorded, without passwords or private keys.
+
+**Interface**
+
+- Light and dark themes, following the system by default; bilingual UI (Chinese / English) that switches instantly; page zoom and font settings.
+- One thin scrollbar style across every scrollable area, including terminals, desktop canvases and file lists.
+- Closing an active session always asks for confirmation first.
+
+### Quick start
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Development — two terminals: Vite first, then Electron
 npm run dev          # Vite @ http://127.0.0.1:5173
-npm run electron     # 连接 dev server
+npm run electron
 
-# 仅打包 Windows
-npm run pack:win
+# 3. Production preview: build the renderer, then run Electron
+npm start
+
+# 4. Package
+npm run pack:win     # Windows x64 (nsis + 7z)
+npm run pack:mac     # macOS (dmg + zip) — must run on macOS
+npm run pack:linux   # Linux (deb + rpm + AppImage) — must run on Linux
 ```
 
-若 `require('electron')` 报未正确安装，确认 `node_modules/electron/path.txt` 内容为 `electron.exe`，且 `dist/electron.exe` 存在；可用镜像重跑 `node node_modules/electron/install.js`。
+Requires Node.js 18 or newer (Electron 33 / Vite 5). Linux packages are built by the Gitee Go pipeline `.workflow/build-linux.yml` and archived from `release/`; Windows and macOS builds must run on their own OS.
 
-**Electron 二进制缺 DLL（0xC0000135）时**：用镜像完整包覆盖 dist：
+### Platform support
 
-```powershell
-$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
-curl.exe -L -o electron-dl\electron-v33.4.11-win32-x64.zip https://npmmirror.com/mirrors/electron/33.4.11/electron-v33.4.11-win32-x64.zip
-Remove-Item -Recurse node_modules\electron\dist
-Expand-Archive electron-dl\electron-v33.4.11-win32-x64.zip node_modules\electron\dist -Force
-Set-Content node_modules\electron\path.txt electron.exe -NoNewline
-```
+| Capability | Windows | macOS | Linux |
+| --- | :---: | :---: | :---: |
+| SSH / VNC / SFTP | ✅ | ✅ | ✅ |
+| System RDP client | ✅ `mstsc.exe` | ❌ | ❌ |
+| Inline RDP canvas (IronRDP-WASM) | ✅ | ✅ | ✅ |
+| System authentication for export / import | Hello / password | native prompt | skipped, logged as `Skipped` |
+| Paste files copied in the OS file manager | ✅ multi-file | single file | best effort (`text/uri-list`) |
+| Drag remote files out to a system folder | ✅ | ✅ | ❌ (`startDrag` unsupported) |
+| Installers | nsis / 7z | dmg / zip | deb / rpm / AppImage |
 
-## 目录
+### Project layout
 
-```
-electron/          主进程
-  main.js          窗口 + IPC
-  preload.js       contextBridge API
-  store/           资产库（safeStorage 加密 JSON）
-  session/         SessionManager + adapters
-    adapters/RdpWindowsMstscAdapter.js  ← v0.2 外置 mstsc
-src/               Vue2 渲染层
-  App.vue store.js components/
-dist/              vite 产物（electron 加载）
-prototype/         高保真交互原型（设计参考）
-docs/TECH-RDP-MSTSC.md
-```
+`electron/` holds the CommonJS main process — windows and IPC orchestration plus one module per protocol (`ssh/`, `vnc/`, `rdp/`, `sftp/`), persistence in `store/`, authentication in `auth/` and logging in `logs/`. `src/` is the Vue 2.7 renderer: `App.vue` orchestrates pages and tabs, `store.js` holds shared observable state, `protocols.js` registers protocol ids, default ports and async session components, `constants.js` describes the access-method catalogue and advanced schemas, and `components/` contains the views (SFTP keeps its panels and logic modules under `components/sftp/`).
 
-## 功能边界（v0.1）
+### Known limitations
 
-- 资产 / 分组 CRUD、首页四块、双击详情 Tab、设置（主题/语言/数据路径/关于）
-- RDP：TCP 测试 + spawn mstsc（Windows）
-- VNC / SSH：适配器占位，后续版本
+- The inline RDP engine has encoding-compatibility issues against some servers (for example xrdp); switch to the system `mstsc` engine when needed.
+- `mstsc` can only be driven as far as its command line allows, so clipboard and file-copy behaviour follow local settings.
+- Export / import currently omits settings and recent connections, and some credential fields are stored in clear text.
+- `scripts/test-ssh-*.cjs` are offline checks runnable with `node --test scripts/`; there is no browser test suite.
+- Running `npm run dev` alone has no Electron capabilities — connection actions report that they are unavailable instead of pretending to succeed.
+
+### License
+
+MIT — see [LICENSE](./LICENSE).
+
+---
+
+## 开发与约定
+
+- 提交与推送、真实服务器操作需要先获得明确授权。
+- 改代码前请读根目录 [`AGENTS.md`](./AGENTS.md)：技术栈与职责边界、编码风格、协议接入完整链路、页签与资源生命周期、SFTP 改动约束、IPC 与凭据安全都在那里维护，本 README 与代码不一致时**以代码为准**。
+- 本仓库不再维护设计说明、路线图与交互原型；历史目标不应当作已实现功能。
+
+## License
+
+MIT © OmniDesk — 详见 [LICENSE](./LICENSE) / see [LICENSE](./LICENSE).

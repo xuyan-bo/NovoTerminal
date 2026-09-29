@@ -176,6 +176,7 @@ export default {
   created() {
     // Vue 2 does not proxy data keys beginning with an underscore.
     this._dropLock = {};
+    this._pasting = false;
     this._lastDrag = null;
     this._marqueeBase = null;
     this._split = null;
@@ -570,16 +571,7 @@ export default {
           return;
         }
         if (it.act === 'paste') {
-          if (!api.sftpClipboardFiles) {
-            this.$message.error(t('msg.needElectron'));
-            return;
-          }
-          const files = unwrap(await api.sftpClipboardFiles());
-          if (!files || !files.length) {
-            this.$message.warning(t('sftp.clipboardEmpty'));
-            return;
-          }
-          await this.uploadPaths(files, this.remotePath);
+          await this.pasteFromClipboard();
           return;
         }
         if (it.act === 'mkdir') {

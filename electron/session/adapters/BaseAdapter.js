@@ -1,6 +1,5 @@
 /**
- * Session adapter contract — see docs/TECH-RDP-MSTSC.md
- * capabilities() drives UI enable/disable (no fake options).
+ * Session adapter contract — capabilities() drives UI enable/disable (no fake options).
  */
 class BaseAdapter {
   constructor() {

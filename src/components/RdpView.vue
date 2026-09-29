@@ -57,7 +57,7 @@ import init, {
 import createFullscreenMixin from './session/fullscreen';
 
 // keyboard `e.code` → IronRDP scancode (set-top boxes style scancodes), ported
-// from the ironrdp-wasm example. See docs/TECH-RDP-IRONRDP.md (future).
+// from the ironrdp-wasm example.
 const SCANCODE_MAP = {
   'Escape': 0x01, 'Digit1': 0x02, 'Digit2': 0x03, 'Digit3': 0x04,
   'Digit4': 0x05, 'Digit5': 0x06, 'Digit6': 0x07, 'Digit7': 0x08,

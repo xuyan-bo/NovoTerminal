@@ -88,10 +88,16 @@ export default {
       return;
     }
     if (!isMultiKey(e) || e.altKey) return;
-    if (String(e.key).toLowerCase() === 'a') {
+    const key = String(e.key).toLowerCase();
+    if (key === 'a') {
       e.preventDefault();
       const side = this.activePanel();
       this.setSel(side, this.selectableNames(side));
+      return;
+    }
+    if (key === 'v' && this.connId) {
+      e.preventDefault();
+      this.pasteFromClipboard();
     }
   },
 };
