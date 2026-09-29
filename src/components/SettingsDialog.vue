@@ -45,6 +45,23 @@
           </div>
           <span class="hint" style="margin-left:8px">{{ $t('settings.previewLang') }}</span>
         </el-form-item>
+        <el-form-item :label="$t('settings.zoom')">
+          <div class="zoom-row">
+            <el-slider v-model="form.zoom" :min="50" :max="200" :step="10" />
+            <span class="zoom-val">{{ form.zoom }}%</span>
+          </div>
+          <span class="hint">{{ $t('settings.zoomApply') }}</span>
+        </el-form-item>
+        <el-form-item :label="$t('settings.font')">
+          <el-select v-model="form.font" style="width:100%" @change="onFont">
+            <el-option
+              v-for="f in fonts"
+              :key="f.id"
+              :label="$t('settings.font.' + f.id)"
+              :value="f.id"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item :label="$t('settings.closeAction')">
           <el-radio-group v-model="form.closeAction">
             <el-radio :label="'ask'">{{ $t('settings.closeActionAsk') }}</el-radio>
@@ -56,14 +73,21 @@
 
       <div class="set-section">
         <h4 class="set-h">{{ $t('settings.data') }}</h4>
-        <el-form-item :label="$t('settings.dataPath')" prop="dataPath">
+        <el-form-item prop="dataPath">
+          <template slot="label">
+            {{ $t('settings.dataPath') }}
+            <el-tooltip :content="$t('settings.dataPathTip')" placement="top">
+              <i class="el-icon-info"></i>
+            </el-tooltip>
+          </template>
           <div class="path-row">
             <el-input v-model="form.dataPath" readonly />
             <el-button :loading="browsing" @click="browse">{{ $t('settings.browse') }}</el-button>
           </div>
         </el-form-item>
-        <el-form-item :label="$t('settings.currentDb')">
-          <span class="hint">{{ $t('settings.currentDbVal') }}</span>
+        <el-form-item :label="$t('settings.backup')">
+          <el-button size="mini" icon="el-icon-download" @click="exportJson">{{ $t('settings.exportCfg') }}</el-button>
+          <el-button size="mini" icon="el-icon-upload2" @click="importJson">{{ $t('settings.importCfg') }}</el-button>
         </el-form-item>
       </div>
 
@@ -99,7 +123,8 @@
 
 <script>
 import { store, api, unwrap, refresh } from '../store';
-import { applyTheme, setLocale, t } from '../i18n';
+import { applyTheme, applyFont, setLocale, t } from '../i18n';
+import { UI_FONTS } from '../constants';
 import locale from 'element-ui/lib/locale';
 import zhLocale from 'element-ui/lib/locale/lang/zh-CN';
 import enLocale from 'element-ui/lib/locale/lang/en';
@@ -115,7 +140,8 @@ export default {
         { id: 'light', label: '浅色' },
         { id: 'system', label: '跟随系统' },
       ],
-      form: { theme: 'dark', lang: 'zh', dataPath: '', closeAction: 'ask' },
+      fonts: UI_FONTS,
+      form: { theme: 'system', lang: 'zh', dataPath: '', zoom: 100, font: 'default', closeAction: 'ask' },
       rules: {
         theme: [
           {
@@ -168,18 +194,24 @@ export default {
     async load() {
       const s = (await api.getSettings()) || store.snapshot.settings || {};
       this.form = {
-        theme: s.theme || 'dark',
+        theme: s.theme || 'system',
         lang: s.lang || 'zh',
         dataPath: s.dataPath || '',
+        zoom: Math.min(200, Math.max(50, Number(s.zoom) || 100)),
+        font: s.font || 'default',
         closeAction: s.closeAction || 'ask',
       };
       applyTheme(this.form.theme);
+      applyFont(this.form.font);
       setLocale(this.form.lang);
       locale.use(this.form.lang === 'en' ? enLocale : zhLocale);
       store.localeTick++;
       this.$nextTick(() => {
         if (this.$refs.form) this.$refs.form.clearValidate();
       });
+    },
+    onFont(id) {
+      applyFont(id);
     },
     onTheme(id) {
       this.form.theme = id;
@@ -210,6 +242,53 @@ export default {
         this.browsing = false;
       }
     },
+    async exportJson() {
+      try {
+        // OS identity is enforced in main (store:export); surface friendly errors here
+        const text = unwrap(await api.exportGroups());
+        const blob = new Blob([text], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'omnidesk-groups.json';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (e) {
+        this.authFriendlyError(e);
+      }
+    },
+    importJson() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'application/json,.json';
+      input.onchange = async () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          if (api.importGroups) {
+            // OS identity is enforced in main (store:import); surface friendly errors here
+            unwrap(await api.importGroups(text));
+          } else {
+            throw new Error(t('msg.needElectron'));
+          }
+          await refresh();
+          this.$message.success(t('settings.importDone'));
+        } catch (e) {
+          this.authFriendlyError(e);
+        }
+      };
+      input.click();
+    },
+    authFriendlyError(e) {
+      const code = (e && e.code) || '';
+      let msg = e.message || String(e);
+      if (/Canceled|UserCanceled/i.test(code) || /已取消|Canceled/i.test(msg)) {
+        msg = t('auth.canceled');
+      } else if (/NotConfigured/i.test(code) || /未配置身份验证|Hello/i.test(msg)) {
+        msg = t('auth.notConfigured');
+      }
+      this.$message.error(msg);
+    },
     save() {
       this.$refs.form.validate(async (valid) => {
         if (!valid) return;
@@ -219,6 +298,8 @@ export default {
             await api.updateSettings({
               theme: this.form.theme,
               lang: this.form.lang,
+              zoom: this.form.zoom,
+              font: this.form.font,
               closeAction: this.form.closeAction,
             })
           );
@@ -262,6 +343,21 @@ export default {
 }
 .path-row .el-input {
   flex: 1;
+}
+.zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.zoom-row .el-slider {
+  flex: 1;
+  margin-top: -6px;
+}
+.zoom-val {
+  width: 44px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-2);
 }
 .about-box {
   background: var(--bg-panel);

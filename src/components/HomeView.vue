@@ -32,14 +32,6 @@
         </div>
       </div>
 
-      <div class="dash-card dash-backup">
-        <h3>{{ $t('home.quick') }}</h3>
-        <div class="quick-grid">
-          <button class="quick-btn" @click="exportJson"><img src="/icons/export.svg" class="btn-icon" /> {{ $t('home.exportCfg') }}</button>
-          <button class="quick-btn" @click="importJson"><img src="/icons/import.svg" class="btn-icon" /> {{ $t('home.importCfg') }}</button>
-        </div>
-      </div>
-
       <!-- right: recent connections (taller) -->
       <div class="dash-card dash-recent">
         <h3>{{ $t('home.recent') }} <span class="tag">{{ recent.length }}</span></h3>
@@ -88,7 +80,7 @@
 
 <script>
 import * as echarts from 'echarts';
-import { store, findAsset, connectAsset, connectionErrorMessage, removeRecent, api, unwrap, refresh } from '../store';
+import { store, findAsset, connectAsset, connectionErrorMessage, removeRecent } from '../store';
 import { OS_SVG, formatTime } from '../constants';
 import { t } from '../i18n';
 
@@ -332,57 +324,6 @@ export default {
       } catch (e) {
         this.$message.error(e.message || String(e));
       }
-    },
-    async exportJson() {
-      try {
-        // OS identity is enforced in main (store:export); surface friendly errors here
-        const text = unwrap(await api.exportGroups());
-        const blob = new Blob([text], { type: 'application/json' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'omnidesk-groups.json';
-        a.click();
-        URL.revokeObjectURL(a.href);
-      } catch (e) {
-        const code = (e && e.code) || '';
-        let msg = e.message || String(e);
-        if (/Canceled|UserCanceled/i.test(code) || /已取消|Canceled/i.test(msg)) {
-          msg = t('auth.canceled');
-        } else if (/NotConfigured/i.test(code) || /未配置身份验证|Hello/i.test(msg)) {
-          msg = t('auth.notConfigured');
-        }
-        this.$message.error(msg);
-      }
-    },
-    importJson() {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'application/json,.json';
-      input.onchange = async () => {
-        const file = input.files && input.files[0];
-        if (!file) return;
-        try {
-          const text = await file.text();
-          if (api.importGroups) {
-            // OS identity is enforced in main (store:import); surface friendly errors here
-            unwrap(await api.importGroups(text));
-          } else {
-            throw new Error(t('msg.needElectron'));
-          }
-          await refresh();
-          this.$message.success(t('home.importDone'));
-        } catch (e) {
-          const code = (e && e.code) || '';
-          let msg = e.message || String(e);
-          if (/Canceled|UserCanceled/i.test(code) || /已取消|Canceled/i.test(msg)) {
-            msg = t('auth.canceled');
-          } else if (/NotConfigured/i.test(code) || /未配置身份验证|Hello/i.test(msg)) {
-            msg = t('auth.notConfigured');
-          }
-          this.$message.error(msg);
-        }
-      };
-      input.click();
     },
   },
 };

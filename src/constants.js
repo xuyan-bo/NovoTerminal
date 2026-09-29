@@ -13,6 +13,15 @@ export const OS_NAME = { win: 'Windows', mac: 'macOS', linux: 'Linux' };
 export const UNGROUPED_ID = 'g-ungrouped';
 export const UNGROUPED_NAME = '未分组';
 
+/** UI font choices for the settings dialog; 'default' keeps the built-in stack */
+export const UI_FONTS = [
+  { id: 'default', family: '' },
+  { id: 'yahei', family: "'Microsoft YaHei', 'PingFang SC', sans-serif" },
+  { id: 'pingfang', family: "'PingFang SC', -apple-system, sans-serif" },
+  { id: 'simsun', family: "'SimSun', 'Songti SC', serif" },
+  { id: 'mono', family: "Consolas, 'Courier New', monospace" },
+];
+
 export function isUngroupedGroup(g) {
   return !!(g && (g.id === UNGROUPED_ID || g.id === 'g-default'));
 }

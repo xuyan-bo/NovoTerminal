@@ -26,34 +26,71 @@ function defaultData() {
     groups: [ungroupedGroup()],
     recent: [],
     settings: {
-      theme: 'dark',
+      theme: 'system',
       lang: 'zh',
       dataPath: '',
+      zoom: 100,
+      font: 'default',
       closeAction: 'ask', // 'ask' = 每次询问, 'minimize' = 直接最小化, 'quit' = 直接退出
     },
   };
 }
 
-function resolveDataFile() {
-  const custom = this && this.customPath;
-  const dir = custom || path.join(app.getPath('userData'), 'data');
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, 'omnidesk.json');
+function defaultDataDir() {
+  return path.join(app.getPath('userData'), 'data');
+}
+
+// Sidecar in the default dir recording the active data directory, so a custom
+// location survives restarts (the real DB may live elsewhere).
+function pointerFile() {
+  return path.join(defaultDataDir(), 'location');
 }
 
 class AssetStore {
   constructor() {
-    this.file = path.join(app.getPath('userData'), 'data', 'omnidesk.json');
+    this.file = this.resolveActiveFile();
     this.backupFile = this.file + '.bak';
     this.data = defaultData();
     this.load();
   }
 
+  resolveActiveFile() {
+    const defaultFile = path.join(defaultDataDir(), 'omnidesk.json');
+    let dir;
+    try {
+      dir = fs.readFileSync(pointerFile(), 'utf8').trim();
+    } catch (_) {
+      return defaultFile;
+    }
+    const target = dir && path.join(dir, 'omnidesk.json');
+    return target && target !== defaultFile && fs.existsSync(target) ? target : defaultFile;
+  }
+
+  writePointer() {
+    const dir = defaultDataDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const ptr = pointerFile();
+    try {
+      if (path.dirname(this.file) === dir) fs.rmSync(ptr, { force: true });
+      else fs.writeFileSync(ptr, path.dirname(this.file), 'utf8');
+    } catch (_) {}
+  }
+
   setCustomPath(dir) {
     if (!dir) return this.file;
-    this.file = path.join(dir, 'omnidesk.json');
-    this.backupFile = this.file + '.bak';
-    this.load();
+    const target = path.join(dir, 'omnidesk.json');
+    if (target === this.file) return this.file;
+    this.file = target;
+    this.backupFile = target + '.bak';
+    if (fs.existsSync(target)) {
+      // an existing database already lives here → switch to it
+      this.load();
+    } else {
+      // empty location → move the current data there instead of resetting
+      this.data.settings.dataPath = dir;
+      this.persist();
+    }
+    this.writePointer();
     return this.file;
   }
 
@@ -322,17 +359,6 @@ class AssetStore {
     const hit = this.findAsset(aid);
     if (!hit) throw new Error('asset not found');
     hit.group.nodes = hit.group.nodes.filter((n) => n.id !== aid);
-    this.persist();
-    return this.snapshot();
-  }
-
-  cloneAsset(aid) {
-    const hit = this.findAsset(aid);
-    if (!hit) throw new Error('asset not found');
-    const copy = JSON.parse(JSON.stringify(hit.asset));
-    copy.id = 'a-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
-    copy.name = hit.asset.name + ' (副本)';
-    hit.group.nodes.push(copy);
     this.persist();
     return this.snapshot();
   }

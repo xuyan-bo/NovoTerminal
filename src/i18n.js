@@ -1,13 +1,13 @@
 /** Lightweight i18n — reactive via Vue.observable after setLocale */
 
+import { UI_FONTS } from './constants';
+
 const dict = {
   zh: {
     'app.name': 'OmniDesk',
     'nav.home': '首页',
     'nav.settings': '设置',
     'nav.logs': '日志',
-    'nav.export': '导出配置',
-    'nav.import': '导入配置',
     'sidebar.newAsset': '＋ 新增资产',
     'sidebar.newGroup': '＋ 新增分组',
     'sidebar.search': '搜索资产 / 分组…',
@@ -27,10 +27,6 @@ const dict = {
     'home.groups': '个分组',
     'home.sessions': '当前会话',
     'home.sessionsEmpty': '会话列表将在连接更多类型后展示\nRDP 走系统 mstsc 独立窗口',
-    'home.quick': '备份与还原',
-    'home.exportCfg': '导出配置',
-    'home.importCfg': '导入配置',
-    'home.importDone': '配置已导入',
     'home.placeholder': '占位',
     'status.assets': '资产',
     'detail.assets': '资产详情',
@@ -95,11 +91,22 @@ const dict = {
     'settings.theme.dark': '深色',
     'settings.theme.light': '浅色',
     'settings.theme.system': '跟随系统',
+    'settings.zoom': '页面缩放',
+    'settings.zoomApply': '保存后生效，作用于全部窗口',
+    'settings.font': '界面字体',
+    'settings.font.default': '系统默认',
+    'settings.font.yahei': '微软雅黑',
+    'settings.font.pingfang': '苹方',
+    'settings.font.simsun': '宋体',
+    'settings.font.mono': '等宽（Consolas）',
     'settings.lang': '语言',
     'settings.data': '数据',
-    'settings.dataPath': '数据文件存储位置',
-    'settings.currentDb': '当前库',
-    'settings.currentDbVal': 'omnidesk.json · safeStorage 加密（可用时）',
+    'settings.dataPath': '存储位置',
+    'settings.dataPathTip': '数据文件 safeStorage 加密（可用时）',
+    'settings.backup': '备份与还原',
+    'settings.exportCfg': '导出配置',
+    'settings.importCfg': '导入配置',
+    'settings.importDone': '配置已导入',
     'settings.about': '关于',
     'settings.aboutBody': '技术栈：Electron + Vue 2 + Element UI',
     'settings.aboutSource': '开源地址：',
@@ -130,6 +137,8 @@ const dict = {
     'log.copied': '已复制',
     'asset.dialogNew': '新增资产',
     'asset.dialogEdit': '编辑资产',
+    'asset.dialogClone': '复制资产',
+    'asset.cloneSuffix': '(副本)',
     'asset.osType': '① 资产类型（决定可勾选的访问方式）',
     'asset.info': '② 资产信息',
     'asset.sharedTag': '所有访问方式共用',
@@ -364,8 +373,6 @@ const dict = {
     'nav.home': 'Home',
     'nav.settings': 'Settings',
     'nav.logs': 'Logs',
-    'nav.export': 'Export',
-    'nav.import': 'Import',
     'sidebar.newAsset': '＋ New asset',
     'sidebar.newGroup': '＋ New group',
     'sidebar.search': 'Search assets / groups…',
@@ -385,10 +392,6 @@ const dict = {
     'home.groups': 'groups',
     'home.sessions': 'Active sessions',
     'home.sessionsEmpty': 'Session list appears after more session types\nRDP opens system mstsc in a separate window',
-    'home.quick': 'Backup & Restore',
-    'home.exportCfg': 'Export config',
-    'home.importCfg': 'Import config',
-    'home.importDone': 'Config imported',
     'home.placeholder': 'WIP',
     'status.assets': 'Assets',
     'detail.assets': 'Asset details',
@@ -453,11 +456,22 @@ const dict = {
     'settings.theme.dark': 'Dark',
     'settings.theme.light': 'Light',
     'settings.theme.system': 'System',
+    'settings.zoom': 'Page zoom',
+    'settings.zoomApply': 'Applied to all windows after saving',
+    'settings.font': 'UI font',
+    'settings.font.default': 'System default',
+    'settings.font.yahei': 'Microsoft YaHei',
+    'settings.font.pingfang': 'PingFang SC',
+    'settings.font.simsun': 'SimSun',
+    'settings.font.mono': 'Monospace (Consolas)',
     'settings.lang': 'Language',
     'settings.data': 'Data',
-    'settings.dataPath': 'Data file location',
-    'settings.currentDb': 'Current store',
-    'settings.currentDbVal': 'omnidesk.json · safeStorage encrypted (when available)',
+    'settings.dataPath': 'Storage location',
+    'settings.dataPathTip': 'Data file encrypted with safeStorage (when available)',
+    'settings.backup': 'Backup & restore',
+    'settings.exportCfg': 'Export config',
+    'settings.importCfg': 'Import config',
+    'settings.importDone': 'Config imported',
     'settings.about': 'About',
     'settings.aboutBody': 'Tech stack: Electron + Vue 2 + Element UI',
     'settings.aboutSource': 'Open source: ',
@@ -488,6 +502,8 @@ const dict = {
     'log.copied': 'Copied',
     'asset.dialogNew': 'New asset',
     'asset.dialogEdit': 'Edit asset',
+    'asset.dialogClone': 'Duplicate asset',
+    'asset.cloneSuffix': '(Copy)',
     'asset.osType': '① Asset type (controls available methods)',
     'asset.info': '② Asset info',
     'asset.sharedTag': 'Shared by all methods',
@@ -749,8 +765,20 @@ export function applyTheme(theme) {
   if (app) app.classList.toggle('theme-light', !!light);
 }
 
+export function applyFont(font) {
+  const hit = UI_FONTS.find((f) => f.id === font);
+  if (hit && hit.family) document.documentElement.style.setProperty('--app-font', hit.family);
+  else document.documentElement.style.removeProperty('--app-font');
+}
+
 export function applySettings(settings) {
   if (!settings) return;
-  applyTheme(settings.theme || 'dark');
+  applyTheme(settings.theme || 'system');
   setLocale(settings.lang || 'zh');
+  applyFont(settings.font || 'default');
+  // In Electron the main process owns real zoom; CSS zoom only approximates it in browser preview
+  if (!window.omniDesk) {
+    const z = Number(settings.zoom) || 100;
+    document.documentElement.style.zoom = z === 100 ? '' : String(z / 100);
+  }
 }

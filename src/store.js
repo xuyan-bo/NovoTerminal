@@ -5,7 +5,7 @@ import { CATALOG, resolveAdvanced } from './constants';
 import { getProtocol, protocolLabel } from './protocols';
 
 export const store = Vue.observable({
-  snapshot: { groups: [], recent: [], settings: { theme: 'dark', lang: 'zh', dataPath: '' } },
+  snapshot: { groups: [], recent: [], settings: { theme: 'system', lang: 'zh', dataPath: '', zoom: 100, font: 'default' } },
   activeTab: 'home',
   tabs: [{ id: 'home', title: '首页', closable: false, icon: '⌂', titleKey: 'nav.home' }],
   activeAssetId: null,
@@ -13,7 +13,7 @@ export const store = Vue.observable({
   sessionMap: {},
   settingsDialog: false,
   logDialog: false,
-  assetDialog: { visible: false, editId: null, gid: null },
+  assetDialog: { visible: false, editId: null, gid: null, cloneId: null },
   groupDialog: { visible: false, editId: null },
   methodAdvancedDialog: {
     visible: false,
@@ -225,11 +225,6 @@ export async function updateAsset(aid, payload) {
 
 export async function deleteAsset(aid) {
   unwrap(await api.deleteAsset(aid));
-  await refresh();
-}
-
-export async function cloneAsset(aid) {
-  unwrap(await api.cloneAsset(aid));
   await refresh();
 }
 

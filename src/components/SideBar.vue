@@ -398,8 +398,7 @@ export default {
         } else if (it.act === 'edit') {
           store.assetDialog = { visible: true, editId: it.aid, gid: null };
         } else if (it.act === 'clone') {
-          unwrap(await api.cloneAsset(it.aid));
-          await refresh();
+          store.assetDialog = { visible: true, editId: null, gid: null, cloneId: it.aid };
         } else if (it.act === 'del') {
           await this.$confirm(t('msg.confirmDeleteAsset'), t('msg.confirm'), { type: 'warning' });
           unwrap(await api.deleteAsset(it.aid));

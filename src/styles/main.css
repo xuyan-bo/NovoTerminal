@@ -65,7 +65,7 @@ body,
 }
 
 body {
-  font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: var(--app-font, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif);
   background: var(--bg-app);
   color: var(--text);
   font-size: 13px;
@@ -758,20 +758,12 @@ button {
   overflow: hidden;
 }
 
-/* left column: assets on top, backup under it */
+/* left column: assets */
 .dash-card.dash-assets {
   grid-column: 1;
   grid-row: 1;
   min-height: 240px;
   height: calc(50vh - 17.5px);
-}
-
-.dash-card.dash-backup {
-  grid-column: 1;
-  grid-row: 2;
-  min-height: 200px;
-  height: 200px;
-  align-self: start;
 }
 
 /* right column: recent connections — same height as assets card */
@@ -987,36 +979,6 @@ button {
   color: var(--text-3);
   font-size: 12px;
   text-align: center;
-}
-
-.quick-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  flex: 1;
-}
-
-.quick-btn {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-elevated);
-  padding: 14px 10px;
-  font-size: 12px;
-  color: var(--text-2);
-  cursor: pointer;
-}
-
-.quick-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.btn-icon {
-  width: 16px;
-  height: 16px;
-  vertical-align: -2px;
-  margin-right: 4px;
 }
 
 /* asset detail view */

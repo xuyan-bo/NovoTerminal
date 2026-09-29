@@ -307,6 +307,15 @@ function destroyTray() {
   }
 }
 
+/** Settings zoom (percent) is applied to every window's webContents, incl. detached/sftp ones */
+function applyZoom() {
+  const z = Number(store.getSettings().zoom) || 100;
+  const factor = Math.min(2, Math.max(0.5, z / 100));
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.setZoomFactor(factor);
+  }
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1280,
@@ -423,10 +432,13 @@ function registerIpc() {
   handle('store:create-asset', (gid, p) => unwrap(store.createAsset(gid, p)));
   handle('store:update-asset', (aid, p) => unwrap(store.updateAsset(aid, p)));
   handle('store:delete-asset', (aid) => unwrap(store.deleteAsset(aid)));
-  handle('store:clone-asset', (aid) => unwrap(store.cloneAsset(aid)));
   handle('store:remove-recent', (p) => unwrap(store.removeRecent(p && p.id, p && p.method)));
   handle('store:settings', () => store.getSettings());
-  handle('store:update-settings', (patch) => unwrap(store.updateSettings(patch)));
+  handle('store:update-settings', (patch) => {
+    const s = unwrap(store.updateSettings(patch));
+    applyZoom();
+    return s;
+  });
   /** Get the current main window HWND so the native auth dialog can be parented to it */
   function mainWindowHwnd() {
     if (process.platform !== 'win32') return 0;
@@ -486,12 +498,13 @@ function registerIpc() {
   handle('app:browse-data-path', async () => {
     const r = await dialog.showOpenDialog(win, {
       properties: ['openDirectory', 'createDirectory'],
-      title: '选择数据文件存储位置',
+      title: '选择存储位置',
     });
     if (r.canceled || !r.filePaths[0]) return null;
     store.setCustomPath(r.filePaths[0]);
-    store.persist();
-    return store.snapshot().settings;
+    const s = store.snapshot().settings;
+    logger.info('settings', 'data path changed', { dataPath: s.dataPath });
+    return s;
   });
 
   // ---- Logs ----
@@ -1072,6 +1085,7 @@ app.whenReady().then(() => {
   rdpSessions = new RdpSessionManager({ send, log: logger });
   sftpManager = new SftpManager({ send, store, log: logger });
   registerIpc();
+  app.on('browser-window-created', () => applyZoom());
   createWindow();
   createTray();
 

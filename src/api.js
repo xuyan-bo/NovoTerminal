@@ -12,7 +12,7 @@ const mockState = {
     },
   ],
   recent: [],
-  settings: { theme: 'dark', lang: 'zh', dataPath: '(预览模式，无 Electron）', closeAction: 'ask' },
+  settings: { theme: 'system', lang: 'zh', dataPath: '(预览模式，无 Electron）', zoom: 100, font: 'default', closeAction: 'ask' },
 };
 
 async function local(method, ...args) {

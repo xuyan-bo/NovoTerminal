@@ -1,6 +1,6 @@
 <template>
   <el-dialog
-    :title="isEdit ? $t('asset.dialogEdit') : $t('asset.dialogNew')"
+    :title="dialogTitle"
     :visible.sync="visible"
     width="760px"
     top="5vh"
@@ -251,6 +251,13 @@ export default {
     isEdit() {
       return !!store.assetDialog.editId;
     },
+    isClone() {
+      return !store.assetDialog.editId && !!store.assetDialog.cloneId;
+    },
+    dialogTitle() {
+      if (this.isEdit) return this.$t('asset.dialogEdit');
+      return this.isClone ? this.$t('asset.dialogClone') : this.$t('asset.dialogNew');
+    },
     groups() {
       return (store.snapshot.groups || []).filter((g) => !isUngroupedGroup(g));
     },
@@ -389,7 +396,7 @@ export default {
         this.passVisible = false;
         return;
       }
-      if (!this.isEdit) {
+      if (!this.isEdit && !this.isClone) {
         this.passVisible = true;
         return;
       }
@@ -423,14 +430,16 @@ export default {
     async load() {
       this.passVisible = false;
       const editId = store.assetDialog.editId;
+      const cloneId = store.assetDialog.cloneId;
+      const sourceId = editId || cloneId;
       // new assets: leave group empty by default → ungrouped on save
       const fallbackGid = store.assetDialog.gid || '';
-      if (editId) {
-        const hit = findAsset(editId);
+      if (sourceId) {
+        const hit = findAsset(sourceId);
         if (!hit) return;
         const a = hit.asset;
         this.form = {
-          name: a.name,
+          name: cloneId && !editId ? `${a.name} ${t('asset.cloneSuffix')}` : a.name,
           os: a.os,
           gid: hit.group.id,
           host: a.host,
