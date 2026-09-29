@@ -947,7 +947,6 @@ function registerIpc() {
     }
     return { ok: true, path: dest };
   });
-  handle('sftp:walk-local', (localDir, remoteDir) => sftpManager.walkLocal(localDir, remoteDir));
   handle('sftp:upload', async (req) => {
     const r = await sftpManager.upload(req);
     console.log('[sftp] upload start', req && req.localPath, '->', req && req.remotePath, r);
@@ -975,50 +974,79 @@ function registerIpc() {
   });
   handle('sftp:clipboard-files', () => {
     const out = [];
-    try {
-      const w = clipboard.readBuffer('FileNameW');
-      if (w && w.length >= 2) {
-        const p = w.toString('ucs2').replace(/\0.*$/, '').trim();
-        if (p && fs.existsSync(p)) out.push(p);
-      }
-    } catch (_) {}
-    if (!out.length) {
+    const pushFile = (p) => {
+      if (!p) return;
+      const s = String(p).trim();
+      if (!s || out.includes(s)) return;
       try {
-        const a = clipboard.readBuffer('FileName');
-        if (a && a.length >= 1) {
-          const p = a.toString('utf8').replace(/\0.*$/, '').trim();
-          if (p && fs.existsSync(p)) out.push(p);
-        }
+        if (fs.existsSync(s)) out.push(s);
+      } catch (_) {}
+    };
+    // macOS Finder and Linux file managers publish file URLs rather than the Windows HDROP formats
+    if (process.platform === 'darwin') {
+      try {
+        const bm = clipboard.readBookmark();
+        if (bm && bm.data) pushFile(fileURLToPath(bm.data));
+      } catch (_) {}
+      if (!out.length) {
+        try {
+          const txt = clipboard.readText();
+          if (txt && txt.trim().indexOf('file://') === 0) pushFile(fileURLToPath(txt.trim()));
+        } catch (_) {}
+      }
+    } else if (process.platform === 'linux') {
+      try {
+        const uri = clipboard.readText('text/uri-list') || clipboard.readText();
+        String(uri || '').split(/\r?\n/).forEach((line) => {
+          const s = line.trim();
+          if (s.indexOf('file://') === 0) {
+            try {
+              pushFile(fileURLToPath(s));
+            } catch (_) {}
+          } else if (s.charAt(0) === '/') pushFile(s);
+        });
       } catch (_) {}
     }
-    if (!out.length) {
+    if (process.platform === 'win32') {
       try {
-        const buf = clipboard.readBuffer('CF_HDROP');
-        if (buf && buf.length > 20) {
-          const pFiles = buf.readUInt32LE(0);
-          const fWide = buf.readUInt32LE(16);
-          let offset = pFiles;
-          if (fWide) {
-            while (offset + 2 <= buf.length) {
-              let end = offset;
-              while (end + 1 < buf.length && !(buf[end] === 0 && buf[end + 1] === 0)) end += 2;
-              const s = buf.toString('ucs2', offset, end);
-              offset = end + 2;
-              if (!s) break;
-              if (fs.existsSync(s)) out.push(s);
-            }
-          } else {
-            while (offset < buf.length) {
-              let end = offset;
-              while (end < buf.length && buf[end] !== 0) end += 1;
-              const s = buf.toString('utf8', offset, end);
-              offset = end + 1;
-              if (!s) break;
-              if (fs.existsSync(s)) out.push(s);
+        const w = clipboard.readBuffer('FileNameW');
+        if (w && w.length >= 2) pushFile(w.toString('ucs2').replace(/\0.*$/, '').trim());
+      } catch (_) {}
+      if (!out.length) {
+        try {
+          const a = clipboard.readBuffer('FileName');
+          if (a && a.length >= 1) pushFile(a.toString('utf8').replace(/\0.*$/, '').trim());
+        } catch (_) {}
+      }
+      if (!out.length) {
+        try {
+          const buf = clipboard.readBuffer('CF_HDROP');
+          if (buf && buf.length > 20) {
+            const pFiles = buf.readUInt32LE(0);
+            const fWide = buf.readUInt32LE(16);
+            let offset = pFiles;
+            if (fWide) {
+              while (offset + 2 <= buf.length) {
+                let end = offset;
+                while (end + 1 < buf.length && !(buf[end] === 0 && buf[end + 1] === 0)) end += 2;
+                const s = buf.toString('ucs2', offset, end);
+                offset = end + 2;
+                if (!s) break;
+                pushFile(s);
+              }
+            } else {
+              while (offset < buf.length) {
+                let end = offset;
+                while (end < buf.length && buf[end] !== 0) end += 1;
+                const s = buf.toString('utf8', offset, end);
+                offset = end + 1;
+                if (!s) break;
+                pushFile(s);
+              }
             }
           }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
     }
     return out;
   });

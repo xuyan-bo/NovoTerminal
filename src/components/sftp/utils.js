@@ -27,18 +27,32 @@ export function normalizeRemotePath(p) {
   if (typeof p !== 'string') return p;
   return /^\/[A-Za-z]:(?=[\\/]|$)/.test(p) ? p.slice(1) : p;
 }
+
+/** Local separator: drive letters and backslash paths are Windows, everything else is POSIX. */
+function localSep(dir) {
+  return /^[A-Za-z]:/.test(dir) || (dir.includes('\\') && !dir.startsWith('/')) ? '\\' : '/';
+}
+
+/** Absolute filesystem path on any supported OS: POSIX root, Windows drive, or UNC share. */
+export function isAbsLocalPath(p) {
+  const s = String(p || '');
+  if (/^[A-Za-z]:[\\/]/.test(s) || s.indexOf('\\\\') === 0) return true;
+  return s.charAt(0) === '/' && s.length > 1;
+}
+
 export function joinLocal(dir, name) {
   if (!dir) return name;
   if (dir.endsWith('/') || dir.endsWith('\\')) return dir + name;
-  const sep = /^[A-Za-z]:\\/.test(dir) || (dir.includes('\\') && !dir.startsWith('/')) ? '\\' : dir.startsWith('/') ? '/' : '\\';
-  return dir + sep + name;
+  return dir + localSep(dir) + name;
 }
 export function parentLocal(p) {
   if (!p) return '';
   if (/^[A-Za-z]:[\\/]?$/.test(p)) return p;
   const normalized = String(p).replace(/[\\/]+$/, '');
+  if (!normalized || normalized === '/') return '/';
   const idx = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'));
-  if (idx <= 0) return normalized;
+  if (idx < 0) return normalized;
+  if (idx === 0) return normalized.charAt(0) === '/' ? '/' : normalized;
   let next = normalized.slice(0, idx);
   if (/^[A-Za-z]:$/.test(next)) next += '\\';
   return next || normalized;
@@ -46,4 +60,21 @@ export function parentLocal(p) {
 
 export function isTaskFinished(row) {
   return row.status === 'done' || row.status === 'error' || row.status === 'canceled';
+}
+
+/** Order a listing for display: '..' first, then folders, then files, each group by the chosen column. */
+export function sortItems(items, sort) {
+  const key = (sort && sort.key) || 'name';
+  const dir = sort && sort.dir === 'desc' ? -1 : 1;
+  const rank = (x) => (x.isParent ? 0 : x.isDir ? 1 : 2);
+  const byName = (a, b) => String(a.name).localeCompare(String(b.name));
+  return [...(items || [])].sort((a, b) => {
+    const ra = rank(a);
+    const rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    if (ra === 0) return 0;
+    if (key === 'size') return (Number(a.size) - Number(b.size)) * dir || byName(a, b);
+    if (key === 'time') return (Number(a.mtimeMs) - Number(b.mtimeMs)) * dir || byName(a, b);
+    return byName(a, b) * dir;
+  });
 }

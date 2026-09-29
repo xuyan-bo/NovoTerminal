@@ -159,6 +159,7 @@ class SftpManager {
               size: Number(attrs.size) || 0,
               sizeText: isDir ? '—' : formatSize(attrs.size),
               mtime: attrs.mtime ? new Date(attrs.mtime * 1000).toLocaleString() : '',
+              mtimeMs: attrs.mtime ? Number(attrs.mtime) * 1000 : 0,
               mode: attrs.mode || 0,
             };
           })
@@ -179,10 +180,12 @@ class SftpManager {
         .map((d) => {
           let size = 0;
           let mtime = '';
+          let mtimeMs = 0;
           try {
             const st = fs.statSync(path.join(dir, d.name));
             size = st.size;
             mtime = st.mtime.toLocaleString();
+            mtimeMs = st.mtimeMs || 0;
           } catch (_) {}
           return {
             name: d.name,
@@ -190,6 +193,7 @@ class SftpManager {
             size,
             sizeText: d.isDirectory() ? '—' : formatSize(size),
             mtime,
+            mtimeMs,
           };
         })
         .sort((a, b) => {
@@ -288,35 +292,6 @@ class SftpManager {
     if (isDir) fs.rmSync(p, { recursive: true, force: true });
     else fs.unlinkSync(p);
     return { ok: true };
-  }
-
-  /** Recursively list local files under dir → [{ localPath, remotePath, size, name }] */
-  walkLocal(localDir, remoteDir) {
-    const out = [];
-    const walk = (ld, rd) => {
-      let names;
-      try {
-        names = fs.readdirSync(ld, { withFileTypes: true });
-      } catch (_) {
-        return;
-      }
-      names.forEach((d) => {
-        const lp = path.join(ld, d.name);
-        const rp = (rd.endsWith('/') ? rd : rd + '/') + d.name;
-        if (d.isDirectory()) {
-          out.push({ type: 'dir', name: d.name, localPath: lp, remotePath: rp, size: 0 });
-          walk(lp, rp);
-        } else {
-          let size = 0;
-          try {
-            size = fs.statSync(lp).size;
-          } catch (_) {}
-          out.push({ type: 'file', name: d.name, localPath: lp, remotePath: rp, size });
-        }
-      });
-    };
-    walk(localDir, remoteDir);
-    return out;
   }
 
   listSync(connId, remotePath) {

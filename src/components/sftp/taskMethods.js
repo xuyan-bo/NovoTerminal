@@ -1,17 +1,167 @@
+import Vue from 'vue';
 import { api, unwrap } from '../../store';
 import { formatSize, parentLocal, parentRemote, isTaskFinished } from './utils';
 
 export default {
   isTaskFinished,
-  recalcFolder(parent) {
-    if (!parent || !parent.isFolder) return parent;
-    const files = (parent.children || []).filter((c) => !c.isDir);
+  /** Rows are rendered lazily and updated in place, so they must be observable on their own. */
+  makeTaskRow(fields) {
+    return Vue.observable(
+      Object.assign(
+        {
+          xferId: null,
+          transferred: 0,
+          percent: 0,
+          speedText: '—',
+          error: '',
+          fileCount: 0,
+          doneCount: 0,
+        },
+        fields
+      )
+    );
+  },
+  folderState(rootId) {
+    return this._folderStates.get(rootId) || null;
+  },
+  /** A folder task shows up in the queue before anything is enumerated. */
+  registerFolderRoot(root) {
+    this._folderStates.set(root.taskId, {
+      root,
+      rootId: root.taskId,
+      done: false,
+      canceled: false,
+      paused: false,
+      dirs: new Map(),
+    });
+    this.dirWait(this.folderState(root.taskId), root);
+    this.tasks = [root, ...this.tasks];
+  },
+  forgetFolderTree(rootId) {
+    const state = this._folderStates.get(rootId);
+    if (!state) return;
+    state.canceled = true;
+    state.dirs.forEach((entry) => {
+      if (!entry.done) {
+        entry.done = true;
+        entry.resolve([]);
+      }
+    });
+    state.dirs.clear();
+    const drop = (row) => {
+      this._rowByKey.delete(this.childKey(row));
+      if (row.xferId) this._rowByXferId.delete(row.xferId);
+      (row.children || []).forEach(drop);
+    };
+    drop(state.root);
+    this._folderStates.delete(rootId);
+  },
+  /** Resolve point for a lazily rendered directory node. */
+  dirWait(state, row) {
+    if (!state || !row) return null;
+    let entry = state.dirs.get(row.taskId);
+    if (!entry) {
+      let resolve;
+      const promise = new Promise((r) => {
+        resolve = r;
+      });
+      entry = { promise, resolve, done: false };
+      state.dirs.set(row.taskId, entry);
+    }
+    return entry;
+  },
+  markDirScanned(rootId, row) {
+    const entry = this.dirWait(this.folderState(rootId), row);
+    if (entry && !entry.done) {
+      entry.done = true;
+      entry.resolve((row.children || []).slice());
+    }
+  },
+  /** Progress events carry the main-process id, row keys stay stable. */
+  bindTransfer(row, xferId) {
+    if (!row || !xferId) return;
+    row.xferId = xferId;
+    this._rowByXferId.set(xferId, row);
+  },
+  finishFolderScan(root) {
+    const state = this.folderState(root && root.taskId);
+    if (!state || state.canceled) return;
+    state.done = true;
+    this.recalcTree(root);
+    this.syncTasks();
+  },
+  /** Element asks for a node's children only when the user expands it. */
+  loadTreeChildren(row, treeNode, resolve) {
+    const kids = (row && row.children) || [];
+    const state = this.folderState((row && row.rootId) || (row && row.taskId));
+    const entry = state ? this.dirWait(state, row) : null;
+    if (!entry || entry.done) {
+      resolve(kids.slice());
+      return;
+    }
+    entry.promise.then(() => {
+      if (this._sftpDestroyed) return;
+      resolve(((row && row.children) || []).slice());
+    });
+  },
+  /** All descendant file rows of a folder node, at any depth. */
+  folderFiles(row) {
+    const out = [];
+    const walk = (r) => {
+      (r.children || []).forEach((c) => {
+        if (!c) return;
+        if (c.isDir || c.isFolder) walk(c);
+        else out.push(c);
+      });
+    };
+    if (row) walk(row);
+    return out;
+  },
+  /**
+   * Attach one directory's freshly listed entries under its folder row.
+   * `pathOf` maps a listing entry to { sourcePath, targetPath, size }.
+   */
+  addDiscoveredChildren(root, parentRow, entries, direction, pathOf) {
+    const state = this.folderState(root.taskId);
+    const rows = (entries || []).map((entry) => {
+      const p = pathOf(entry) || {};
+      const isDir = !!entry.isDir;
+      const row = this.makeTaskRow({
+        // Stable row key: the transfer id from the main process lands in xferId instead.
+        taskId: `${root.taskId}:${isDir ? 'd' : 'c'}:${p.targetPath || entry.name}`,
+        rootId: root.taskId,
+        parentId: parentRow.taskId,
+        name: entry.name,
+        isDir,
+        hasChildren: isDir,
+        direction,
+        status: isDir ? 'done' : 'running',
+        percent: isDir ? 100 : 0,
+        size: isDir ? 0 : Number(p.size) || 0,
+        sizeText: isDir ? '—' : formatSize(p.size),
+        sourcePath: p.sourcePath || '',
+        targetPath: p.targetPath || '',
+      });
+      if (isDir) {
+        row.children = [];
+        this.dirWait(state, row);
+      }
+      this._rowByKey.set(this.childKey(row), row);
+      return row;
+    });
+    parentRow.children = rows;
+    return rows;
+  },
+  recalcFolder(parent, scanDone) {
+    if (!parent || !(parent.isFolder || parent.isDir)) return parent;
+    const files = this.folderFiles(parent);
     let size = 0;
     let transferred = 0;
     let speed = 0;
     let hasRun = false;
     let anyErr = false;
     let anyPause = false;
+    let doneCount = 0;
     files.forEach((c) => {
       size += Number(c.size) || 0;
       transferred += Number(c.transferred) || 0;
@@ -20,27 +170,42 @@ export default {
         speed += Number(c.speed) || 0;
       } else if (c.status === 'error') anyErr = true;
       else if (c.status === 'paused') anyPause = true;
+      if (c.status === 'done') doneCount += 1;
     });
-    const allSettled =
+    const settled =
       files.length > 0 &&
       files.every((c) => c.status === 'done' || c.status === 'error' || c.status === 'canceled');
+    // While the scan is still running the totals are partial, so never report completion.
+    const complete = parent.isFolder && scanDone === false ? false : settled || !files.length;
     parent.size = size;
     parent.transferred = transferred;
-    parent.percent =
-      size > 0 ? Math.min(100, Math.round((transferred / size) * 100)) : allSettled ? 100 : 0;
+    parent.fileCount = files.length;
+    parent.doneCount = doneCount;
+    parent.percent = size > 0 ? Math.min(100, Math.round((transferred / size) * 100)) : complete ? 100 : 0;
     parent.sizeText = formatSize(size);
     parent.speedText = hasRun && speed > 0 ? `${formatSize(speed)}/s` : '—';
-    if (allSettled) parent.status = anyErr ? 'error' : 'done';
+    if (complete) parent.status = anyErr ? 'error' : 'done';
     else if (anyPause && !hasRun) parent.status = 'paused';
     else parent.status = 'running';
     return parent;
   },
-  /** Remember expand state; new folders expand once, manual collapse sticks */
+  /** Recalculate every folder node of a task tree, deepest first. */
+  recalcTree(root) {
+    const state = this.folderState(root && root.taskId);
+    const scanDone = state ? state.done : true;
+    const visit = (row, isRoot) => {
+      (row.children || []).forEach((c) => {
+        if (c && (c.isDir || c.isFolder)) visit(c, false);
+      });
+      if (row.isFolder || row.isDir) this.recalcFolder(row, isRoot ? scanDone : true);
+    };
+    if (root) visit(root, true);
+    return root;
+  },
+  /** Remember expand state; folders stay collapsed until the user opens them */
   onExpandChange(row, expandedRows) {
     if (Array.isArray(expandedRows)) {
-      this.expandedKeys = expandedRows
-        .map((r) => (r && r.taskId) || null)
-        .filter(Boolean);
+      this.expandedKeys = expandedRows.map((r) => (r && r.taskId) || null).filter(Boolean);
       return;
     }
     if (!row || !row.taskId) return;
@@ -51,71 +216,35 @@ export default {
       this.expandedKeys = [...this.expandedKeys, id];
     }
   },
-  expandFolder(taskId) {
-    if (!taskId) return;
-    if (this.expandedKeys.indexOf(taskId) < 0) {
-      this.expandedKeys = [...this.expandedKeys, taskId];
-    }
-  },
   collapseFolder(taskId) {
     if (!taskId) return;
     this.expandedKeys = this.expandedKeys.filter((k) => k !== taskId);
   },
-  /** Collect ids/keys of files that belong under a folder task */
-  folderChildIndex() {
-    const ids = new Set();
-    const keys = new Set();
-    this.tasks.forEach((row) => {
-      if (!row || !row.isFolder || !row.children) return;
-      row.children.forEach((c) => {
-        if (!c) return;
-        if (c.taskId) ids.add(c.taskId);
-        keys.add(`${c.sourcePath || ''}|${c.targetPath || ''}`);
-      });
-    });
-    return { ids, keys };
-  },
   childKey(row) {
     return `${(row && row.sourcePath) || ''}|${(row && row.targetPath) || ''}`;
   },
-  findFolderChild(taskId, sourcePath, targetPath) {
-    const key = `${sourcePath || ''}|${targetPath || ''}`;
-    for (let i = 0; i < this.tasks.length; i++) {
-      const parent = this.tasks[i];
-      if (!parent || !parent.isFolder || !parent.children) continue;
-      let ci = -1;
-      if (taskId) ci = parent.children.findIndex((c) => c.taskId === taskId);
-      if (ci < 0 && key !== '|') {
-        ci = parent.children.findIndex((c) => `${c.sourcePath || ''}|${c.targetPath || ''}` === key);
-      }
-      if (ci >= 0) return { parent, index: ci };
-    }
-    return null;
+  /** Progress events carry the main-process id; folder rows are keyed by their stable row id. */
+  findFolderRow(p) {
+    if (!p) return null;
+    const byXfer = p.taskId ? this._rowByXferId.get(p.taskId) : null;
+    if (byXfer) return byXfer;
+    const key = this.childKey(p);
+    return key === '|' ? null : this._rowByKey.get(key) || null;
   },
   mergeTask(p) {
     if (!p || !p.taskId) return;
-    const hit = this.findFolderChild(p.taskId, p.sourcePath, p.targetPath);
-    if (hit) {
-      const parent = hit.parent;
-      const merged = { ...parent.children[hit.index], ...p, parentId: parent.taskId, isFolder: false };
-      const next = parent.children.slice();
-      next.splice(hit.index, 1, merged);
-      this.$set(parent, 'children', next);
-      this.recalcFolder(parent);
+    const row = this.findFolderRow(p);
+    if (row) {
+      // In-place update keeps the row identity the table cells already depend on.
+      Object.assign(row, p, { taskId: row.taskId, isFolder: false, isDir: row.isDir, xferId: p.taskId });
+      this._rowByXferId.set(p.taskId, row);
+      const state = this.folderState(row.rootId);
+      this.recalcTree(state ? state.root : row);
       return;
     }
-    const { ids, keys } = this.folderChildIndex();
-    // progress for a known folder file — never promote to top-level
-    if (ids.has(p.taskId) || keys.has(this.childKey(p))) return;
     const i = this.tasks.findIndex((x) => x.taskId === p.taskId);
     const prev = i >= 0 ? this.tasks[i] : null;
     const merged = i >= 0 ? { ...this.tasks[i], ...p } : { ...p };
-    if (merged.isFolder && merged.children) {
-      if (i >= 0) this.$set(this.tasks, i, merged);
-      else this.tasks.unshift(merged);
-      this.recalcFolder(merged);
-      return;
-    }
     if (i >= 0) this.$set(this.tasks, i, merged);
     else this.tasks.unshift(merged);
     if (merged.status === 'error' && (!prev || prev.status !== 'error')) {
@@ -148,55 +277,69 @@ export default {
         map[x.taskId] = x;
         keyMap[this.childKey(x)] = x;
       });
-      const childIds = new Set();
-      const childKeys = new Set();
+      // Folder trees are scanned incrementally: patch known rows instead of rebuilding them.
+      this._folderStates.forEach((state) => {
+        this.folderFiles(state.root).forEach((c) => {
+          const m = (c.xferId && map[c.xferId]) || keyMap[this.childKey(c)];
+          if (!m) return;
+          Object.assign(c, m, { taskId: c.taskId, isDir: c.isDir, isFolder: false, xferId: m.taskId });
+          if (m.taskId) this._rowByXferId.set(m.taskId, c);
+        });
+        this.recalcTree(state.root);
+      });
+      const childIds = new Set(this._rowByXferId.keys());
+      const childKeys = new Set(this._rowByKey.keys());
       const next = [];
+      const dropped = [];
       this.tasks.forEach((row) => {
-        if (row && row.isFolder && row.children) {
-          const kids = row.children.map((c) => {
-            const m = map[c.taskId] || keyMap[this.childKey(c)] || null;
-            const merged = m ? { ...c, ...m, parentId: row.taskId, isFolder: false } : { ...c, parentId: row.taskId };
-            if (merged.taskId) childIds.add(merged.taskId);
-            childKeys.add(this.childKey(merged));
-            return merged;
-          });
-          const folder = { ...row, children: kids, isFolder: true };
-          this.recalcFolder(folder);
-          if (folder.status !== 'done') next.push(folder);
+        if (!row) return;
+        if (row.isFolder) {
+          const state = this.folderState(row.taskId);
+          const keep = row.status !== 'done' || (state && !state.done);
+          if (keep) next.push(row);
+          else dropped.push(row);
           return;
         }
-      });
-      // top-level: only non-child, non-done rows
-      this.tasks.forEach((row) => {
-        if (!row || row.isFolder) return;
         if (childIds.has(row.taskId) || childKeys.has(this.childKey(row))) return;
         if (row.status === 'done') return;
         next.push(row);
       });
-      this.tasks = next.filter((row) => {
-        if (row.isFolder) return row.status !== 'done';
-        return row.status !== 'done' && !childIds.has(row.taskId) && !childKeys.has(this.childKey(row));
-      });
+      dropped.forEach((row) => this.forgetFolderTree(row.taskId));
+      const unchanged =
+        next.length === this.tasks.length && next.every((row, i) => row === this.tasks[i]);
+      if (!unchanged) this.tasks = next;
     } catch (_) {}
+  },
+  /** Pause the scan loop too, so queued files do not start while the folder is paused. */
+  waitForResume(state) {
+    return new Promise((resolve) => {
+      const check = () => {
+        if (!state || state.canceled || !state.paused) return resolve();
+        setTimeout(check, 200);
+      };
+      check();
+    });
   },
   async togglePause(task) {
     if (this.isTaskFinished(task)) return;
     const pause = task.status !== 'paused';
     try {
-      if (task.isFolder && task.children && task.children.length) {
-        for (const c of task.children) {
-          if (c.isDir || !c.taskId) continue;
+      if (task.isFolder) {
+        const state = this.folderState(task.taskId);
+        if (state) state.paused = pause;
+        for (const c of this.folderFiles(task)) {
+          if (!c.xferId) continue;
           try {
-            unwrap(await api.sftpPause(c.taskId, pause));
+            unwrap(await api.sftpPause(c.xferId, pause));
             c.status = pause ? 'paused' : 'running';
           } catch (_) {}
         }
-        this.$set(task, 'status', pause ? 'paused' : 'running');
-        this.recalcFolder(task);
+        task.status = pause ? 'paused' : 'running';
+        this.recalcTree(task);
         this.syncTasks();
         return;
       }
-      unwrap(await api.sftpPause(task.taskId, pause));
+      unwrap(await api.sftpPause(task.xferId || task.taskId, pause));
       this.mergeTask({ ...task, status: pause ? 'paused' : 'running' });
       this.syncTasks();
     } catch (e) {
@@ -224,14 +367,18 @@ export default {
   async removeTask(task) {
     try {
       const unfinished = (row) => row && (row.status === 'running' || row.status === 'paused');
-      if (task.isFolder && task.children && task.children.length) {
-        for (const c of task.children) {
-          if (c.isDir || !c.taskId) continue;
-          try { unwrap(await api.sftpCancel(c.taskId)); } catch (_) {}
+      if (task.isFolder) {
+        const state = this.folderState(task.taskId);
+        if (state) state.canceled = true;
+        const files = this.folderFiles(task);
+        for (const c of files) {
+          if (!c.xferId) continue;
+          try {
+            unwrap(await api.sftpCancel(c.xferId));
+          } catch (_) {}
         }
-        for (const c of task.children) {
-          if (c.isDir || !c.targetPath) continue;
-          if (!unfinished(c)) continue;
+        for (const c of files) {
+          if (!c.targetPath || !unfinished(c)) continue;
           if (c.direction === 'download' && api.sftpLocalUnlink) {
             try { await api.sftpLocalUnlink(c.targetPath, false); } catch (_) {}
           } else if (c.direction === 'upload' && this.connId && api.sftpUnlink) {
@@ -240,12 +387,13 @@ export default {
         }
         this.tasks = this.tasks.filter((x) => x.taskId !== task.taskId);
         this.collapseFolder(task.taskId);
+        this.forgetFolderTree(task.taskId);
         await this.refreshListsAfterTaskRemove(task);
         this.syncTasks();
         return;
       }
       const wasUnfinished = unfinished(task);
-      unwrap(await api.sftpCancel(task.taskId));
+      unwrap(await api.sftpCancel(task.xferId || task.taskId));
       if (wasUnfinished && task.targetPath) {
         if (task.direction === 'download' && api.sftpLocalUnlink) {
           try { await api.sftpLocalUnlink(task.targetPath, false); } catch (_) {}

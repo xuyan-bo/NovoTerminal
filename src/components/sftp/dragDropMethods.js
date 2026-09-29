@@ -1,31 +1,41 @@
 import { api, unwrap } from '../../store';
 import { t } from '../../i18n';
-import { joinLocal, joinRemote } from './utils';
+import { joinLocal, joinRemote, isAbsLocalPath } from './utils';
 
 export default {
   /* ========== drag & drop — restore first-working panel+list zones ========== */
+  /** Directory a local-side drop lands in; the Windows "This PC" view has no real path. */
+  localDropDir() {
+    if (isAbsLocalPath(this.localPath)) return this.localPath;
+    if (isAbsLocalPath(this.localHome)) return this.localHome;
+    return api.platform === 'win32' ? 'C:\\' : '/';
+  },
   onDragStart(e, side, f) {
     if (!f || f.isParent) {
       e.preventDefault();
       return false;
     }
-    const pathVal =
-      side === 'local' ? joinLocal(this.localPath, f.name) : joinRemote(this.remotePath, f.name);
-    const payload = {
-      side,
-      name: f.name,
-      isDir: !!f.isDir,
-      path: pathVal,
-    };
+    const pathOf = (name, isDir) => ({
+      name,
+      isDir: !!isDir,
+      path: side === 'local' ? joinLocal(this.localPath, name) : joinRemote(this.remotePath, name),
+    });
+    // Dragging a row that is part of a multi-selection moves the whole selection.
+    const sel = side === 'local' ? this.localSel : this.remoteSel;
+    const rows = this.itemsOf(side).filter((x) => !x.isParent && sel.indexOf(x.name) >= 0);
+    const list = rows.length && rows.some((x) => x.name === f.name)
+      ? rows.map((x) => pathOf(x.name, x.isDir))
+      : [pathOf(f.name, f.isDir)];
+    const payload = { side, list };
     this.dragPayload = payload;
     this._lastDrag = payload;
     try {
       e.dataTransfer.effectAllowed = 'copyMove';
-      e.dataTransfer.setData('text/plain', pathVal);
+      e.dataTransfer.setData('text/plain', list.map((x) => x.path).join('\n'));
       e.dataTransfer.setData('text/omnidesk-sftp', JSON.stringify(payload));
     } catch (_) {}
     // HTML5 only — in-app drop. Do NOT auto-download to temp on dragstart.
-    this.pushDlog(`dragstart ${payload.side} ${payload.path}`);
+    this.pushDlog(`dragstart ${payload.side} n=${list.length} ${list[0].path}`);
     return true;
   },
   onDragEnd() {
@@ -90,91 +100,16 @@ export default {
       return;
     }
 
-    // Common case: remote file → local panel
-    if (
-      payload &&
-      zoneSide === 'local' &&
-      payload.side === 'remote' &&
-      !payload.isDir &&
-      this.connId
-    ) {
-      const destDir = this.localPath || 'D:\\';
-      const fname =
-        payload.name || String(payload.path || '').split('/').filter(Boolean).pop() || 'download.bin';
-      const localPath = destDir.replace(/[\\/]+$/, '') + '\\' + fname;
-      this.pushDlog(`zone-drop DIRECT download -> ${localPath}`);
+    // In-app drag from the other panel: files and folders both land here.
+    if (payload && payload.side !== zoneSide && this.connId) {
+      const items = payload.list || [];
+      this.pushDlog(`zone-drop DIRECT ${payload.side}→${zoneSide} n=${items.length}`);
       this._lastDrag = null;
       this.dragPayload = null;
-      this.startDownload(payload.path, localPath)
-        .then(() => {
-          this.pushDlog('zone-drop DIRECT done');
-          return this.syncTasks();
-        })
-        .catch((err) => {
-          this.pushDlog('zone-drop DIRECT fail ' + (err && err.message));
-          this.$message.error(err.message || String(err));
-        });
-      return;
-    }
-
-    // Remote folder → local panel
-    if (
-      payload &&
-      zoneSide === 'local' &&
-      payload.side === 'remote' &&
-      payload.isDir &&
-      this.connId
-    ) {
-      this.pushDlog(`zone-drop DIRECT folder download ${payload.path}`);
-      this._lastDrag = null;
-      this.dragPayload = null;
-      this.transferFolderDownload(payload.path, this.localPath).catch((err) => {
+      this.runTransfers(items, zoneSide).catch((err) => {
+        this.pushDlog('zone-drop DIRECT fail ' + (err && err.message));
         this.$message.error(err.message || String(err));
       });
-      return;
-    }
-
-    // Local folder → remote panel
-    if (
-      payload &&
-      zoneSide === 'remote' &&
-      payload.side === 'local' &&
-      payload.isDir &&
-      this.connId
-    ) {
-      this.pushDlog(`zone-drop DIRECT folder upload ${payload.path}`);
-      this._lastDrag = null;
-      this.dragPayload = null;
-      this.transferFolderUpload(payload.path, this.remotePath).catch((err) => {
-        this.$message.error(err.message || String(err));
-      });
-      return;
-    }
-
-    // Common case: local file → remote panel
-    if (
-      payload &&
-      zoneSide === 'remote' &&
-      payload.side === 'local' &&
-      !payload.isDir &&
-      this.connId
-    ) {
-      const destDir = this.remotePath || '/';
-      const fname =
-        payload.name || String(payload.path || '').split(/[\\/]/).filter(Boolean).pop() || 'upload.bin';
-      const remotePath = (destDir === '/' ? '' : destDir.replace(/\/+$/, '')) + '/' + fname;
-      this.pushDlog(`zone-drop DIRECT upload -> ${remotePath}`);
-      this._lastDrag = null;
-      this.dragPayload = null;
-      this.startUpload(payload.path, remotePath)
-        .then(() => {
-          this.pushDlog('zone-drop DIRECT done');
-          return this.syncTasks();
-        })
-        .catch((err) => {
-          this.pushDlog('zone-drop DIRECT fail ' + (err && err.message));
-          this.$message.error(err.message || String(err));
-        });
       return;
     }
 
@@ -189,7 +124,7 @@ export default {
     const payload = this._lastDrag || this.dragPayload;
     const external = this.collectExternalPaths(e);
     this.pushDlog(
-      `runDrop zone=${zoneSide || '-'} payload=${payload ? payload.side + ':' + payload.path : 'null'} ext=${external.length}`
+      `runDrop zone=${zoneSide || '-'} payload=${payload ? payload.side + ':n=' + (payload.list || []).length : 'null'} ext=${external.length}`
     );
     if (external.length) {
       this._lastDrag = null;
@@ -203,7 +138,7 @@ export default {
     }
 
     const dest =
-      zoneSide === 'remote' ? this.remotePath : zoneSide === 'local' ? this.localPath : null;
+      zoneSide === 'remote' ? this.remotePath : zoneSide === 'local' ? this.localDropDir() : null;
 
     // no zone hint → detect from element under cursor
     let tSide = zoneSide;
@@ -219,7 +154,7 @@ export default {
         this.$message.warning('请拖到「本机文件」或「服务器文件」区域');
         return;
       }
-      dropDest = tSide === 'remote' ? this.remotePath : this.localPath;
+      dropDest = tSide === 'remote' ? this.remotePath : this.localDropDir();
       const row = el && el.closest ? el.closest('.file-row') : null;
       if (
         row &&
@@ -231,11 +166,11 @@ export default {
           dropDest =
             tSide === 'remote'
               ? joinRemote(this.remotePath, name)
-              : joinLocal(this.localPath, name);
+              : joinLocal(this.localDropDir(), name);
         }
       }
     } else if (!dropDest) {
-      dropDest = tSide === 'remote' ? this.remotePath : this.localPath;
+      dropDest = tSide === 'remote' ? this.remotePath : this.localDropDir();
     }
 
     // dropped onto a folder row in the zone
@@ -250,11 +185,11 @@ export default {
         dropDest =
           tSide === 'remote'
             ? joinRemote(this.remotePath, name)
-            : joinLocal(this.localPath, name);
+            : joinLocal(this.localDropDir(), name);
       }
     }
 
-    this.pushDlog(`runDrop dest=${tSide}:${dropDest} conn=${this.connId || 'null'} isDir=${payload ? !!payload.isDir : '-'} side=${payload ? payload.side : '-'}`);
+    this.pushDlog(`runDrop dest=${tSide}:${dropDest} conn=${this.connId || 'null'} n=${payload ? (payload.list || []).length : '-'} side=${payload ? payload.side : '-'}`);
 
     if (!payload) {
       this.pushDlog('runDrop no payload');
@@ -279,7 +214,7 @@ export default {
       }
     }
 
-    const lockKey = `${payload.side}:${payload.path}>${tSide}:${dropDest}`;
+    const lockKey = `${payload.side}:${(payload.list || []).map((x) => x.path).join(', ')}>${tSide}:${dropDest}`;
     if (this._dropLock[lockKey]) {
       this.pushDlog('runDrop dup skip');
       return;
@@ -290,24 +225,10 @@ export default {
     }, 1500);
 
     try {
-      if (payload.side === 'remote' && tSide === 'local' && !payload.isDir) {
-        const localPath = joinLocal(dropDest, payload.name || payload.path.split('/').pop());
-        this.pushDlog(`runDrop DOWNLOAD ${payload.path} -> ${localPath}`);
-        await this.startDownload(payload.path, localPath);
-        this.pushDlog('runDrop download API returned');
-        this.syncTasks();
-      } else if (payload.side === 'local' && tSide === 'remote' && !payload.isDir) {
-        const remotePath = joinRemote(dropDest, payload.name || payload.path.split(/[\\/]/).pop());
-        this.pushDlog(`runDrop UPLOAD ${payload.path} -> ${remotePath}`);
-        await this.startUpload(payload.path, remotePath);
-        this.pushDlog('runDrop upload API returned');
-        this.syncTasks();
-      } else {
-        this.pushDlog('runDrop folder transfer');
-        if (tSide === 'remote') await this.uploadLocalPayload(payload, dropDest);
-        else await this.downloadRemotePayload(payload, dropDest);
-        this.syncTasks();
-      }
+      const items = payload.list || [];
+      this.pushDlog(`runDrop transfer ${payload.side}→${tSide} n=${items.length}`);
+      await this.runTransfers(items, tSide, dropDest);
+      this.syncTasks();
     } catch (err) {
       this.pushDlog('runDrop fail ' + (err && err.message));
       this.$message.error(err.message || String(err));
@@ -361,8 +282,10 @@ export default {
           }
         }
       }
-      // Windows often puts the absolute path into text/plain (first working version)
-      if (!out.length) {
+      // Windows often puts the absolute path into text/plain (first working version).
+      // An in-app drag already carries its payload in dataTransfer; its text/plain is that
+      // payload's own path, so only treat these candidates as OS files when no drag payload is set.
+      if (!out.length && !(this._lastDrag || this.dragPayload)) {
         const txt = dt.getData('text/plain') || '';
         const uri = dt.getData('text/uri-list') || '';
         const candidates = [];
@@ -370,8 +293,9 @@ export default {
         if (uri) {
           uri.split(/\r?\n/).forEach((line) => {
             if (line.indexOf('file://') === 0) {
-              let p = decodeURIComponent(line.slice(7)).replace(/\//g, '\\');
-              if (/^\\[A-Za-z]:/.test(p)) p = p.slice(1);
+              let p = decodeURIComponent(line.slice(7));
+              // Only a Windows drive URL needs separator fixing; POSIX paths keep their slashes.
+              if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1).replace(/\//g, '\\');
               candidates.push(p);
             }
           });
@@ -379,11 +303,11 @@ export default {
         candidates.forEach((raw) => {
           const line = String(raw).trim();
           if (!line || line.charAt(0) === '{') return;
-          if (/^[A-Za-z]:[\\/]/.test(line) || line.indexOf('\\\\') === 0) {
+          if (isAbsLocalPath(line)) {
             // may contain multiple paths separated by newline
             line.split(/\r?\n/).forEach((one) => {
               const p = one.trim();
-              if (/^[A-Za-z]:[\\/]/.test(p) || p.indexOf('\\\\') === 0) push(p);
+              if (isAbsLocalPath(p)) push(p);
             });
           }
         });
@@ -403,7 +327,7 @@ export default {
   /** Upload OS files into remote / copy into local folder */
   async handleExternalDrop(external, zoneSide, e) {
     let dest =
-      zoneSide === 'remote' ? this.remotePath : this.localPath;
+      zoneSide === 'remote' ? this.remotePath : this.localDropDir();
     const rowEl = e && e.target && e.target.closest ? e.target.closest('.file-row') : null;
     if (
       rowEl &&
@@ -445,7 +369,6 @@ export default {
         }
       }
       if (ok) {
-        this.$message.success(t('sftp.taskQueued'));
         setTimeout(() => this.goRemote(dest), 400);
         this.syncTasks();
       }

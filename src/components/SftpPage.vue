@@ -13,10 +13,14 @@
         :items="localItems"
         :path-input="localPathInput"
         :selected="localSel"
+        :sort="localSort"
         :loading="localLoading"
         :drop-hi="dropHi"
         @path-input="localPathInput = $event"
-        @select="localSel = $event"
+        @select="onRowSelect"
+        @marquee="onMarquee"
+        @blank-click="onBlankClick"
+        @sort-change="onSortChange"
         @navigate="goLocal"
         @up="localUp"
         @home="goLocal(localHome)"
@@ -40,11 +44,15 @@
         :items="remoteItems"
         :path-input="remotePathInput"
         :selected="remoteSel"
+        :sort="remoteSort"
         :loading="remoteLoading"
         :drop-hi="dropHi"
         :refresh-disabled="!connId"
         @path-input="remotePathInput = $event"
-        @select="remoteSel = $event"
+        @select="onRowSelect"
+        @marquee="onMarquee"
+        @blank-click="onBlankClick"
+        @sort-change="onSortChange"
         @navigate="goRemote"
         @up="remoteUp"
         @home="goRemote(remoteHome || '/')"
@@ -70,6 +78,7 @@
       :tasks="tasks"
       :expanded-keys="expandedKeys"
       @expand-change="onExpandChange"
+      @load-children="loadTreeChildren"
       @toggle-pause="togglePause"
       @remove-task="removeTask"
     />
@@ -79,8 +88,8 @@
         v-for="it in ctx.items"
         :key="it.act"
         class="sftp-ctx-item"
-        :class="{ danger: it.danger }"
-        @click="runCtx(it)"
+        :class="{ danger: it.danger, disabled: it.disabled }"
+        @click="!it.disabled && runCtx(it)"
       >{{ it.label }}</div>
     </div>
   </div>
@@ -91,10 +100,11 @@ import { api, unwrap } from '../store';
 import { t } from '../i18n';
 import SftpFilePanel from './sftp/SftpFilePanel.vue';
 import SftpTransferQueue from './sftp/SftpTransferQueue.vue';
-import { PARENT_ROW, joinLocal, joinRemote, parentLocal, parentRemote, normalizeRemotePath } from './sftp/utils';
+import { PARENT_ROW, joinLocal, joinRemote, parentLocal, parentRemote, normalizeRemotePath, sortItems } from './sftp/utils';
 import taskMethods from './sftp/taskMethods';
 import transferMethods from './sftp/transferMethods';
 import dragDropMethods from './sftp/dragDropMethods';
+import selectionMethods from './sftp/selectionMethods';
 
 export default {
   name: 'SftpPage',
@@ -115,17 +125,23 @@ export default {
       localHome: '',
       localComputer: false,
       localItems: [],
-      localSel: '',
+      localSel: [],
+      localAnchor: '',
+      localSort: { key: 'name', dir: 'asc' },
       localLoading: false,
       remotePath: '/',
       remotePathInput: '/',
       remoteHome: '/',
       remoteItems: [],
-      remoteSel: '',
+      remoteSel: [],
+      remoteAnchor: '',
+      remoteSort: { key: 'name', dir: 'asc' },
       remoteLoading: false,
+      activeSide: 'local',
       tasks: [],
       dropHi: '',
       dragPayload: null,
+      clipHasFiles: false,
       ctx: { visible: false, x: 0, y: 0, items: [], side: '', item: null },
       offProgress: null,
       topPct: 58,
@@ -161,9 +177,14 @@ export default {
     // Vue 2 does not proxy data keys beginning with an underscore.
     this._dropLock = {};
     this._lastDrag = null;
+    this._marqueeBase = null;
     this._split = null;
     this._pollTimer = null;
     this._sftpDestroyed = false;
+    // Folder task trees: scan state plus row indexes for progress events and lazy rendering.
+    this._folderStates = new Map();
+    this._rowByKey = new Map();
+    this._rowByXferId = new Map();
   },
   async mounted() {
     document.title = `${this.winTitle} · ${this.buildTag}`;
@@ -235,6 +256,8 @@ export default {
     };
     document.addEventListener('dragover', this._docOver, true);
     document.addEventListener('drop', this._docDrop, true);
+    document.addEventListener('keydown', this.onGlobalKey);
+    window.addEventListener('focus', this.refreshClipFiles);
 
     this.$nextTick(() => {
       if (this._sftpDestroyed) return;
@@ -262,6 +285,8 @@ export default {
     }
     if (this._docOver) document.removeEventListener('dragover', this._docOver, true);
     if (this._docDrop) document.removeEventListener('drop', this._docDrop, true);
+    document.removeEventListener('keydown', this.onGlobalKey);
+    window.removeEventListener('focus', this.refreshClipFiles);
     document.removeEventListener('mousemove', this.onSplitMove);
     document.removeEventListener('mouseup', this.onSplitUp);
     if (this._pollTimer) clearInterval(this._pollTimer);
@@ -272,6 +297,7 @@ export default {
     if (this.connId && api.sftpClose) api.sftpClose(this.connId).catch(() => {});
   },
   methods: {
+    ...selectionMethods,
     ...taskMethods,
     ...transferMethods,
     ...dragDropMethods,
@@ -307,6 +333,7 @@ export default {
         await this.goRemote(this.remoteHome);
         if (this._sftpDestroyed) return;
         await this.syncTasks();
+        this.refreshClipFiles();
       } catch (e) {
         if (this._sftpDestroyed) return;
         this.status = 'error';
@@ -354,8 +381,9 @@ export default {
         this.localPathInput = r.path;
         if (r.home) this.localHome = r.home;
         const items = (r.items || []).filter((x) => x.name !== '.' && x.name !== '..');
-        this.localItems = [PARENT_ROW, ...items];
-        this.localSel = '';
+        this.localItems = sortItems([PARENT_ROW, ...items], this.localSort);
+        this.localSel = [];
+        this.localAnchor = '';
       } catch (e) {
         this.$message.error(e.message);
       } finally {
@@ -370,8 +398,9 @@ export default {
         this.localComputer = true;
         this.localPath = '/';
         this.localPathInput = '/';
-        this.localItems = [PARENT_ROW, ...drives.map((d) => ({ ...d, name: `${t('sftp.disk')} (${String(d.name || '').slice(0, 1)}:)` }))];
-        this.localSel = '';
+        this.localItems = sortItems([PARENT_ROW, ...drives.map((d) => ({ ...d, name: `${t('sftp.disk')} (${String(d.name || '').slice(0, 1)}:)` }))], this.localSort);
+        this.localSel = [];
+        this.localAnchor = '';
       } catch (e) {
         this.$message.error(e.message);
       } finally {
@@ -387,8 +416,9 @@ export default {
         this.remotePath = normalizeRemotePath(r.path || target);
         this.remotePathInput = this.remotePath;
         const items = (r.items || []).filter((x) => x.name !== '.' && x.name !== '..');
-        this.remoteItems = [PARENT_ROW, ...items];
-        this.remoteSel = '';
+        this.remoteItems = sortItems([PARENT_ROW, ...items], this.remoteSort);
+        this.remoteSel = [];
+        this.remoteAnchor = '';
       } catch (e) {
         this.$message.error(e.message);
       } finally {
@@ -404,6 +434,20 @@ export default {
     remoteUp() {
       this.goRemote(parentRemote(this.remotePath));
     },
+    onSortChange(side, key) {
+      const cur = side === 'local' ? this.localSort : this.remoteSort;
+      const next =
+        cur.key === key
+          ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' }
+          : { key, dir: key === 'name' ? 'asc' : 'desc' };
+      if (side === 'local') {
+        this.localSort = next;
+        this.localItems = sortItems(this.localItems, next);
+      } else {
+        this.remoteSort = next;
+        this.remoteItems = sortItems(this.remoteItems, next);
+      }
+    },
     onLocalDbl(f) {
       if (f.isParent) return this.localUp();
       if (f.isDrive) return this.goLocal(f.path);
@@ -418,76 +462,106 @@ export default {
 
     onBlankCtx(e, side) {
       const items = [{ act: 'mkdir', label: t('sftp.mkdir') }];
-      if (side === 'remote') items.push({ act: 'paste', label: t('sftp.paste') });
+      if (side === 'remote') {
+        items.push({ act: 'paste', label: t('sftp.paste'), disabled: !this.clipHasFiles });
+      }
+      items.push({ act: 'refresh', label: t('sftp.refresh') });
+      items.push({ act: 'select-all', label: t('sftp.selectAll') });
       this.ctx = { visible: true, x: e.clientX, y: e.clientY, side, item: null, items };
+      if (side === 'remote') this.refreshClipFiles();
     },
-    onItemCtx(e, side, f) {
-      if (side === 'local') this.localSel = f.name;
-      else this.remoteSel = f.name;
-      const items = [
-        { act: 'rename', label: t('sftp.rename') },
-        { act: 'delete', label: t('sftp.delete'), danger: true },
-      ];
-      if (!f.isParent && f.isDir) {
-        if (side === 'remote') {
-          items.unshift({ act: 'download-folder', label: t('sftp.downloadFolder') });
-        } else {
-          items.unshift({ act: 'upload-folder', label: t('sftp.uploadFolder') });
+    /** The OS clipboard can change at any moment, so the paste item is re-checked on open and on focus. */
+    async refreshClipFiles() {
+      let has = false;
+      if (api.sftpClipboardFiles) {
+        try {
+          const files = unwrap(await api.sftpClipboardFiles());
+          has = !!(files && files.length);
+        } catch (_) {
+          has = false;
         }
       }
-      if (side === 'remote' && !f.isParent && !f.isDir) {
-        items.unshift({ act: 'download-here', label: t('sftp.downloadHere') });
-        items.unshift({ act: 'download-to', label: t('sftp.downloadTo') });
+      if (this._sftpDestroyed) return;
+      this.clipHasFiles = has;
+      const item = (this.ctx.items || []).find((x) => x.act === 'paste');
+      if (item && this.ctx.visible) item.disabled = !has;
+    },
+    onItemCtx(e, side, f) {
+      if (f.isParent) return;
+      const sel = side === 'local' ? this.localSel : this.remoteSel;
+      if (sel.indexOf(f.name) < 0) this.onRowSelect(side, f.name, {});
+      const targets = this.selItems(side);
+      const many = targets.length > 1;
+      const items = [];
+      if (side === 'local') {
+        if (many) items.push({ act: 'upload-selected', label: t('sftp.uploadSelected') });
+        else if (f.isDir) items.push({ act: 'upload-folder', label: t('sftp.uploadFolder') });
+        else items.push({ act: 'upload-file', label: t('sftp.uploadFile') });
+      } else if (many || !f.isDir) {
+        items.push({ act: 'download-here', label: t('sftp.downloadHere') });
+        items.push({ act: 'download-to', label: t('sftp.downloadTo') });
+      } else {
+        items.push({ act: 'download-folder', label: t('sftp.downloadFolder') });
       }
+      if (!many) items.push({ act: 'rename', label: t('sftp.rename') });
+      items.push({ act: 'delete', label: t('sftp.delete'), danger: true });
       this.ctx = { visible: true, x: e.clientX, y: e.clientY, side, item: f, items };
     },
     async runCtx(it) {
       const { side, item } = this.ctx;
       this.closeCtx();
+      const targets = this.selItems(side);
+      const list = targets.length ? targets : item ? [item] : [];
+      const localOf = (x) => joinLocal(this.localPath, x.name);
+      const remoteOf = (x) => joinRemote(this.remotePath, x.name);
       try {
         if (it.act === 'upload-folder' && item && item.isDir) {
-          const localDir = joinLocal(this.localPath, item.name);
-          await this.transferFolderUpload(localDir, this.remotePath);
+          await this.transferFolderUpload(localOf(item), this.remotePath);
+          return;
+        }
+        if (it.act === 'upload-selected' || it.act === 'upload-file') {
+          for (const x of list.filter((y) => y.isDir)) {
+            await this.transferFolderUpload(localOf(x), this.remotePath);
+          }
+          const files = list.filter((y) => !y.isDir);
+          if (files.length) await this.uploadPaths(files.map(localOf), this.remotePath);
           return;
         }
         if (it.act === 'download-folder' && item && item.isDir) {
-          const remoteDir = joinRemote(this.remotePath, item.name);
-          await this.transferFolderDownload(remoteDir, this.localPath);
+          await this.transferFolderDownload(remoteOf(item), this.localPath);
           return;
         }
-        if (it.act === 'download-here' && item) {
-          const remotePath = joinRemote(this.remotePath, item.name);
-          if (item.isDir) {
-            const localRoot = joinLocal(this.localPath, item.name);
-            await api.sftpLocalMkdir(this.localPath, item.name);
-            await this.downloadRemoteDir(remotePath, localRoot);
-            this.$message.success(t('sftp.downloadDone'));
-            this.goLocal(this.localPath);
-          } else {
-            await this.startDownload(remotePath, joinLocal(this.localPath, item.name));
-            this.$message.success(t('sftp.taskQueued'));
-            this.syncTasks();
-            setTimeout(() => this.goLocal(this.localPath), 400);
+        if (it.act === 'download-here' && list.length) {
+          const dir = this.localPath;
+          for (const x of list) {
+            if (x.isDir) {
+              await api.sftpLocalMkdir(dir, x.name);
+              await this.downloadRemoteDir(remoteOf(x), joinLocal(dir, x.name));
+            } else {
+              await this.startDownload(remoteOf(x), joinLocal(dir, x.name));
+            }
           }
+          if (list.some((x) => x.isDir)) this.$message.success(t('sftp.downloadDone'));
+          this.syncTasks();
+          setTimeout(() => this.goLocal(dir), 400);
           return;
         }
-        if (it.act === 'download-to' && item) {
+        if (it.act === 'download-to' && list.length) {
           let dir = this.localPath;
           if (api.sftpPickLocalDir) {
             const picked = unwrap(await api.sftpPickLocalDir());
             if (picked) dir = picked;
           }
-          const remotePath = joinRemote(this.remotePath, item.name);
-          if (item.isDir) {
-            const localRoot = joinLocal(dir, item.name);
-            await api.sftpLocalMkdir(dir, item.name);
-            await this.downloadRemoteDir(remotePath, localRoot);
-            this.$message.success(t('sftp.downloadDone'));
-          } else {
-            await this.startDownload(remotePath, joinLocal(dir, item.name));
-            this.$message.success(t('sftp.taskQueued'));
-            this.syncTasks();
+          for (const x of list) {
+            if (x.isDir) {
+              await api.sftpLocalMkdir(dir, x.name);
+              await this.downloadRemoteDir(remoteOf(x), joinLocal(dir, x.name));
+            } else {
+              await this.startDownload(remoteOf(x), joinLocal(dir, x.name));
+            }
           }
+          if (list.some((x) => x.isDir)) this.$message.success(t('sftp.downloadDone'));
+          this.syncTasks();
           return;
         }
         if (it.act === 'paste') {
@@ -520,7 +594,16 @@ export default {
           }
           return;
         }
-        if (it.act === 'rename' && item) {
+        if (it.act === 'refresh') {
+          if (side === 'local') await this.goLocal(this.localPath);
+          else await this.goRemote(this.remotePath);
+          return;
+        }
+        if (it.act === 'select-all') {
+          this.setSel(side, this.selectableNames(side));
+          return;
+        }
+        if (it.act === 'rename' && item && list.length === 1) {
           const r = await this.$prompt(t('sftp.renameTo'), t('sftp.rename'), {
             confirmButtonText: t('msg.confirm'),
             cancelButtonText: t('msg.cancel'),
@@ -529,23 +612,26 @@ export default {
           const neu = r && r.value ? String(r.value).trim() : '';
           if (!neu || neu === item.name) return;
           if (side === 'local') {
-            unwrap(await api.sftpLocalRename(joinLocal(this.localPath, item.name), joinLocal(this.localPath, neu)));
+            unwrap(await api.sftpLocalRename(localOf(item), joinLocal(this.localPath, neu)));
             await this.goLocal(this.localPath);
           } else {
-            unwrap(await api.sftpRename(this.connId, joinRemote(this.remotePath, item.name), joinRemote(this.remotePath, neu)));
+            unwrap(await api.sftpRename(this.connId, remoteOf(item), joinRemote(this.remotePath, neu)));
             await this.goRemote(this.remotePath);
           }
           return;
         }
-        if (it.act === 'delete' && item) {
-          await this.$confirm(t('sftp.confirmDelete', { name: item.name }), t('msg.confirm'), { type: 'warning' });
-          if (side === 'local') {
-            unwrap(await api.sftpLocalUnlink(joinLocal(this.localPath, item.name), item.isDir));
-            await this.goLocal(this.localPath);
-          } else {
-            unwrap(await api.sftpUnlink(this.connId, joinRemote(this.remotePath, item.name), item.isDir));
-            await this.goRemote(this.remotePath);
+        if (it.act === 'delete' && list.length) {
+          const msg =
+            list.length === 1
+              ? t('sftp.confirmDelete', { name: list[0].name })
+              : t('sftp.confirmDeleteMulti', { count: list.length });
+          await this.$confirm(msg, t('msg.confirm'), { type: 'warning' });
+          for (const x of list) {
+            if (side === 'local') unwrap(await api.sftpLocalUnlink(localOf(x), x.isDir));
+            else unwrap(await api.sftpUnlink(this.connId, remoteOf(x), x.isDir));
           }
+          if (side === 'local') await this.goLocal(this.localPath);
+          else await this.goRemote(this.remotePath);
         }
       } catch (err) {
         if (err !== 'cancel' && err !== 'close') this.$message.error(err.message || String(err));
@@ -650,5 +736,14 @@ export default {
 .sftp-ctx-item.danger:hover {
   color: #f56c6c;
   background: rgba(245, 108, 108, 0.12);
+}
+.sftp-ctx-item.disabled {
+  color: var(--text-3);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.sftp-ctx-item.disabled:hover {
+  color: var(--text-3);
+  background: transparent;
 }
 </style>

@@ -121,7 +121,6 @@ const api = {
   sftpLocalMkdir: (dirPath, name) => ipcRenderer.invoke('sftp:local-mkdir', dirPath, name),
   sftpLocalRename: (oldPath, newPath) => ipcRenderer.invoke('sftp:local-rename', oldPath, newPath),
   sftpLocalUnlink: (p, isDir) => ipcRenderer.invoke('sftp:local-unlink', p, isDir),
-  sftpWalkLocal: (localDir, remoteDir) => ipcRenderer.invoke('sftp:walk-local', localDir, remoteDir),
   sftpUpload: (req) => ipcRenderer.invoke('sftp:upload', req),
   sftpDownload: (req) => ipcRenderer.invoke('sftp:download', req),
   sftpPause: (taskId, pause) => ipcRenderer.invoke('sftp:pause', taskId, pause),

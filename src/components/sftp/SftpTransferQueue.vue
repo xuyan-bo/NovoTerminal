@@ -8,8 +8,10 @@
         height="100%"
         border
         stripe
+        lazy
         row-key="taskId"
-        :tree-props="{ children: 'children' }"
+        :load="loadChildren"
+        :tree-props="{ children: 'children', hasChildren: 'hasChildren' }"
         :expand-row-keys="expandedKeys"
         empty-text=""
         class="sftp-el-table"
@@ -17,11 +19,10 @@
       >
         <el-table-column prop="name" :label="$t('sftp.colName')" min-width="140" show-overflow-tooltip>
           <template slot-scope="scope">
-            <span v-if="scope.row.isFolder" class="folder-tag">&#128193;</span>
-            <span v-else-if="scope.row.isDir" class="folder-tag">&#128193;</span>
+            <span v-if="scope.row.isFolder || scope.row.isDir" class="folder-tag">&#128193;</span>
             {{ scope.row.name }}
-            <span v-if="scope.row.isFolder" class="folder-count">
-              ({{ folderDone(scope.row) }}/{{ folderFileCount(scope.row) }})
+            <span v-if="scope.row.isFolder || scope.row.isDir" class="folder-count">
+              ({{ scope.row.doneCount || 0 }}/{{ scope.row.fileCount || 0 }})
             </span>
           </template>
         </el-table-column>
@@ -80,13 +81,9 @@ export default {
   },
   methods: {
     isTaskFinished,
-    folderFileCount(row) {
-      if (!row || !row.children) return 0;
-      return row.children.filter((c) => !c.isDir).length;
-    },
-    folderDone(row) {
-      if (!row || !row.children) return 0;
-      return row.children.filter((c) => !c.isDir && c.status === 'done').length;
+    /** Children are resolved by the page, which owns the incrementally scanned task tree. */
+    loadChildren(row, treeNode, resolve) {
+      this.$emit('load-children', row, treeNode, resolve);
     },
     progressText(row) {
       return `${row.percent || 0}%`;
@@ -142,6 +139,22 @@ export default {
 }
 .sftp-el-table /deep/ .el-table__body tr:hover > td {
   background: var(--bg-hover) !important;
+}
+/* Element-style thin scrollbar, matching the file panels */
+.sftp-el-table /deep/ .el-table__body-wrapper::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.sftp-el-table /deep/ .el-table__body-wrapper::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.sftp-el-table /deep/ .el-table__body-wrapper::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+.sftp-el-table /deep/ .el-table__body-wrapper::-webkit-scrollbar-track,
+.sftp-el-table /deep/ .el-table__body-wrapper::-webkit-scrollbar-corner {
+  background: transparent;
 }
 .folder-tag {
   margin-right: 4px;

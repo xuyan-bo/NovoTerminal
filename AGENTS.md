@@ -115,9 +115,12 @@
 - `SftpPage.vue` 持有状态与协调逻辑；面板和队列只负责展示/事件；任务、传输、拖放分别维护在对应 methods 模块。
 - 保持 `.sftp-panel`、`.file-list`、`.file-row` 的层级及 `data-side`、`data-name`、`data-isdir`、`data-parent` 属性，现有拖放解析依赖这些信息。
 - 面板、根节点和 document 的多层监听不能导致同一次 drop 重复传输；保持事件传播控制和去重锁。
-- 不随意合并 `onZoneDrop` 与 `runDrop`：目标目录解析、文件/文件夹处理及覆盖确认路径存在差异，统一前必须明确行为变更。
+- 不随意合并 `onZoneDrop` 与 `runDrop`：前者处理面板直传，后者是区域判定与 document 兜底；两者的文件/文件夹分发统一收敛在 `transferMethods.runTransfers(items, zoneSide, destDir)`（文件走 `uploadPaths`/`downloadPaths`，文件夹走 `transferFolderUpload`/`transferFolderDownload` 聚合任务），目标目录由 `dragDropMethods.localDropDir` 解析。
+- 面板 `selected` 是名称数组，选中状态由 `selectionMethods` 持有：普通单击替换、多选修饰键切换（macOS 用 Cmd、其他平台用 Ctrl）、Shift 按锚点范围选、空白区橡皮筋框选、Ctrl/Cmd+A 全选、Escape 清空；导航与刷新必须同时清空选中与锚点。框选只能从 `.file-list` 空白处起手，行上按下要保持 HTML5 拖拽语义。
+- 拖拽载荷是 `{ side, list }`：被拖行属于选中集时携带全部选中项，否则只携带该行；右键菜单项随选中数量变化（多项时不提供重命名，删除按数量切换确认文案）。空白处右键固定包含新建目录、刷新、全选（远端侧另有粘贴）。
+- 列头排序由页面按侧持有 `{ key: 'name'|'size'|'time', dir }`，统一经 `utils.sortItems` 排序：`..` 恒在首位、目录先于文件、组内按列排序。按时间排序依赖主进程 `SftpManager.list`/`localList` 返回的原始 `mtimeMs`，不要用本地化后的 `mtime` 字符串比较；新增列表字段时同步两处。
 - 保持本机/远端路径规则独立，不能用 Windows 分隔符拼远端路径，也不能让路径工具变更悄悄改变已有目标位置。
-- 保留文件夹任务聚合、展开状态、暂停/恢复、取消及未完成目标文件清理语义；删除任务不等于可任意删除目标文件。
+- 保留文件夹任务聚合、展开状态、暂停/恢复、取消及未完成目标文件清理语义；删除任务不等于可任意删除目标文件。文件夹任务采用「先建行、后增量扫描」：`transferMethods.scanFolderUpload/scanFolderDownload` 按目录逐层列举（复用 `sftpLocalList`/`sftpList`，不要用会阻塞主进程的整树同步遍历），边扫边传；行的 `taskId` 是稳定 row-key，主进程传输 id 存在 `xferId`，进度事件按 `xferId` 或 `sourcePath|targetPath` 命中行并原地更新。表格用 el-table 的 `lazy`+`load` 懒渲染，子节点只在用户展开时经 `loadTreeChildren` 交出；扫描未结束时根任务不得判定为完成。
 - 目录递归、覆盖确认、拖入/拖出和跨窗口进度订阅属于功能契约，拆分组件不能省略或简化这些步骤。
 
 ## 8. IPC、凭据和持久化安全

@@ -148,29 +148,34 @@ button {
   background: transparent;
 }
 
-/* unified Element-style thin scrollbar: session views (SSH/VNC) + xterm viewport + home.
+/* unified Element-style thin scrollbar: session views (SSH/VNC) + xterm viewport + home + SFTP file lists.
    Keeps the native scrollbar from pushing in thick right/bottom bars. */
 .view::-webkit-scrollbar,
 .xterm-viewport::-webkit-scrollbar,
-.home-scroll::-webkit-scrollbar {
+.home-scroll::-webkit-scrollbar,
+.file-list::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 .view::-webkit-scrollbar-thumb,
 .xterm-viewport::-webkit-scrollbar-thumb,
-.home-scroll::-webkit-scrollbar-thumb {
+.home-scroll::-webkit-scrollbar-thumb,
+.file-list::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 3px;
 }
 .view::-webkit-scrollbar-thumb:hover,
 .xterm-viewport::-webkit-scrollbar-thumb:hover,
-.home-scroll::-webkit-scrollbar-thumb:hover {
+.home-scroll::-webkit-scrollbar-thumb:hover,
+.file-list::-webkit-scrollbar-thumb:hover {
   background: var(--text-3);
 }
 .view::-webkit-scrollbar-track,
 .view::-webkit-scrollbar-corner,
 .xterm-viewport::-webkit-scrollbar-track,
-.xterm-viewport::-webkit-scrollbar-corner {
+.xterm-viewport::-webkit-scrollbar-corner,
+.file-list::-webkit-scrollbar-track,
+.file-list::-webkit-scrollbar-corner {
   background: transparent;
 }
 

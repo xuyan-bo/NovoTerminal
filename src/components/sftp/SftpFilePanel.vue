@@ -39,9 +39,12 @@
       </div>
     </div>
     <div class="file-head">
-      <span class="c-name">{{ $t('sftp.colName') }}</span>
-      <span class="c-size">{{ $t('sftp.colSize') }}</span>
-      <span class="c-time">{{ $t('sftp.colTime') }}</span>
+      <span
+        v-for="col in columns"
+        :key="col.key"
+        :class="[col.cls, { 'sort-on': sort.key === col.key }]"
+        @click="$emit('sort-change', side, col.key)"
+      >{{ $t(col.label) }}<i class="sort-ico" :class="sortIcon(col.key)"></i></span>
     </div>
     <!-- Stop the native drop here so it cannot also reach the panel/root handlers. -->
     <div
@@ -51,18 +54,19 @@
       @dragenter.prevent
       @dragover.prevent="$emit('drag-over', $event, side)"
       @drop.prevent.stop="$emit('zone-drop', $event, side)"
+      @mousedown="onAreaMouseDown"
     >
       <div
         v-for="f in items"
         :key="(side === 'local' ? 'l-' : 'r-') + f.name"
         class="file-row"
-        :class="{ sel: selected === f.name, 'drop-hi': dropHi === (side === 'local' ? 'l:' : 'r:') + f.name, parent: f.isParent }"
+        :class="{ sel: selected.indexOf(f.name) >= 0, 'drop-hi': dropHi === (side === 'local' ? 'l:' : 'r:') + f.name, parent: f.isParent }"
         :data-side="side"
         :data-name="f.name"
         :data-isdir="f.isDir ? '1' : '0'"
         :data-parent="f.isParent ? '1' : '0'"
         :draggable="true"
-        @click="$emit('select', f.name, $event)"
+        @click="$emit('select', side, f.name, $event)"
         @dblclick="$emit('item-dbl', f, $event)"
         @contextmenu.prevent.stop="!f.isParent && $emit('item-context', $event, side, f)"
         @dragstart="$emit('drag-start', $event, side, f)"
@@ -76,6 +80,7 @@
       </div>
       <div v-if="!items.length && !loading" class="empty-box">{{ $t('sftp.empty') }}</div>
     </div>
+    <div v-if="marquee" class="marquee" :style="marqueeStyle"></div>
   </div>
 </template>
 
@@ -86,10 +91,108 @@ export default {
     side: { type: String, required: true },
     items: { type: Array, default: () => [] },
     pathInput: { type: String, default: '' },
-    selected: { type: String, default: '' },
+    selected: { type: Array, default: () => [] },
+    sort: { type: Object, default: () => ({ key: 'name', dir: 'asc' }) },
     loading: { type: Boolean, default: false },
     dropHi: { type: String, default: '' },
     refreshDisabled: { type: Boolean, default: false },
+  },
+  data() {
+    return {
+      marquee: null,
+      columns: [
+        { key: 'name', cls: 'c-name', label: 'sftp.colName' },
+        { key: 'size', cls: 'c-size', label: 'sftp.colSize' },
+        { key: 'time', cls: 'c-time', label: 'sftp.colTime' },
+      ],
+    };
+  },
+  computed: {
+    marqueeStyle() {
+      const m = this.marquee;
+      return m
+        ? { left: m.left + 'px', top: m.top + 'px', width: m.width + 'px', height: m.height + 'px' }
+        : {};
+    },
+  },
+  created() {
+    // Vue 2 does not proxy data keys beginning with an underscore.
+    this._marquee = null;
+    this._onMarqueeMove = null;
+    this._onMarqueeUp = null;
+  },
+  beforeDestroy() {
+    this.detachMarquee();
+  },
+  methods: {
+    sortIcon(key) {
+      if (!this.sort || this.sort.key !== key) return 'el-icon-d-caret';
+      return this.sort.dir === 'desc' ? 'el-icon-caret-bottom' : 'el-icon-caret-top';
+    },
+    // Rubber-band selection starts on empty list space only: rows carry draggable=true,
+    // so a press there must stay a drag gesture instead of a selection sweep.
+    onAreaMouseDown(e) {
+      if (e.button !== 0) return;
+      const row = e.target && e.target.closest ? e.target.closest('.file-row') : null;
+      if (row) return;
+      const list = e.currentTarget.getBoundingClientRect();
+      this._marquee = {
+        x: e.clientX,
+        y: e.clientY,
+        list,
+        additive: e.ctrlKey || e.metaKey || e.shiftKey,
+        started: false,
+      };
+      e.preventDefault();
+      this._onMarqueeMove = (ev) => this.onMarqueeMove(ev);
+      this._onMarqueeUp = () => this.onMarqueeUp();
+      window.addEventListener('mousemove', this._onMarqueeMove);
+      window.addEventListener('mouseup', this._onMarqueeUp);
+    },
+    onMarqueeMove(e) {
+      const m = this._marquee;
+      if (!m) return;
+      const x = Math.min(Math.max(e.clientX, m.list.left), m.list.right);
+      const y = Math.min(Math.max(e.clientY, m.list.top), m.list.bottom);
+      if (!m.started) {
+        if (Math.abs(x - m.x) < 4 && Math.abs(y - m.y) < 4) return;
+        m.started = true;
+        this.$emit('marquee', this.side, { phase: 'begin', additive: m.additive });
+      }
+      const top = Math.min(m.y, y);
+      const bottom = Math.max(m.y, y);
+      this.marquee = {
+        left: Math.min(m.x, x),
+        top,
+        width: Math.abs(x - m.x),
+        height: bottom - top,
+      };
+      this.$emit('marquee', this.side, { phase: 'move', names: this.namesInBand(top, bottom) });
+    },
+    namesInBand(top, bottom) {
+      const rows = this.$el.querySelectorAll('.file-list .file-row:not(.parent)');
+      const names = [];
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i].getBoundingClientRect();
+        if (r.bottom >= top && r.top <= bottom) names.push(rows[i].getAttribute('data-name'));
+      }
+      return names;
+    },
+    onMarqueeUp() {
+      const m = this._marquee;
+      this._marquee = null;
+      this.detachMarquee();
+      this.marquee = null;
+      if (!m) return;
+      if (m.started) this.$emit('marquee', this.side, { phase: 'end' });
+      else this.$emit('blank-click', this.side);
+    },
+    detachMarquee() {
+      if (this._onMarqueeMove) window.removeEventListener('mousemove', this._onMarqueeMove);
+      if (this._onMarqueeUp) window.removeEventListener('mouseup', this._onMarqueeUp);
+      this._onMarqueeMove = null;
+      this._onMarqueeUp = null;
+    },
   },
 };
 </script>
@@ -168,6 +271,29 @@ export default {
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
 }
+.file-head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.file-head span:hover {
+  color: var(--text-2);
+}
+.file-head span.sort-on {
+  color: var(--accent);
+}
+.sort-ico {
+  font-size: 10px;
+  opacity: 0.45;
+}
+.file-head span.sort-on .sort-ico {
+  opacity: 1;
+}
 .file-list {
   flex: 1;
   min-height: 0;
@@ -206,5 +332,13 @@ export default {
 }
 .f-ico {
   margin-right: 4px;
+}
+.marquee {
+  position: fixed;
+  z-index: 20;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 2px;
+  pointer-events: none;
 }
 </style>
