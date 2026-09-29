@@ -68,8 +68,16 @@
                 </svg>
               </button>
             </el-tooltip>
+            <el-tooltip :content="$t('home.removeRecent')" placement="top">
+              <button
+                type="button"
+                class="recent-delete-btn"
+                @click.stop="removeRecentRecord(r)"
+              ><i class="el-icon-delete"></i></button>
+            </el-tooltip>
           </div>
           </div>
+          <div class="recent-foot">{{ $t('home.recentLimit') }}</div>
           </el-scrollbar>
         </div>
         <div v-else class="empty">{{ $t('home.recentEmpty') }}</div>
@@ -80,7 +88,7 @@
 
 <script>
 import * as echarts from 'echarts';
-import { store, findAsset, connectAsset, connectionErrorMessage, api, unwrap, refresh } from '../store';
+import { store, findAsset, connectAsset, connectionErrorMessage, removeRecent, api, unwrap, refresh } from '../store';
 import { OS_SVG, formatTime } from '../constants';
 import { t } from '../i18n';
 
@@ -224,8 +232,8 @@ export default {
           { name: names.linux, value: this.osCount.linux, itemStyle: { color: th.linux } },
         ];
         const pieData = total
-          ? raw.filter((x) => x.value > 0)
-          : [{ name: '—', value: 1, itemStyle: { color: th.track } }];
+          ? raw
+          : [{ name: '—', value: 1, itemStyle: { color: th.track } }, ...raw];
 
         const size = this.fitPieSquare();
         this._pie.resize({ width: size, height: size });
@@ -316,6 +324,13 @@ export default {
         });
       } catch (e) {
         this.$message.error(connectionErrorMessage(e));
+      }
+    },
+    async removeRecentRecord(r) {
+      try {
+        await removeRecent(r.id, r.method);
+      } catch (e) {
+        this.$message.error(e.message || String(e));
       }
     },
     async exportJson() {

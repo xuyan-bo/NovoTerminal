@@ -66,7 +66,7 @@
       "icon": "build/icon.ico"
     },
     "linux": {
-      "target": ["deb", "rpm"],
+      "target": ["deb", "rpm", "AppImage"],
       "icon": "build/icon.png",
       "category": "Network"
     },

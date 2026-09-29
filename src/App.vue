@@ -9,56 +9,16 @@
     />
     <template v-else>
     <div class="body-row">
-      <side-bar :style="sidebarStyle" />
+      <side-bar v-show="!treeHidden" :style="sidebarStyle" />
       <div
+        v-show="!treeHidden"
         class="sidebar-resizer"
         :class="{ active: resizing }"
         :style="{ left: sidebarWidth + 'px' }"
         @mousedown="startResize"
       ></div>
       <section class="main">
-        <div
-          ref="tabbarWrap"
-          class="tabbar-wrap"
-          @dragover="onTabDragOver"
-          @dragleave="onTabDragLeave"
-          @drop="onTabDrop"
-        >
-          <div class="tabbar">
-            <div
-              v-for="(t, index) in tabs"
-              :key="t.id"
-              class="tab"
-              :class="{
-                active: activeTab === t.id,
-                dragging: draggedTabId === t.id,
-                'drop-before': tabDragOver && dropBeforeTabId === t.id,
-                'drop-after': tabDragOver && dropBeforeTabId === null && index === tabs.length - 1,
-              }"
-              :data-tab-id="t.id"
-              :draggable="!!t.closable"
-              @dragstart.stop="onTabDragStart($event, t)"
-              @dragend.stop="endTabDrag"
-              @click="onTabClick(t)"
-            >
-              <span
-                v-if="t.os"
-                class="tab-os"
-                :class="'os-' + t.os"
-                v-html="osSvg(t.os)"
-              ></span>
-              <span v-else class="tab-glyph">{{ t.icon }}</span>
-              <span>{{ tabTitle(t) }}</span>
-              <span
-                v-if="t.closable"
-                class="x"
-                @mousedown.stop.prevent
-                @dragstart.stop.prevent
-                @click.stop="closeTabById(t.id)"
-              >✕</span>
-            </div>
-          </div>
-        </div>
+        <tab-bar :tree-hidden="treeHidden" @toggle-tree="treeHidden = !treeHidden" />
 
         <div class="views">
           <div class="view" :class="{ show: activeTab === 'home' }">
@@ -74,7 +34,7 @@
           </div>
           <div
             v-for="t in sessionTabs"
-            :key="t.id"
+            :key="t.id + ':' + (tabRefreshKeys[t.id] || 0)"
             class="view"
             :class="[t.kind + '-view', { show: activeTab === t.id }]"
           >
@@ -106,6 +66,7 @@
 
 <script>
 import SideBar from './components/SideBar.vue';
+import TabBar from './components/TabBar.vue';
 import AssetDetailView from './components/AssetDetailView.vue';
 import SettingsDialog from './components/SettingsDialog.vue';
 import LogDialog from './components/LogDialog.vue';
@@ -114,15 +75,13 @@ import GroupDialog from './components/GroupDialog.vue';
 import MethodAdvancedDialog from './components/MethodAdvancedDialog.vue';
 import ClosePromptDialog from './components/ClosePromptDialog.vue';
 import SshAuthDialog from './components/SshAuthDialog.vue';
-import { store, closeTab, moveTab, api, refresh } from './store';
+import { store, api, refresh } from './store';
 import { t, applySettings } from './i18n';
-import { OS_SVG } from './constants';
 import { getProtocol } from './protocols';
 
 const MIN_SIDEBAR_W = 180;
 const MAX_SIDEBAR_W = 640;
 const SIDEBAR_W_KEY = 'omnidesk.sidebarWidth';
-const TAB_DRAG_TYPE = 'application/x-omnidesk-tab';
 
 function parseSftpHash() {
   const h = String((typeof location !== 'undefined' && location.hash) || '').replace(/^#\/?/, '');
@@ -142,6 +101,7 @@ export default {
   name: 'App',
   components: {
     SideBar,
+    TabBar,
     HomeView: () => import('./components/HomeView.vue'),
     AssetDetailView,
     SettingsDialog,
@@ -157,9 +117,7 @@ export default {
     return {
       sidebarWidth: 268,
       resizing: false,
-      draggedTabId: '',
-      dropBeforeTabId: null,
-      tabDragOver: false,
+      treeHidden: false,
       sftpQuery: parseSftpHash() || {},
       isSftpRoute: !!parseSftpHash(),
     };
@@ -171,11 +129,11 @@ export default {
         flex: '0 0 ' + this.sidebarWidth + 'px',
       };
     },
-    tabs() {
-      return store.tabs;
-    },
     activeTab() {
       return store.activeTab;
+    },
+    tabRefreshKeys() {
+      return store.tabRefreshKeys;
     },
     assetTabs() {
       return store.tabs.filter((t) => t.kind === 'asset');
@@ -186,16 +144,9 @@ export default {
         return protocol && protocol.component;
       });
     },
-    localeTick() {
-      return store.localeTick;
-    },
   },
   created() {
-    this._tabScrollFrame = 0;
-    this._tabDragX = 0;
-    this._tabClickBlockedUntil = 0;
     this._onHash = () => {
-      this.endTabDrag();
       const q = parseSftpHash();
       this.sftpQuery = q || {};
       this.isSftpRoute = !!q;
@@ -226,7 +177,6 @@ export default {
     }
   },
   beforeDestroy() {
-    this.endTabDrag();
     if (this._onHash) window.removeEventListener('hashchange', this._onHash);
     if (this._off) this._off();
     if (this._offStore) this._offStore();
@@ -237,9 +187,6 @@ export default {
   methods: {
     sessionComponent(tab) {
       return getProtocol(tab.kind).component;
-    },
-    osSvg(os) {
-      return OS_SVG[os] || '';
     },
     /** Drag the divider between the asset tree and the right pane */
     startResize(e) {
@@ -266,94 +213,6 @@ export default {
       document.addEventListener('mouseup', onUp);
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
-    },
-    tabTitle(tab) {
-      // touch localeTick so the home tab label follows language switches
-      void this.localeTick;
-      if (tab.id === 'home') return this.$t('nav.home');
-      return tab.title;
-    },
-    onTabDragStart(event, tab) {
-      if (!tab.closable || !event.dataTransfer) {
-        event.preventDefault();
-        return;
-      }
-      event.dataTransfer.effectAllowed = 'move';
-      event.dataTransfer.setData(TAB_DRAG_TYPE, tab.id);
-      this.draggedTabId = tab.id;
-    },
-    onTabDragOver(event) {
-      if (!this.draggedTabId || !event.dataTransfer || !Array.from(event.dataTransfer.types).includes(TAB_DRAG_TYPE)) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = 'move';
-      this.tabDragOver = true;
-      this._tabDragX = event.clientX;
-      this.updateTabDropTarget();
-      if (!this._tabScrollFrame) this._tabScrollFrame = requestAnimationFrame(this.scrollTabsForDrag);
-    },
-    updateTabDropTarget() {
-      const tabs = this.$refs.tabbarWrap.querySelectorAll('.tab[draggable="true"]');
-      const before = Array.from(tabs).find((tab) => {
-        const rect = tab.getBoundingClientRect();
-        return this._tabDragX < rect.left + rect.width / 2;
-      });
-      this.dropBeforeTabId = before ? before.dataset.tabId : null;
-    },
-    scrollTabsForDrag() {
-      this._tabScrollFrame = 0;
-      const wrap = this.$refs.tabbarWrap;
-      if (!wrap || !this.draggedTabId || !this.tabDragOver) return;
-      const rect = wrap.getBoundingClientRect();
-      const direction = this._tabDragX < rect.left + 40 ? -1 : (this._tabDragX > rect.right - 40 ? 1 : 0);
-      const previous = wrap.scrollLeft;
-      wrap.scrollLeft += direction * 12;
-      if (wrap.scrollLeft !== previous) {
-        this.updateTabDropTarget();
-        this._tabScrollFrame = requestAnimationFrame(this.scrollTabsForDrag);
-      }
-    },
-    onTabDragLeave(event) {
-      if (event.currentTarget.contains(event.relatedTarget)) return;
-      this.tabDragOver = false;
-      cancelAnimationFrame(this._tabScrollFrame);
-      this._tabScrollFrame = 0;
-    },
-    onTabDrop(event) {
-      if (!this.draggedTabId || !event.dataTransfer || !Array.from(event.dataTransfer.types).includes(TAB_DRAG_TYPE)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      this._tabDragX = event.clientX;
-      this.updateTabDropTarget();
-      moveTab(this.draggedTabId, this.dropBeforeTabId);
-      this.endTabDrag();
-    },
-    endTabDrag() {
-      if (this.draggedTabId) this._tabClickBlockedUntil = Date.now() + 150;
-      this.draggedTabId = '';
-      this.dropBeforeTabId = null;
-      this.tabDragOver = false;
-      cancelAnimationFrame(this._tabScrollFrame);
-      this._tabScrollFrame = 0;
-    },
-    onTabClick(tab) {
-      if (this.draggedTabId || Date.now() < this._tabClickBlockedUntil) return;
-      store.activeTab = tab.id;
-    },
-    closeTabById(id) {
-      if (this.draggedTabId || Date.now() < this._tabClickBlockedUntil) return;
-      const tab = store.tabs.find((t) => t.id === id);
-      if (!tab) return;
-      if (tab.connected) {
-        this.$confirm(
-          t('tab.closeConfirmMsg', { name: tab.title }),
-          t('tab.closeConfirmTitle'),
-          { confirmButtonText: t('msg.confirm'), cancelButtonText: t('msg.cancel'), type: 'warning' }
-        ).then(() => {
-          closeTab(id);
-        }).catch(() => {});
-      } else {
-        closeTab(id);
-      }
     },
     async onSession(payload) {
       if (payload && payload.type === 'ended') {

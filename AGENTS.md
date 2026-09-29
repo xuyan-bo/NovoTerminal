@@ -56,6 +56,7 @@
   - 连接失败：`this.log.error('rdp', 'session connect failed', { host, port, code: e.code, message: e.message })`
   - meta 一律禁止 password、私钥、vnc pass 等敏感字段，脱敏交给 `logStore` 兜底仍不应依赖。
 - **滚动条样式**：所有可滚动区域统一使用 Element 的细滚动条（约 6px、圆角，滑块用 `--border`，hover 变 `--text-3`，轨道透明），不出现粗的原生滚动条。SSH 的 `.xterm-viewport`、VNC 及会话视图 `.view` 超出宽高时的右侧/底部滚动条已在此约定内；新增可滚动容器应复用并用 `::webkit-scrollbar` 收敛宽度，避免另起更粗样式。
+- **图标规范**：通用 UI 图标（箭头、刷新、关闭等）统一使用 Element 内置的 `el-icon-*` 字体图标类，禁止用 `‹ › ✕` 之类的文本字符充当图标，也不引入外部图标库；使用前须在已安装的 `element-ui/lib/theme-chalk/index.css` 中核对类名确实存在；操作系统等品牌图标保持内联 SVG。
 
 ## 4. Vue 组件与状态所有权
 

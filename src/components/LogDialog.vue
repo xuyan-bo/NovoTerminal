@@ -44,6 +44,7 @@
       size="small"
       height="430"
       class="log-table"
+      @cell-contextmenu="onCellCtx"
     >
       <el-table-column :label="$t('log.colTime')" width="158">
         <template slot-scope="{ row }">{{ fmtTime(row.time) }}</template>
@@ -76,6 +77,8 @@
       />
     </div>
 
+    <ctx-menu ref="ctxMenu" @select="onCtxSelect" />
+
     <template #footer>
       <el-button size="mini" @click="modalVisible = false">{{ $t('log.close') }}</el-button>
     </template>
@@ -85,11 +88,13 @@
 <script>
 import { store, api } from '../store';
 import { t } from '../i18n';
+import CtxMenu from './CtxMenu.vue';
 
 const TWO = (n) => String(n).padStart(2, '0');
 
 export default {
   name: 'LogDialog',
+  components: { CtxMenu },
   data() {
     return {
       rows: [],
@@ -111,6 +116,9 @@ export default {
       },
     },
   },
+  created() {
+    this._ctxText = '';
+  },
   watch: {
     modalVisible(v) {
       if (v) this.load();
@@ -123,6 +131,29 @@ export default {
     if (this._offLog) this._offLog();
   },
   methods: {
+    onCellCtx(row, column, cell, e) {
+      e.preventDefault();
+      this._ctxText = (cell.innerText || cell.textContent || '').trim();
+      if (!this._ctxText) return;
+      this.$refs.ctxMenu.open(e, [{ label: t('log.copy'), action: 'copy' }]);
+    },
+    async onCtxSelect(item) {
+      if (!item || item.action !== 'copy' || !this._ctxText) return;
+      const value = this._ctxText;
+      try {
+        if (api.clipboardWriteText) {
+          const ok = await api.clipboardWriteText(value);
+          if (ok) {
+            this.$message.success(t('log.copied'));
+            return;
+          }
+        }
+      } catch (_) {}
+      try {
+        await navigator.clipboard.writeText(value);
+        this.$message.success(t('log.copied'));
+      } catch (_) {}
+    },
     async load() {
       if (!api.logList) {
         this.rows = [];

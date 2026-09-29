@@ -24,6 +24,7 @@ export const store = Vue.observable({
   },
   methodAdvancedResult: null,
   localeTick: 0,
+  tabRefreshKeys: {},
 });
 
 export async function refresh() {
@@ -54,6 +55,15 @@ export function closeTab(id) {
   if (store.activeTab === id) {
     store.activeTab = store.tabs[Math.max(0, i - 1)].id;
   }
+}
+
+export async function removeRecent(id, method) {
+  unwrap(await api.removeRecent({ id, method }));
+  await refresh();
+}
+
+export function refreshSessionTab(id) {
+  store.tabRefreshKeys = { ...store.tabRefreshKeys, [id]: (store.tabRefreshKeys[id] || 0) + 1 };
 }
 
 export function moveTab(id, beforeId) {

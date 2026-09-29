@@ -359,7 +359,15 @@ class AssetStore {
       (r) => !(r.id === asset.id && r.method === item.method)
     );
     this.data.recent.unshift(item);
-    this.data.recent = this.data.recent.slice(0, 12);
+    this.data.recent = this.data.recent.slice(0, 20);
+    this.persist();
+    return this.snapshot();
+  }
+
+  removeRecent(id, method) {
+    this.data.recent = (this.data.recent || []).filter(
+      (r) => !(r.id === id && r.method === method)
+    );
     this.persist();
     return this.snapshot();
   }

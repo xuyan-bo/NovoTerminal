@@ -148,20 +148,23 @@ button {
   background: transparent;
 }
 
-/* unified Element-style thin scrollbar: session views (SSH/VNC) + xterm viewport.
+/* unified Element-style thin scrollbar: session views (SSH/VNC) + xterm viewport + home.
    Keeps the native scrollbar from pushing in thick right/bottom bars. */
 .view::-webkit-scrollbar,
-.xterm-viewport::-webkit-scrollbar {
+.xterm-viewport::-webkit-scrollbar,
+.home-scroll::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 .view::-webkit-scrollbar-thumb,
-.xterm-viewport::-webkit-scrollbar-thumb {
+.xterm-viewport::-webkit-scrollbar-thumb,
+.home-scroll::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 3px;
 }
 .view::-webkit-scrollbar-thumb:hover,
-.xterm-viewport::-webkit-scrollbar-thumb:hover {
+.xterm-viewport::-webkit-scrollbar-thumb:hover,
+.home-scroll::-webkit-scrollbar-thumb:hover {
   background: var(--text-3);
 }
 .view::-webkit-scrollbar-track,
@@ -510,35 +513,59 @@ button {
   min-width: 0;
 }
 
-.tabbar-wrap {
+.tabbar-row {
   flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
+}
+
+.tab-arrow {
+  flex: 0 0 auto;
+  width: 22px;
+  padding: 0;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tab-arrow:not(:disabled):hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.tab-arrow:disabled {
+  color: var(--text-3);
+  opacity: 0.35;
+  cursor: default;
+}
+
+.tab-toggle {
+  width: 32px;
+  font-size: 16px;
+}
+
+.tabbar-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-width: none;
 }
 
 .tabbar-wrap::-webkit-scrollbar {
-  height: 6px;
-}
-
-.tabbar-wrap::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.tabbar-wrap::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
-}
-
-.tabbar-wrap::-webkit-scrollbar-thumb:hover {
-  background: var(--text-3);
+  display: none;
 }
 
 .tabbar {
-  height: 38px;
+  height: 34px;
   display: flex;
   align-items: flex-end;
   gap: 2px;
@@ -559,7 +586,7 @@ button {
   font-size: 12px;
   color: var(--text-2);
   border-radius: 6px 6px 0 0;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   border-bottom: none;
   cursor: pointer;
   white-space: nowrap;
@@ -727,8 +754,8 @@ button {
 .dash-card.dash-assets {
   grid-column: 1;
   grid-row: 1;
-  min-height: 336px;
-  height: 336px;
+  min-height: 240px;
+  height: calc(50vh - 17.5px);
 }
 
 .dash-card.dash-backup {
@@ -743,8 +770,8 @@ button {
 .dash-card.dash-recent {
   grid-column: 2;
   grid-row: 1;
-  min-height: 336px;
-  height: 336px;
+  min-height: 240px;
+  height: calc(50vh - 17.5px);
 }
 
 .dash-card.dash-top {
@@ -870,6 +897,14 @@ button {
   padding-bottom: 4px;
 }
 
+.recent-foot {
+  padding: 10px 2px 2px;
+  font-size: 10px;
+  color: var(--text-3);
+  opacity: 0.75;
+  text-align: center;
+}
+
 .recent-item {
   display: flex;
   align-items: center;
@@ -885,7 +920,8 @@ button {
   background: var(--accent-soft);
 }
 
-.recent-connect-btn {
+.recent-connect-btn,
+.recent-delete-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -905,6 +941,17 @@ button {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.recent-delete-btn:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(245, 108, 108, 0.12);
+}
+
+.recent-delete-btn i {
+  font-size: 14px;
+  line-height: 1;
 }
 
 .recent-item .ri-name {
@@ -1296,7 +1343,7 @@ button {
 .ctx-menu {
   position: fixed;
   z-index: 3000;
-  min-width: 200px;
+  min-width: 150px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1321,6 +1368,14 @@ button {
 
 .ctx-item:hover {
   background: var(--bg-hover);
+}
+
+.ctx-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-2);
 }
 
 .ctx-item.danger:hover {

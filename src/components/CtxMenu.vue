@@ -15,7 +15,7 @@
         class="ctx-item"
         :class="{ danger: item.danger }"
         @click="select(item)"
-      >{{ item.label }}</div>
+      ><i v-if="item.icon" :class="['ctx-icon', item.icon]" aria-hidden="true"></i>{{ item.label }}</div>
     </template>
   </div>
 </template>

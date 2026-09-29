@@ -24,6 +24,7 @@ const api = {
   updateAsset: (aid, payload) => ipcRenderer.invoke('store:update-asset', aid, payload),
   deleteAsset: (aid) => ipcRenderer.invoke('store:delete-asset', aid),
   cloneAsset: (aid) => ipcRenderer.invoke('store:clone-asset', aid),
+  removeRecent: (payload) => ipcRenderer.invoke('store:remove-recent', payload),
   getSettings: () => ipcRenderer.invoke('store:settings'),
   updateSettings: (patch) => ipcRenderer.invoke('store:update-settings', patch),
   resolveClose: (action, remember) => ipcRenderer.invoke('app:resolve-close', { action, remember }),

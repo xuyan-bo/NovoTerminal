@@ -380,6 +380,7 @@ function registerIpc() {
   handle('store:update-asset', (aid, p) => unwrap(store.updateAsset(aid, p)));
   handle('store:delete-asset', (aid) => unwrap(store.deleteAsset(aid)));
   handle('store:clone-asset', (aid) => unwrap(store.cloneAsset(aid)));
+  handle('store:remove-recent', (p) => unwrap(store.removeRecent(p && p.id, p && p.method)));
   handle('store:settings', () => store.getSettings());
   handle('store:update-settings', (patch) => unwrap(store.updateSettings(patch)));
   /** Get the current main window HWND so the native auth dialog can be parented to it */

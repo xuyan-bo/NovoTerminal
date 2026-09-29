@@ -54,6 +54,9 @@ export const api = hasBridge
       async reorderAsset() {
         return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
       },
+      async removeRecent() {
+        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+      },
       async sessionConnect() {
         throw Object.assign(new Error('浏览器预览模式无法连接，请用 npm run electron 启动'), { code: 'NO_BRIDGE' });
       },
