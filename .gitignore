@@ -10,4 +10,10 @@ electron-dl/
 *.local
 generated-*.png
 /build/auth/
+.tmp-*
+# scratch scripts stay untracked; re-include the real tooling in scripts/
+/scripts/*
+!/scripts/build-mac-auth.cjs
+!/scripts/gen-os-icons.js
+!/scripts/test-ssh-*.cjs
 
