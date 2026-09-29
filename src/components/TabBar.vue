@@ -16,6 +16,7 @@
     <div
       ref="tabbarWrap"
       class="tabbar-wrap"
+      :class="{ 'drop-hint': dropHint }"
       @scroll.passive="updateTabArrows"
       @dragover="onTabDragOver"
       @dragleave="onTabDragLeave"
@@ -70,12 +71,14 @@
 
 <script>
 import CtxMenu from './CtxMenu.vue';
-import { store, closeTab, moveTab, refreshSessionTab } from '../store';
+import { store, closeTab, moveTab, refreshSessionTab, api, detachTab } from '../store';
 import { t } from '../i18n';
 import { OS_SVG } from '../constants';
 import { getProtocol } from '../protocols';
 
 const TAB_DRAG_TYPE = 'application/x-omnidesk-tab';
+/** How often the tab bar rect is re-published for the detached window's hit test. */
+const BOUNDS_REPORT_MS = 150;
 
 export default {
   name: 'TabBar',
@@ -91,11 +94,14 @@ export default {
       tabOverflow: false,
       tabScrollLeft: false,
       tabScrollRight: false,
+      dropHint: false,
     };
   },
   computed: {
     tabs() {
-      return store.tabs;
+      // A detached session lives in its own window and is not represented here at all; dragging
+      // that window onto this row is what brings the tab back.
+      return store.tabs.filter((t) => !t.detached);
     },
     activeTab() {
       return store.activeTab;
@@ -108,20 +114,37 @@ export default {
     activeTab() {
       this.$nextTick(this.scrollActiveTabIntoView);
     },
+    treeHidden() {
+      this.scheduleReportBounds();
+    },
   },
   created() {
     this._tabScrollFrame = 0;
     this._tabDragX = 0;
     this._tabClickBlockedUntil = 0;
     this._tabResizeObs = null;
+    this._dragPoint = null;
+    this._dropHandled = false;
+    this._boundsTimer = 0;
+    this._offDropHint = null;
   },
   mounted() {
     this.observeTabbar();
     this.$nextTick(this.updateTabArrows);
+    this.reportTabbarBounds();
+    if (api.onSessionDropHint) {
+      this._offDropHint = api.onSessionDropHint((payload) => {
+        this.dropHint = !!(payload && payload.active);
+      });
+    }
+    window.addEventListener('resize', this.scheduleReportBounds);
   },
   beforeDestroy() {
     this.endTabDrag();
     if (this._tabResizeObs) this._tabResizeObs.disconnect();
+    if (this._offDropHint) this._offDropHint();
+    if (this._boundsTimer) clearTimeout(this._boundsTimer);
+    window.removeEventListener('resize', this.scheduleReportBounds);
   },
   methods: {
     osSvg(os) {
@@ -141,6 +164,14 @@ export default {
       event.dataTransfer.effectAllowed = 'move';
       event.dataTransfer.setData(TAB_DRAG_TYPE, tab.id);
       this.draggedTabId = tab.id;
+      this._dropHandled = false;
+      this._dragPoint = null;
+      // dragend coordinates are not reliable, so track the pointer for the whole drag.
+      document.addEventListener('dragover', this.onDocDragOver, true);
+    },
+    onDocDragOver(event) {
+      if (!this.draggedTabId) return;
+      this._dragPoint = { x: event.clientX, y: event.clientY };
     },
     onTabDragOver(event) {
       if (!this.draggedTabId || !event.dataTransfer || !Array.from(event.dataTransfer.types).includes(TAB_DRAG_TYPE)) return;
@@ -183,17 +214,53 @@ export default {
       event.preventDefault();
       event.stopPropagation();
       this._tabDragX = event.clientX;
+      this._dropHandled = true;
       this.updateTabDropTarget();
       moveTab(this.draggedTabId, this.dropBeforeTabId);
       this.endTabDrag();
     },
     endTabDrag() {
-      if (this.draggedTabId) this._tabClickBlockedUntil = Date.now() + 150;
+      const dragged = this.draggedTabId;
+      const detach = dragged && !this._dropHandled && this.isDraggedOutside();
+      document.removeEventListener('dragover', this.onDocDragOver, true);
+      if (dragged) this._tabClickBlockedUntil = Date.now() + 150;
       this.draggedTabId = '';
       this.dropBeforeTabId = null;
       this.tabDragOver = false;
       cancelAnimationFrame(this._tabScrollFrame);
       this._tabScrollFrame = 0;
+      this._dropHandled = false;
+      this._dragPoint = null;
+      if (detach) this.detachSessionTab(dragged);
+    },
+    /** Released outside the tab bar row means "take this session into its own window". */
+    isDraggedOutside() {
+      const point = this._dragPoint;
+      const row = this.$el && this.$el.getBoundingClientRect ? this.$el.getBoundingClientRect() : null;
+      if (!point || !row) return false;
+      return point.x < row.left || point.x > row.right || point.y < row.top || point.y > row.bottom;
+    },
+    async detachSessionTab(tabId) {
+      try {
+        await detachTab(tabId);
+      } catch (e) {
+        this.$message.error(e.code === 'DETACH_KIND' ? t('tab.detachBadKind') : e.message || t('tab.detachFail'));
+      }
+    },
+    /** Keep the main process telling the detached windows where the tab bar currently is. */
+    scheduleReportBounds() {
+      if (this._boundsTimer) return;
+      this._boundsTimer = setTimeout(() => {
+        this._boundsTimer = 0;
+        this.reportTabbarBounds();
+      }, BOUNDS_REPORT_MS);
+    },
+    reportTabbarBounds() {
+      if (!api.sessionTabbarBounds || !this.$el || !this.$el.getBoundingClientRect) return;
+      const rect = this.$el.getBoundingClientRect();
+      api
+        .sessionTabbarBounds({ x: rect.left, y: rect.top, width: rect.width, height: rect.height })
+        .catch(() => {});
     },
     onTabClick(tab) {
       if (this.draggedTabId || Date.now() < this._tabClickBlockedUntil) return;
@@ -204,7 +271,10 @@ export default {
       this._tabResizeObs = null;
       const wrap = this.$refs.tabbarWrap;
       if (!wrap || !window.ResizeObserver) return;
-      this._tabResizeObs = new ResizeObserver(() => this.updateTabArrows());
+      this._tabResizeObs = new ResizeObserver(() => {
+        this.updateTabArrows();
+        this.scheduleReportBounds();
+      });
       this._tabResizeObs.observe(wrap);
       if (wrap.firstElementChild) this._tabResizeObs.observe(wrap.firstElementChild);
     },
@@ -264,7 +334,11 @@ export default {
       const isHome = tab.id === 'home';
       const items = [];
       if (isSession) {
-        items.push({ label: t('tab.refresh'), icon: 'el-icon-refresh', action: 'refresh', tabId: tab.id }, { sep: true });
+        items.push(
+          { label: t('tab.refresh'), icon: 'el-icon-refresh', action: 'refresh', tabId: tab.id },
+          { label: t('tab.detachToWindow'), icon: 'el-icon-rank', action: 'detach', tabId: tab.id },
+          { sep: true }
+        );
       }
       if (!isHome) {
         items.push({ label: t('tab.closeCurrent'), icon: 'el-icon-close', action: 'closeCurrent', tabId: tab.id });
@@ -281,24 +355,25 @@ export default {
     },
     onTabCtxSelect(item) {
       if (!item) return;
-      const index = store.tabs.findIndex((tb) => tb.id === item.tabId);
+      // Bulk operations only reach the tabs this row shows; a detached session owns its own window
+      // and ends only when that window closes.
+      const visible = this.tabs;
+      const index = visible.findIndex((tb) => tb.id === item.tabId);
       if (index < 0) return;
       if (item.action === 'refresh') refreshSessionTab(item.tabId);
+      else if (item.action === 'detach') this.detachSessionTab(item.tabId);
       else if (item.action === 'closeCurrent') this.closeTabById(item.tabId);
       else if (item.action === 'closeOthers') {
-        this.closeTabsBulk(store.tabs.filter((tb) => tb.id !== item.tabId));
-      } else if (item.action === 'closeLeft') this.closeTabsBulk(store.tabs.slice(0, index));
-      else if (item.action === 'closeRight') this.closeTabsBulk(store.tabs.slice(index + 1));
-      else if (item.action === 'closeAll') this.closeTabsBulk(store.tabs);
+        this.closeTabsBulk(visible.filter((tb) => tb.id !== item.tabId));
+      } else if (item.action === 'closeLeft') this.closeTabsBulk(visible.slice(0, index));
+      else if (item.action === 'closeRight') this.closeTabsBulk(visible.slice(index + 1));
+      else if (item.action === 'closeAll') this.closeTabsBulk(visible);
     },
     closeTabsBulk(targets) {
-      const ids = targets.filter((tb) => tb.closable).map((tb) => tb.id);
-      if (!ids.length) return;
-      const connected = ids.filter((id) => {
-        const tab = store.tabs.find((tb) => tb.id === id);
-        return tab && tab.connected;
-      }).length;
-      const run = () => ids.forEach((id) => closeTab(id));
+      const closable = targets.filter((tb) => tb.closable);
+      if (!closable.length) return;
+      const connected = closable.filter((tb) => tb.connected).length;
+      const run = () => closable.forEach((tb) => closeTab(tb.id));
       if (!connected) {
         run();
         return;

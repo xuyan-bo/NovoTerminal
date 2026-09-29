@@ -355,6 +355,9 @@ const dict = {
     'tab.toggleTree': '显示/隐藏资产树',
     'tab.closeBulkConfirmMsg': '其中有 {count} 个页签存在活动会话，关闭后会话将断开且内容丢失，是否继续？',
     'tab.closeConfirmMsg': '「{name}」存在活动会话（连接中或已连接），关闭后会断开且内容丢失，是否继续？',
+    'tab.detachToWindow': '拆分为独立窗口',
+    'tab.detachFail': '拆分窗口失败',
+    'tab.detachBadKind': '该页签不支持拆分为独立窗口',
   },
   en: {
     'app.name': 'OmniDesk',
@@ -710,6 +713,9 @@ const dict = {
     'tab.toggleTree': 'Show/hide asset tree',
     'tab.closeBulkConfirmMsg': '{count} of these tabs have active sessions. Closing will disconnect and session data will be lost. Continue?',
     'tab.closeConfirmMsg': '"{name}" has an active session. Closing will disconnect and session data will be lost. Continue?',
+    'tab.detachToWindow': 'Detach to Window',
+    'tab.detachFail': 'Failed to detach the window',
+    'tab.detachBadKind': 'This tab cannot be detached into a window',
   },
 };
 

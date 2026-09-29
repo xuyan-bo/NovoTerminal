@@ -84,6 +84,11 @@ class RdpSessionManager {
       onEnd: (origin) => {
         if (this.sessions.has(sessionId)) {
           this.sessions.delete(sessionId);
+          // The local listener has to go with the client, or a renderer that died without
+          // calling rdp:disconnect would leave the proxy port open until the app exits.
+          try {
+            proxy.stop();
+          } catch (_) {}
           this._emit(sessionId, 'ended', { origin, host: this._host, port: this._methodPort });
         }
       },

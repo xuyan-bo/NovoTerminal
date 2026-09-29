@@ -1,5 +1,5 @@
 <template>
-  <div class="app-root" :class="{ 'is-sftp': isSftpRoute }">
+  <div class="app-root" :class="{ 'is-sftp': isSftpRoute, 'is-session': isSessionRoute }">
     <sftp-page
       v-if="isSftpRoute"
       :asset-id="sftpQuery.assetId || ''"
@@ -7,6 +7,7 @@
       :port="Number(sftpQuery.port) || 22"
       :asset-name="sftpQuery.name || ''"
     />
+    <session-window v-else-if="isSessionRoute" :query="sessionQuery" />
     <template v-else>
     <div class="body-row">
       <side-bar v-show="!treeHidden" :style="sidebarStyle" />
@@ -47,6 +48,8 @@
               :method-id="t.methodId"
               :title="(t.host || '') + (t.port ? ':' + t.port : '')"
               :active="activeTab === t.id"
+              :attach-session-id="attachSessionIdOf(t)"
+              @session="onViewSession(t, $event)"
             />
           </div>
         </div>
@@ -75,7 +78,7 @@ import GroupDialog from './components/GroupDialog.vue';
 import MethodAdvancedDialog from './components/MethodAdvancedDialog.vue';
 import ClosePromptDialog from './components/ClosePromptDialog.vue';
 import SshAuthDialog from './components/SshAuthDialog.vue';
-import { store, api, refresh } from './store';
+import { store, api, refresh, applyDetached, dropDetachedTab } from './store';
 import { t, applySettings } from './i18n';
 import { getProtocol } from './protocols';
 
@@ -83,9 +86,9 @@ const MIN_SIDEBAR_W = 180;
 const MAX_SIDEBAR_W = 640;
 const SIDEBAR_W_KEY = 'omnidesk.sidebarWidth';
 
-function parseSftpHash() {
+function parseHashRoute(prefix) {
   const h = String((typeof location !== 'undefined' && location.hash) || '').replace(/^#\/?/, '');
-  if (!h.startsWith('sftp')) return null;
+  if (!h.startsWith(prefix)) return null;
   const qIdx = h.indexOf('?');
   const qs = qIdx >= 0 ? h.slice(qIdx + 1) : '';
   const out = {};
@@ -112,14 +115,17 @@ export default {
     ClosePromptDialog,
     SshAuthDialog,
     SftpPage: () => import('./components/SftpPage.vue'),
+    SessionWindow: () => import('./components/SessionWindow.vue'),
   },
   data() {
     return {
       sidebarWidth: 268,
       resizing: false,
       treeHidden: false,
-      sftpQuery: parseSftpHash() || {},
-      isSftpRoute: !!parseSftpHash(),
+      sftpQuery: parseHashRoute('sftp') || {},
+      isSftpRoute: !!parseHashRoute('sftp'),
+      sessionQuery: parseHashRoute('session') || {},
+      isSessionRoute: !!parseHashRoute('session'),
     };
   },
   computed: {
@@ -140,6 +146,7 @@ export default {
     },
     sessionTabs() {
       return store.tabs.filter((t) => {
+        if (t.detached) return false;
         const protocol = getProtocol(t.kind);
         return protocol && protocol.component;
       });
@@ -147,18 +154,32 @@ export default {
   },
   created() {
     this._onHash = () => {
-      const q = parseSftpHash();
+      const q = parseHashRoute('sftp');
       this.sftpQuery = q || {};
       this.isSftpRoute = !!q;
+      const s = parseHashRoute('session');
+      this.sessionQuery = s || {};
+      this.isSessionRoute = !!s;
     };
     window.addEventListener('hashchange', this._onHash);
     try {
       const saved = Number(localStorage.getItem(SIDEBAR_W_KEY));
       if (saved >= MIN_SIDEBAR_W && saved <= MAX_SIDEBAR_W) this.sidebarWidth = saved;
     } catch (_) {}
-    if (!this.isSftpRoute) {
+    if (!this.isSftpRoute && !this.isSessionRoute) {
       if (store.snapshot.settings) applySettings(store.snapshot.settings);
       this._off = api.onSessionState && api.onSessionState((payload) => this.onSession(payload));
+      this._offDetached =
+        api.onSessionDetached &&
+        api.onSessionDetached((payload) => {
+          if (!payload) return;
+          applyDetached(payload.tabId, !!payload.detached);
+        });
+      this._offClosedWindow =
+        api.onSessionClosed &&
+        api.onSessionClosed((payload) => {
+          if (payload && payload.tabId) dropDetachedTab(payload.tabId);
+        });
       this._offStore =
         api.onStoreChanged &&
         api.onStoreChanged(() => {
@@ -179,6 +200,8 @@ export default {
   beforeDestroy() {
     if (this._onHash) window.removeEventListener('hashchange', this._onHash);
     if (this._off) this._off();
+    if (this._offDetached) this._offDetached();
+    if (this._offClosedWindow) this._offClosedWindow();
     if (this._offStore) this._offStore();
     if (this._mq && this._mqHandler && this._mq.removeEventListener) {
       this._mq.removeEventListener('change', this._mqHandler);
@@ -187,6 +210,19 @@ export default {
   methods: {
     sessionComponent(tab) {
       return getProtocol(tab.kind).component;
+    },
+    /** Only SSH re-hosts a live connection across windows; the other views always reconnect. */
+    attachSessionIdOf(tab) {
+      return tab.kind === 'ssh' ? tab.liveSessionId || undefined : undefined;
+    },
+    /**
+     * The view owns its live connection id; record it so a detached window can re-host it. Views
+     * never clear it on teardown: a refresh destroys the old instance after the new one connected,
+     * and an id of a session that already ended is rejected by ssh:attach, which falls back to
+     * connecting fresh.
+     */
+    onViewSession(tab, sessionId) {
+      tab.liveSessionId = sessionId || null;
     },
     /** Drag the divider between the asset tree and the right pane */
     startResize(e) {

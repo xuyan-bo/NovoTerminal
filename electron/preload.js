@@ -74,6 +74,7 @@ const api = {
   sshResize: (sessionId, cols, rows) => ipcRenderer.invoke('ssh:resize', sessionId, cols, rows),
   sshDisconnect: (sessionId) => ipcRenderer.invoke('ssh:disconnect', sessionId),
   sshList: () => ipcRenderer.invoke('ssh:list'),
+  sshAttach: (req) => ipcRenderer.invoke('ssh:attach', req),
   onSshData: (sessionId, cb) => {
     const ch = 'ssh:data:' + sessionId;
     const handler = (_e, payload) => cb(payload);
@@ -144,6 +145,36 @@ const api = {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('sftp:progress', handler);
     return () => ipcRenderer.removeListener('sftp:progress', handler);
+  },
+
+  // Detached session windows
+  sessionDetach: (req) => ipcRenderer.invoke('session:detach', req),
+  sessionCloseAnswer: (req) => ipcRenderer.invoke('session:close-answer', req),
+  sessionTabbarBounds: (req) => ipcRenderer.invoke('session:tabbar-bounds', req),
+  onSessionConfirmClose: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:confirm-close', handler);
+    return () => ipcRenderer.removeListener('session:confirm-close', handler);
+  },
+  onSessionDetached: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:detached', handler);
+    return () => ipcRenderer.removeListener('session:detached', handler);
+  },
+  onSessionClosed: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:closed', handler);
+    return () => ipcRenderer.removeListener('session:closed', handler);
+  },
+  onSessionDropHint: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:drop-hint', handler);
+    return () => ipcRenderer.removeListener('session:drop-hint', handler);
+  },
+  onSessionHandover: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:handover', handler);
+    return () => ipcRenderer.removeListener('session:handover', handler);
   },
 
   onSessionState: (cb) => {

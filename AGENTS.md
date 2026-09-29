@@ -35,7 +35,7 @@
 | `electron/ssh/`、`electron/vnc/`、`electron/sftp/` | 各自的连接、代理、资源和传输管理 |
 | `electron/store/`、`electron/auth/` | 持久化与系统身份验证；UI 不绕过这些边界自行实现 |
 
-- 普通页面使用 store 页签；SFTP 使用独立窗口的 `#sftp?assetId=...` 入口，不擅自迁移为另一套路由。
+- 普通页面使用 store 页签；SFTP 使用独立窗口的 `#sftp?assetId=...` 入口，拆分出去的会话窗口使用 `#session?kind=...&tabId=...`，两者都不擅自迁移为另一套路由。
 - SSH 实际使用主进程 ssh2 与渲染进程 xterm；VNC 使用主进程代理与 noVNC；不能把 `SessionManager` 的 SSH/VNC 占位适配器当作真实连接实现。
 - 重型会话组件通过异步 import 按需加载，不能为了读取常量反向引入整个视图或主进程模块。
 - `README.md`、`DESIGN.md`、`ROADMAP.md` 和 `docs/` 可作背景参考，实现与其不一致时应核对代码。
@@ -95,7 +95,13 @@
 
 - 使用 `kind: 'asset'` 标识资产详情，协议页签使用协议 ID；不能仅靠 `assetId` 将会话误渲染成资产详情。
 - 保持稳定页签 ID、组件类型及 key；重复打开同一页签仅激活，不覆盖已存在连接状态。
-- 栏内拖动排序只经 `store.moveTab` 调整原页签对象顺序，首页保持首位，活动页签不变；保留溢出滚动、关闭确认和协议实例，拖出栏外只取消，不隐式断开或新建窗口。
+- 栏内拖动排序只经 `store.moveTab` 调整原页签对象顺序，首页保持首位，活动页签不变；保留溢出滚动、关闭确认和协议实例。
+- 会话页签（`protocols.js` 注册了 component 的 ssh/vnc/rdp）拖出栏外或经右键菜单可拆成独立窗口：`electron/main.js` 的 `detachedWindows` 是唯一权威状态，经 `session:detached` 广播后由 `store.applyDetached` 落到页签；资产详情、外置 RDP 和首页页签不可拆分，拖出保持原样取消。
+- 拆分期间页签不在页签栏出现（`TabBar` 过滤 `detached`），活动页签随之交给邻近可见页签；不得改成“空白内容区 + 保留占位页签”。
+- 拆分只切换宿主窗口，不改变连接：SSH 在 `ssh:attach` 里转移 `ownerId` 并重放该会话的输出尾巴；VNC 与内置 RDP 的代理是单客户端的，拆分与合并都会重新握手，凭据已保存所以无需用户输入。
+- 独立窗口保留原生标题栏，移动、缩放和关闭都交给系统，不在渲染进程用鼠标位移驱动 `setPosition`（会与系统移动/缩放互相抖动）。合并回页签栏的唯一手势是拖动该窗口使光标停在页签栏上松开：主进程用 `move`/`moved` 事件配合 `session:tabbar-bounds` 报告的页签栏矩形做光标命中判定，跨窗口 HTML5 拖放不可依赖。
+- 合并（拖回页签栏）必须先 `rehostToTabbar` 转移 SSH 所有权并发 `session:handover`，再等该窗口 `closed` 事件广播 `session:detached:false`，主窗口届时才新建视图实例；`closed` 的其他分支只广播 `session:closed`，由 `store.dropDetachedTab` 移除页签，VNC/RDP 代理由 `onEnd` 停止监听。两条路径不得混淆；主窗口不再主动关闭独立窗口（批量关闭只作用于页签栏内可见页签，见 `TabBar.onTabCtxSelect`）。
+- 独立窗口关闭前要弹与页签栏相同的“活动会话”确认：只有该窗口的视图知道连接状态，主进程在 `close` 里 `preventDefault` 并发 `session:confirm-close`，由 `SessionWindow` 用 `tab.closeConfirmMsg` 判断，确认后先 `ssh:disconnect` 再回 `session:close-answer`；页签侧 `store.closeTab` 同样在点击时就发起断开，不等视图销毁，否则连接会在无人管理的状态下继续运行。未加载完成、已标记 reason 或渲染进程已死时必须跳过确认，否则窗口将无法关闭。
 - 会话切换用 `v-show` 保留实例，不改成切换时销毁的 `v-if`；移除页签才触发相应销毁清理。
 - 区分 UI 页签 ID 与主进程返回的实际连接 ID，事件和断开调用必须绑定正确会话。
 - connected 状态应反映实际连接；保留关闭确认，连接中关闭不能让晚返回结果创建无人管理的会话。

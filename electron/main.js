@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard, Tray, Menu, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, Tray, Menu, nativeImage, shell, screen } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -92,6 +92,11 @@ const logger = {
   error: (source, message, meta) => logStore && logStore.error(source, message, meta),
 };
 const sftpWindows = new Map(); // assetId -> BrowserWindow
+const detachedWindows = new Map(); // tabId -> { window, kind, reason }
+/** Page-space rect of the main window's tab bar, resolved to screen px on each drop hit test. */
+let tabbarDropRect = null;
+/** Last drop-hint state, so we only broadcast when the highlight should change. */
+let dropHintActive = false;
 const sshPrompts = new SshPrompts();
 const sshOwners = new Set();
 const sshTests = new Map();
@@ -167,10 +172,49 @@ app.on('second-instance', () => {
 });
 
 function send(channel, payload) {
-  // Broadcast to all windows so SFTP child windows receive progress events
+  // Broadcast to all windows so SFTP child windows receive progress events. During teardown the
+  // webContents can already be gone while the BrowserWindow still reports itself as alive.
   BrowserWindow.getAllWindows().forEach((w) => {
-    if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
+    if (w && !w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send(channel, payload);
   });
+}
+
+/** Which window currently owns a session tab's view: its detached window, else the main window. */
+function sessionHostWindow(tabId) {
+  const entry = detachedWindows.get(tabId);
+  return entry && !entry.window.isDestroyed() ? entry.window : win;
+}
+
+function tabbarScreenRect() {
+  // A hidden or minimized main window has no visible drop target, even if its last rect is stale.
+  if (!tabbarDropRect || !win || win.isDestroyed() || win.isMinimized() || !win.isVisible()) return null;
+  const content = win.getContentBounds();
+  const zoom = win.webContents.isDestroyed() ? 1 : win.webContents.getZoomFactor();
+  return {
+    x: content.x + Math.round(tabbarDropRect.x * zoom),
+    y: content.y + Math.round(tabbarDropRect.y * zoom),
+    width: Math.round(tabbarDropRect.width * zoom),
+    height: Math.round(tabbarDropRect.height * zoom),
+  };
+}
+
+/** While a detached window is dragged, the cursor — not the window rect — is the drop point. */
+function cursorOverTabbar() {
+  const rect = tabbarScreenRect();
+  if (!rect) return false;
+  const point = screen.getCursorScreenPoint();
+  return (
+    point.x >= rect.x &&
+    point.x <= rect.x + rect.width &&
+    point.y >= rect.y &&
+    point.y <= rect.y + rect.height
+  );
+}
+
+function clearDropHint() {
+  if (!dropHintActive) return;
+  dropHintActive = false;
+  send('session:drop-hint', { tabId: null, active: false });
 }
 
 function showMainWindow() {
@@ -529,6 +573,32 @@ function registerIpc() {
   }, true);
   handle('ssh:list', (sender) => sshSessions.list().filter((s) => sshSessions.owns(s.sessionId, sender.id)), true);
 
+  /**
+   * Re-host an existing SSH session in the window that currently owns the tab, without
+   * touching the connection. Only the registered host window may claim it.
+   */
+  handle('ssh:attach', (sender, req) => {
+    const tabId = req && req.tabId;
+    const sid = req && req.sessionId;
+    if (typeof tabId !== 'string' || !tabId) throw new Error('tabId required');
+    if (typeof sid !== 'string' || !/^ssh-[a-zA-Z0-9-]{1,100}$/.test(sid)) {
+      throw Object.assign(new Error('Invalid SSH session ID'), { code: 'SSH_REQUEST' });
+    }
+    const host = sessionHostWindow(tabId);
+    if (!host || host.isDestroyed() || BrowserWindow.fromWebContents(sender) !== host) {
+      throw Object.assign(new Error('SSH session is not hosted by this window'), { code: 'SSH_OWNER' });
+    }
+    if (!sshSessions.sessions.has(sid)) {
+      throw Object.assign(new Error('SSH session no longer exists'), { code: 'SSH_GONE' });
+    }
+    sshSessions.transferOwner(sid, sender.id);
+    const cols = Number(req.cols), rows = Number(req.rows);
+    sshSessions.resize(sid, cols, rows);
+    const tail = sshSessions.tail(sid);
+    logger.info('ssh', 'ssh session re-hosted', { sessionId: sid, tabId, detached: detachedWindows.has(tabId), tailChunks: tail.chunks.length });
+    return { ok: true, sessionId: sid, ready: tail.ready, tail: tail.chunks };
+  }, true);
+
   // ---- VNC terminal (noVNC via WebSocket proxy) ----
   handle('vnc:connect', async (req) => {
     const hit = store.findAsset(req.assetId);
@@ -574,6 +644,204 @@ function registerIpc() {
   });
   handle('rdp:disconnect', (sid) => rdpSessions.disconnect(sid));
   handle('rdp:list', () => rdpSessions.list());
+
+  // ---- Detached session windows ----
+  const DETACHABLE_KINDS = ['ssh', 'vnc', 'rdp'];
+
+  const loadSessionRoute = async (target, hash) => {
+    // bust HTTP/file cache so a rebuild is always picked up, same as the SFTP window
+    try {
+      await target.webContents.session.clearCache();
+    } catch (_) {}
+    const cacheQs = `t=${Date.now()}`;
+    if (isDev && process.env.VITE_DEV_SERVER_URL) {
+      await target.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${cacheQs}#/${hash}`);
+    } else {
+      const htmlPath = path.join(__dirname, '..', 'dist', 'index.html');
+      await target.loadURL('file://' + htmlPath.replace(/\\/g, '/') + '?' + cacheQs + '#' + hash);
+    }
+  };
+
+  handle('session:detach', async (sender, req) => {
+    if (BrowserWindow.fromWebContents(sender) !== win) {
+      throw Object.assign(new Error('Untrusted detach request'), { code: 'SSH_OWNER' });
+    }
+    const tabId = req && req.tabId;
+    const kind = String((req && req.kind) || '');
+    if (typeof tabId !== 'string' || !tabId) throw new Error('tabId required');
+    if (!DETACHABLE_KINDS.includes(kind)) {
+      throw Object.assign(new Error('Session kind cannot be detached'), { code: 'DETACH_KIND' });
+    }
+    const existing = detachedWindows.get(tabId);
+    if (existing && existing.window && !existing.window.isDestroyed()) {
+      existing.window.focus();
+      return { ok: true, reused: true };
+    }
+    const assetId = String(req.assetId || '');
+    const host = String(req.host || '');
+    const port = req.port === undefined || req.port === null ? '' : String(req.port);
+    const title = String(req.title || host || assetId);
+    const parts = [
+      'kind=' + kind,
+      'tabId=' + encodeURIComponent(tabId),
+      'assetId=' + encodeURIComponent(assetId),
+      'methodId=' + encodeURIComponent(String(req.methodId || kind)),
+      'host=' + encodeURIComponent(host),
+      'port=' + encodeURIComponent(port),
+      'name=' + encodeURIComponent(title),
+    ];
+    if (kind === 'ssh' && req.liveSessionId) parts.push('sid=' + encodeURIComponent(String(req.liveSessionId)));
+
+    const detached = new BrowserWindow({
+      width: 1000,
+      height: 660,
+      minWidth: 520,
+      minHeight: 320,
+      title,
+      autoHideMenuBar: true,
+      backgroundColor: '#0f1419',
+      icon: path.join(__dirname, 'assets', 'icon.png'),
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+      },
+    });
+    const entry = { window: detached, kind };
+    detachedWindows.set(tabId, entry);
+    detached.on('page-title-updated', (e) => {
+      e.preventDefault();
+    });
+    detached.on('closed', () => {
+      const current = detachedWindows.get(tabId);
+      // Only this window's own registration; a retry may already have installed a newer one.
+      if (!current || current.window !== detached) return;
+      detachedWindows.delete(tabId);
+      clearDropHint();
+      logger.info('session', 'detached window closed', { tabId, kind, reason: current.reason || 'window' });
+      // Only dragging the window back onto the tab bar re-hosts it; any other close ends the session.
+      if (current.reason === 'merge') send('session:detached', { tabId, detached: false });
+      else send('session:closed', { tabId });
+    });
+    /**
+     * Closing this window ends the session, so it asks first with the same prompt the tab bar
+     * shows. Only that window knows whether it still holds a live connection, so the decision
+     * comes back over IPC instead of being guessed here. Until its page has loaded there is
+     * nothing to confirm, and the prompt must not make that window unclosable.
+     */
+    detached.on('close', (e) => {
+      if (!entry.ready || entry.reason || entry.confirming || entry.dead) return;
+      e.preventDefault();
+      entry.confirming = true;
+      detached.webContents.send('session:confirm-close', { tabId });
+    });
+    detached.webContents.on('render-process-gone', () => {
+      // A dead renderer can never answer, so its window must stay closable.
+      entry.dead = true;
+    });
+    /**
+     * The native title bar moves the window, so the merge-back gesture is detected here: the tab
+     * bar highlights while the cursor is over it and releasing there re-hosts the session, while
+     * the frame's own close button ends the session.
+     */
+    detached.on('move', () => {
+      const inside = cursorOverTabbar();
+      if (inside === dropHintActive) return;
+      dropHintActive = inside;
+      send('session:drop-hint', { tabId, active: inside });
+    });
+    detached.on('moved', () => {
+      if (!dropHintActive) return;
+      clearDropHint();
+      rehostToTabbar(tabId);
+    });
+    try {
+      await loadSessionRoute(detached, 'session?' + parts.join('&'));
+    } catch (e) {
+      detachedWindows.delete(tabId);
+      if (!detached.isDestroyed()) detached.destroy();
+      logger.error('session', 'detach window load failed', { tabId, kind, message: e.message, code: e.code });
+      throw e;
+    }
+    entry.ready = true;
+    send('session:detached', { tabId, detached: true });
+    logger.info('session', 'session detached into its own window', { tabId, kind, host, port });
+    return { ok: true, reused: false };
+  }, true);
+
+  /**
+   * Hand hosting back to the main window before the detached window tears down. SSH must be
+   * re-owned synchronously here: that window's destroy would otherwise close its owner sessions
+   * before the main window gets a chance to re-attach. The host only learns the session is back
+   * from the window's closed event, so VNC/RDP reconnect starts once that renderer, and with it
+   * the old proxy client, is gone.
+   */
+  function rehostToTabbar(tabId) {
+    const entry = detachedWindows.get(tabId);
+    if (!entry || entry.reason || entry.window.isDestroyed()) return;
+    entry.reason = 'merge';
+    const host = entry.window;
+    const detachedId = host.webContents.id;
+    const transferred = [];
+    for (const sid of sshSessions.sessions.keys()) {
+      if (sshSessions.owns(sid, detachedId) && sshSessions.transferOwner(sid, win.webContents.id)) transferred.push(sid);
+    }
+    // Tell that window to keep its session alive while it tears down.
+    host.webContents.send('session:handover', { tabId });
+    clearDropHint();
+    host.close();
+    logger.info('session', 'session reattached to tab bar', { tabId, kind: entry.kind, sessionIds: transferred });
+  }
+
+  const detachedSenderWindow = (sender) => {
+    for (const [tabId, entry] of detachedWindows) {
+      if (!entry.window.isDestroyed() && entry.window.webContents === sender) return { tabId, entry };
+    }
+    return null;
+  };
+
+  /**
+   * The detached window's own answer to its close prompt. Confirming only closes the window: the
+   * session goes with its host webContents, exactly like closing the tab in the main window.
+   */
+  handle('session:close-answer', (sender, req) => {
+    const owner = detachedSenderWindow(sender);
+    if (!owner) throw Object.assign(new Error('Not a detached window'), { code: 'SSH_OWNER' });
+    const entry = owner.entry;
+    if (!entry.confirming) return { ok: true, closed: false };
+    entry.confirming = false;
+    if (req && req.confirmed === true) {
+      entry.reason = 'window';
+      entry.window.close();
+      logger.info('session', 'detached window closed after confirm', { tabId: owner.tabId, kind: entry.kind });
+      return { ok: true, closed: true };
+    }
+    logger.info('session', 'detached window close cancelled', { tabId: owner.tabId, kind: entry.kind });
+    return { ok: true, closed: false };
+  }, true);
+
+  /** Main window publishes its tab bar rect so a dragged detached window can hit-test it. */
+  handle('session:tabbar-bounds', (sender, req) => {
+    if (!win || win.isDestroyed() || win.webContents !== sender) {
+      throw Object.assign(new Error('Untrusted tab bar bounds'), { code: 'SSH_OWNER' });
+    }
+    const width = Number(req && req.width);
+    const height = Number(req && req.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      tabbarDropRect = null;
+      return { ok: true };
+    }
+    // Page CSS px map 1:1 to screen px at zoom 1; the window offset is resolved on every hit test
+    // so moving the main window mid-drag does not stale the target.
+    tabbarDropRect = {
+      x: Math.round(Number(req.x || 0)),
+      y: Math.round(Number(req.y || 0)),
+      width: Math.round(width),
+      height: Math.round(height),
+    };
+    return { ok: true };
+  }, true);
 
   // ---- SFTP window & transfers ----
   handle('sftp:open-window', async (req) => {
@@ -790,9 +1058,14 @@ app.whenReady().then(() => {
   sessions = new SessionManager({ store, send, log: logger });
   sshSessions = new SshSessionManager({
     log: logger,
+    // Owner-targeted events fire while that window is already being torn down: closeSshOwner runs
+    // from its own destroyed event, so the session's end state has no renderer left to receive it.
     send: (channel, payload, ownerId) => {
-      const owner = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.webContents.id === ownerId);
-      if (owner) owner.webContents.send(channel, payload);
+      const owner = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && !w.webContents.isDestroyed() && w.webContents.id === ownerId);
+      if (!owner) return;
+      try {
+        owner.webContents.send(channel, payload);
+      } catch (_) {}
     },
   });
   vncSessions = new VncSessionManager({ send, log: logger });

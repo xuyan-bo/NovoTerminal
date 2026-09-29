@@ -57,6 +57,30 @@ export const api = hasBridge
       async removeRecent() {
         return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
       },
+      async sessionDetach() {
+        return { __error: true, message: '浏览器预览模式无法拆分为独立窗口，请用 npm run electron 启动', code: 'NO_BRIDGE' };
+      },
+      async sessionCloseAnswer() {
+        return { ok: false, code: 'NO_BRIDGE' };
+      },
+      onSessionConfirmClose() {
+        return () => {};
+      },
+      async sessionTabbarBounds() {
+        return { ok: false, code: 'NO_BRIDGE' };
+      },
+      onSessionDetached() {
+        return () => {};
+      },
+      onSessionClosed() {
+        return () => {};
+      },
+      onSessionDropHint() {
+        return () => {};
+      },
+      onSessionHandover() {
+        return () => {};
+      },
       async sessionConnect() {
         throw Object.assign(new Error('浏览器预览模式无法连接，请用 npm run electron 启动'), { code: 'NO_BRIDGE' });
       },
@@ -86,6 +110,9 @@ export const api = hasBridge
       },
       async sshResize() {
         return false;
+      },
+      async sshAttach() {
+        throw Object.assign(new Error('浏览器预览模式无法接管 SSH 会话'), { code: 'NO_BRIDGE' });
       },
       async sshDisconnect() {
         return { ok: true };

@@ -94,8 +94,10 @@ export default {
   },
   watch: {
     status(val) {
+      const connected = val === 'connecting' || val === 'ready';
       const tab = store.tabs.find((t) => t.id === this.sessionId);
-      if (tab) tab.connected = val === 'connecting' || val === 'ready';
+      if (tab) tab.connected = connected;
+      this.$emit('connection', connected);
     },
     active(v) {
       if (v && this.rfb) {

@@ -51,6 +51,13 @@ export function openTab(tab) {
 export function closeTab(id) {
   const i = store.tabs.findIndex((t) => t.id === id);
   if (i < 0 || !store.tabs[i].closable) return;
+  const tab = store.tabs[i];
+  // Close ends the session now, in the same click; waiting for the view to be destroyed would keep
+  // a connection that no longer has any tab running.
+  if (tab.kind === 'ssh' && tab.liveSessionId && api.sshDisconnect) {
+    api.sshDisconnect(tab.liveSessionId).catch(() => {});
+    tab.liveSessionId = null;
+  }
   store.tabs.splice(i, 1);
   if (store.activeTab === id) {
     store.activeTab = store.tabs[Math.max(0, i - 1)].id;
@@ -63,7 +70,89 @@ export async function removeRecent(id, method) {
 }
 
 export function refreshSessionTab(id) {
+  const tab = findTab(id);
+  if (tab) tab.liveSessionId = null;
   store.tabRefreshKeys = { ...store.tabRefreshKeys, [id]: (store.tabRefreshKeys[id] || 0) + 1 };
+}
+
+/**
+ * A session tab can live either in the tab bar or in its own window. SSH keeps the main-process
+ * connection across that move, so the view instance being torn down must not disconnect it: the
+ * side losing the instance registers a handover and the instance consumes it in its destroy path.
+ */
+const handoverTabIds = new Set();
+
+function findTab(id) {
+  return store.tabs.find((tab) => tab.id === id);
+}
+
+export function markSessionHandover(tabId) {
+  handoverTabIds.add(tabId);
+}
+
+export function takeSessionHandover(tabId) {
+  if (!handoverTabIds.has(tabId)) return false;
+  handoverTabIds.delete(tabId);
+  return true;
+}
+
+function isDetachable(tab) {
+  const protocol = tab && getProtocol(tab.kind);
+  return !!(protocol && protocol.component);
+}
+
+/**
+ * Apply the authoritative detached state broadcast by the main process. A detached session leaves
+ * the tab bar entirely, so the active tab has to move to a visible neighbour, and merging back is
+ * what brings it into focus again.
+ */
+export function applyDetached(tabId, detached) {
+  const tab = findTab(tabId);
+  if (!tab || tab.detached === detached) return;
+  if (detached && tab.kind === 'ssh' && tab.liveSessionId) markSessionHandover(tabId);
+  tab.detached = detached;
+  if (!detached) {
+    store.activeTab = tabId;
+    return;
+  }
+  if (store.activeTab !== tabId) return;
+  const i = store.tabs.indexOf(tab);
+  const next =
+    store.tabs.slice(i + 1).find((t) => !t.detached) ||
+    store.tabs.slice(0, i).reverse().find((t) => !t.detached);
+  store.activeTab = next ? next.id : 'home';
+}
+
+export async function detachTab(tabId) {
+  const tab = findTab(tabId);
+  if (!tab || !isDetachable(tab) || tab.detached) return;
+  unwrap(
+    await api.sessionDetach({
+      tabId: tab.id,
+      kind: tab.kind,
+      assetId: tab.assetId,
+      methodId: tab.methodId,
+      host: tab.host,
+      port: tab.port,
+      title: tab.title,
+      liveSessionId: tab.liveSessionId,
+    })
+  );
+}
+
+/**
+ * The detached window is closed, so the session it hosted ended with it and the tab that was only
+ * parked there has nothing left to show.
+ */
+export function dropDetachedTab(tabId) {
+  const i = store.tabs.findIndex((tab) => tab.id === tabId);
+  if (i < 0) return;
+  const [tab] = store.tabs.splice(i, 1);
+  // A window closed before it took the connection over leaves that session owned here with no view.
+  if (tab.detached && tab.kind === 'ssh' && tab.liveSessionId && api.sshDisconnect) {
+    api.sshDisconnect(tab.liveSessionId).catch(() => {});
+  }
+  if (store.activeTab === tabId) store.activeTab = store.tabs[Math.max(0, i - 1)].id;
 }
 
 export function moveTab(id, beforeId) {
@@ -225,6 +314,8 @@ export async function connectAsset(asset, method) {
       port: method.port || protocol.defaultPort,
       assetName,
       connected: false,
+      detached: false,
+      liveSessionId: null,
     });
     return;
   }

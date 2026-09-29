@@ -3,11 +3,23 @@ const iconv = require('iconv-lite');
 const { createSshConnection, resolveAdvanced } = require('./connection');
 const { createX11Forwarder } = require('./x11');
 
+/** Cap of the per-session output tail replayed when a view re-attaches after detach. */
+const SSH_TAIL_LIMIT = 512 * 1024;
+
 class SshSessionManager {
   constructor({ send, log }) {
     this.send = send || (() => {});
     this.log = log;
     this.sessions = new Map();
+  }
+
+  _pushTail(rec, text) {
+    const tail = rec.tail;
+    tail.chunks.push(text);
+    tail.chars += text.length;
+    while (tail.chars > SSH_TAIL_LIMIT && tail.chunks.length > 1) {
+      tail.chars -= tail.chunks.shift().length;
+    }
   }
 
   _emit(sessionId, type, payload = {}) {
@@ -34,6 +46,7 @@ class SshSessionManager {
       cols: dimension(req.cols, 120), rows: dimension(req.rows, 32), adv,
       connection: null, stream: null, x11: null, ready: false, shellTimer: null, closedError: null,
       stdout: iconv.getDecoder(adv.charset), stderr: iconv.getDecoder(adv.charset),
+      tail: { chunks: [], chars: 0 },
     };
     this.sessions.set(sessionId, rec);
     let rejectClosed;
@@ -72,7 +85,10 @@ class SshSessionManager {
       const write = (decoder, data) => {
         if (this.sessions.get(sessionId) !== rec || rec.closedError) return;
         const text = decoder.write(Buffer.from(data));
-        if (text) this.send('ssh:data:' + sessionId, text, rec.ownerId);
+        if (text) {
+          this._pushTail(rec, text);
+          this.send('ssh:data:' + sessionId, text, rec.ownerId);
+        }
       };
       await Promise.race([
         new Promise((resolve, reject) => {
@@ -91,7 +107,10 @@ class SshSessionManager {
               if (this.sessions.get(sessionId) !== rec) return;
               for (const decoder of [rec.stdout, rec.stderr]) {
                 const text = decoder.end();
-                if (text) this.send('ssh:data:' + sessionId, text, rec.ownerId);
+                if (text) {
+                  this._pushTail(rec, text);
+                  this.send('ssh:data:' + sessionId, text, rec.ownerId);
+                }
               }
               onClosed(null);
             });
@@ -119,6 +138,20 @@ class SshSessionManager {
   owns(sessionId, ownerId) {
     const rec = this.sessions.get(sessionId);
     return !!rec && rec.ownerId === ownerId;
+  }
+
+  /** Hand an existing session to another window's webContents without touching the SSH connection. */
+  transferOwner(sessionId, ownerId) {
+    const rec = this.sessions.get(sessionId);
+    if (!rec || !Number.isInteger(ownerId)) return false;
+    rec.ownerId = ownerId;
+    return true;
+  }
+
+  /** Recent output of a session so a re-attached terminal can replay what the user already saw. */
+  tail(sessionId) {
+    const rec = this.sessions.get(sessionId);
+    return rec ? { chunks: rec.tail.chunks.slice(), ready: !!rec.ready } : null;
   }
 
   write(sessionId, data, binary = false) {

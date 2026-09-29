@@ -74,7 +74,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { api, unwrap, refresh, findAsset, store } from '../store';
+import { api, unwrap, refresh, findAsset, store, takeSessionHandover } from '../store';
 import { t } from '../i18n';
 import { sshThemeToXterm, resolveSshTheme } from '../constants';
 import SshThemeDialog from './SshThemeDialog.vue';
@@ -94,6 +94,8 @@ export default {
     sessionId: { type: String, required: true },
     assetId: { type: String, required: true },
     methodId: { type: String, default: 'ssh' },
+    /** Set when this instance should re-host an already open session instead of connecting. */
+    attachSessionId: { type: String, default: '' },
     title: { type: String, default: '' },
     /** true when this terminal tab is the active view — keep session, only refit */
     active: { type: Boolean, default: true },
@@ -134,8 +136,10 @@ export default {
   },
   watch: {
     status(val) {
+      const connected = val === 'connecting' || val === 'ready';
       const tab = store.tabs.find((t) => t.id === this.sessionId);
-      if (tab) tab.connected = val === 'connecting' || val === 'ready';
+      if (tab) tab.connected = connected;
+      this.$emit('connection', connected);
     },
     // Tab switched back → layout is visible again; refit only, do NOT reconnect
     active(v) {
@@ -157,6 +161,7 @@ export default {
   created() {
     this._disposed = false;
     this._connectVersion = 0;
+    this._handedOff = false;
     this._inputSubscriptions = [];
   },
   mounted() {
@@ -168,7 +173,8 @@ export default {
     this._sentRows = 0;
     this._fitting = false;
     this.initTerm();
-    this.connect();
+    if (this.attachSessionId && api.sshAttach) this.attachTo(this.attachSessionId);
+    else this.connect();
     window.addEventListener('resize', this.scheduleFit);
   },
   activated() {
@@ -179,7 +185,9 @@ export default {
     window.removeEventListener('resize', this.scheduleFit);
     if (this._fitTimer) clearTimeout(this._fitTimer);
     if (this._rsTimer) clearTimeout(this._rsTimer);
-    this.disconnectNow(true);
+    // A handover means another window is about to re-host this very connection.
+    if (this.liveSessionId && takeSessionHandover(this.sessionId)) this.releaseHost();
+    else this.disconnectNow(true);
     this.teardownTerm();
   },
   methods: {
@@ -462,11 +470,99 @@ export default {
       return payload;
     },
 
+    /** Subscribe before the shell starts so the first output cannot be lost. */
+    bindSession(sid, isCurrent) {
+      this.offData = api.onSshData(sid, (payload) => {
+        if (!isCurrent() || !this.term) return;
+        const chunk = this.chunkToWrite(payload);
+        if (chunk != null) this.term.write(chunk);
+      });
+      this.offState = api.onSshState((ev) => {
+        if (!isCurrent() || !ev || ev.sessionId !== sid) return;
+        if (ev.type === 'ready') {
+          this.status = 'ready';
+          this.statusDetail = '';
+        } else if (ev.type === 'ended' || ev.type === 'error') {
+          this.disconnectNow(true);
+          this.status = ev.type === 'error' ? 'error' : 'ended';
+          this.statusDetail = ev.type === 'error' ? ev.message || ev.code || '' : '';
+          this.writeOut(ev.type === 'error'
+            ? (t('ssh.errorPrefix') + ' ' + this.statusDetail).trim()
+            : t('ssh.endedHint'));
+        }
+      });
+    },
+
+    /**
+     * Take over a session that stays open in the main process (tab ⇄ detached window). The tail is
+     * what the previous instance already rendered, so the user keeps the screen they had.
+     */
+    async attachTo(sid) {
+      if (this._disposed) return;
+      if (!this.term) this.initTerm();
+      this.disconnectNow(true);
+      const version = this._connectVersion;
+      this.status = 'connecting';
+      this.statusDetail = '';
+      this._sentCols = 0;
+      this._sentRows = 0;
+      this._lastW = 0;
+      this._lastH = 0;
+      this.scheduleFit();
+      if (this.term) this.term.clear();
+      this.liveSessionId = sid;
+      this.$emit('session', sid);
+
+      const isCurrent = () => !this._disposed && this._connectVersion === version && this.liveSessionId === sid;
+      try {
+        this.bindSession(sid, isCurrent);
+        this.doFit();
+        const cols = (this.term && this.term.cols) || 120;
+        const rows = (this.term && this.term.rows) || 32;
+        const r = unwrap(await api.sshAttach({ tabId: this.sessionId, sessionId: sid, cols, rows }));
+        if (!isCurrent()) return;
+        this._sentCols = cols;
+        this._sentRows = rows;
+        if (this.term && r.tail) r.tail.forEach((chunk) => this.term.write(chunk));
+        this.status = r.ready ? 'ready' : 'connecting';
+        refresh().catch(() => {});
+        if (this.active && this.term) this.term.focus();
+      } catch (e) {
+        if (!isCurrent()) return;
+        if (e.code === 'SSH_GONE') {
+          // Nothing left to take over (e.g. it was reconnected in the other window), so start fresh.
+          this.connect();
+          return;
+        }
+        this.disconnectNow(true);
+        this.status = 'error';
+        this.statusDetail = e.message || e.code || '';
+        this.writeOut((t('ssh.errorPrefix') + ' ' + this.statusDetail).trim());
+      }
+    },
+
+    /** Drop this window's hooks but keep the main-process connection for the next host. */
+    releaseHost() {
+      this._connectVersion += 1;
+      this._handedOff = true;
+      if (this._rsTimer) clearTimeout(this._rsTimer);
+      if (this.offData) {
+        this.offData();
+        this.offData = null;
+      }
+      if (this.offState) {
+        this.offState();
+        this.offState = null;
+      }
+      this.status = 'idle';
+    },
+
     async connect() {
       if (this._disposed) return;
       if (!this.term) this.initTerm();
       this.disconnectNow(true);
       const version = this._connectVersion;
+      this._handedOff = false;
       this.status = 'connecting';
       this.statusDetail = '';
       this._sentCols = 0;
@@ -486,27 +582,9 @@ export default {
       const sid = 'ssh-' + crypto.randomUUID();
       const isCurrent = () => !this._disposed && this._connectVersion === version && this.liveSessionId === sid;
       this.liveSessionId = sid;
+      this.$emit('session', sid);
       try {
-        // Subscribe before connecting so the first shell output cannot be lost.
-        this.offData = api.onSshData(sid, (payload) => {
-          if (!isCurrent() || !this.term) return;
-          const chunk = this.chunkToWrite(payload);
-          if (chunk != null) this.term.write(chunk);
-        });
-        this.offState = api.onSshState((ev) => {
-          if (!isCurrent() || !ev || ev.sessionId !== sid) return;
-          if (ev.type === 'ready') {
-            this.status = 'ready';
-            this.statusDetail = '';
-          } else if (ev.type === 'ended' || ev.type === 'error') {
-            this.disconnectNow(true);
-            this.status = ev.type === 'error' ? 'error' : 'ended';
-            this.statusDetail = ev.type === 'error' ? ev.message || ev.code || '' : '';
-            this.writeOut(ev.type === 'error'
-              ? (t('ssh.errorPrefix') + ' ' + this.statusDetail).trim()
-              : t('ssh.endedHint'));
-          }
-        });
+        this.bindSession(sid, isCurrent);
         this.doFit();
         const cols = (this.term && this.term.cols) || 120;
         const rows = (this.term && this.term.rows) || 32;
@@ -518,7 +596,8 @@ export default {
           rows,
         }));
         if (!isCurrent()) {
-          await api.sshDisconnect(result.sessionId);
+          // Handover means another window re-hosted this very session id, so it stays open there.
+          if (!this._handedOff) await api.sshDisconnect(result.sessionId);
           return;
         }
         this._sentCols = cols;
