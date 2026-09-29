@@ -185,6 +185,8 @@ export default {
     this._folderStates = new Map();
     this._rowByKey = new Map();
     this._rowByXferId = new Map();
+    this._recalcPending = new Set();
+    this._recalcTimer = null;
   },
   async mounted() {
     document.title = `${this.winTitle} · ${this.buildTag}`;
@@ -291,6 +293,9 @@ export default {
     document.removeEventListener('mouseup', this.onSplitUp);
     if (this._pollTimer) clearInterval(this._pollTimer);
     this._pollTimer = null;
+    if (this._recalcTimer) clearTimeout(this._recalcTimer);
+    this._recalcTimer = null;
+    this._recalcPending = new Set();
     if (this.offProgress) this.offProgress();
     if (this._offSshState) this._offSshState();
     if (this._offDragReady) this._offDragReady();
@@ -626,10 +631,16 @@ export default {
               ? t('sftp.confirmDelete', { name: list[0].name })
               : t('sftp.confirmDeleteMulti', { count: list.length });
           await this.$confirm(msg, t('msg.confirm'), { type: 'warning' });
+          const failed = [];
           for (const x of list) {
-            if (side === 'local') unwrap(await api.sftpLocalUnlink(localOf(x), x.isDir));
-            else unwrap(await api.sftpUnlink(this.connId, remoteOf(x), x.isDir));
+            try {
+              if (side === 'local') unwrap(await api.sftpLocalUnlink(localOf(x), x.isDir));
+              else unwrap(await api.sftpUnlink(this.connId, remoteOf(x), x.isDir));
+            } catch (e) {
+              failed.push(`${x.name}: ${e.message || e}`);
+            }
           }
+          if (failed.length) this.$message.error(failed.join('\n'));
           if (side === 'local') await this.goLocal(this.localPath);
           else await this.goRemote(this.remotePath);
         }

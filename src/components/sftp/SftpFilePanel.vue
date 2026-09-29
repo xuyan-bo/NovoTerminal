@@ -78,7 +78,6 @@
         <span class="c-size">{{ f.sizeText }}</span>
         <span class="c-time">{{ f.mtime }}</span>
       </div>
-      <div v-if="!items.length && !loading" class="empty-box">{{ $t('sftp.empty') }}</div>
     </div>
     <div v-if="marquee" class="marquee" :style="marqueeStyle"></div>
   </div>

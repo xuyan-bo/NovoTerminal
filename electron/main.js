@@ -959,6 +959,10 @@ function registerIpc() {
   });
   handle('sftp:pause', (taskId, pause) => sftpManager.pauseTask(taskId, !!pause));
   handle('sftp:cancel', async (taskId) => sftpManager.cancelTask(taskId));
+  const sftpTaskIds = (ids) =>
+    (Array.isArray(ids) ? ids : []).filter((x) => typeof x === 'string' && x.length > 0);
+  handle('sftp:pause-batch', (ids, pause) => sftpManager.pauseTasks(sftpTaskIds(ids), !!pause));
+  handle('sftp:cancel-batch', async (ids) => sftpManager.cancelTasks(sftpTaskIds(ids)));
   handle('sftp:tasks', () => sftpManager.listTasks());
   handle('sftp:close', (sender, connId) => {
     const rec = sftpManager.conns.get(connId);

@@ -2,6 +2,9 @@ import Vue from 'vue';
 import { api, unwrap } from '../../store';
 import { formatSize, parentLocal, parentRemote, isTaskFinished } from './utils';
 
+/** Folder totals are only worth recomputing a few times per second, not per progress event. */
+const RECALC_THROTTLE_MS = 400;
+
 export default {
   isTaskFinished,
   /** Rows are rendered lazily and updated in place, so they must be observable on their own. */
@@ -135,7 +138,7 @@ export default {
         isDir,
         hasChildren: isDir,
         direction,
-        status: isDir ? 'done' : 'running',
+        status: isDir ? 'done' : 'queued',
         percent: isDir ? 100 : 0,
         size: isDir ? 0 : Number(p.size) || 0,
         sizeText: isDir ? '—' : formatSize(p.size),
@@ -152,7 +155,20 @@ export default {
     parentRow.children = rows;
     return rows;
   },
-  recalcFolder(parent, scanDone) {
+  /** Coalesce tree recomputation; a folder scan can produce thousands of updates per second. */
+  scheduleRecalc(root) {
+    if (!root) return;
+    this._recalcPending.add(root);
+    if (this._recalcTimer) return;
+    this._recalcTimer = setTimeout(() => {
+      this._recalcTimer = null;
+      if (this._sftpDestroyed) return;
+      const roots = Array.from(this._recalcPending);
+      this._recalcPending.clear();
+      roots.forEach((r) => this.recalcTree(r));
+    }, RECALC_THROTTLE_MS);
+  },
+  recalcFolder(parent, scanDone, paused) {
     if (!parent || !(parent.isFolder || parent.isDir)) return parent;
     const files = this.folderFiles(parent);
     let size = 0;
@@ -185,7 +201,7 @@ export default {
     parent.sizeText = formatSize(size);
     parent.speedText = hasRun && speed > 0 ? `${formatSize(speed)}/s` : '—';
     if (complete) parent.status = anyErr ? 'error' : 'done';
-    else if (anyPause && !hasRun) parent.status = 'paused';
+    else if ((anyPause || paused) && !hasRun) parent.status = 'paused';
     else parent.status = 'running';
     return parent;
   },
@@ -193,11 +209,12 @@ export default {
   recalcTree(root) {
     const state = this.folderState(root && root.taskId);
     const scanDone = state ? state.done : true;
+    const paused = !!(state && state.paused);
     const visit = (row, isRoot) => {
       (row.children || []).forEach((c) => {
         if (c && (c.isDir || c.isFolder)) visit(c, false);
       });
-      if (row.isFolder || row.isDir) this.recalcFolder(row, isRoot ? scanDone : true);
+      if (row.isFolder || row.isDir) this.recalcFolder(row, isRoot ? scanDone : true, isRoot ? paused : false);
     };
     if (root) visit(root, true);
     return root;
@@ -239,7 +256,7 @@ export default {
       Object.assign(row, p, { taskId: row.taskId, isFolder: false, isDir: row.isDir, xferId: p.taskId });
       this._rowByXferId.set(p.taskId, row);
       const state = this.folderState(row.rootId);
-      this.recalcTree(state ? state.root : row);
+      this.scheduleRecalc(state ? state.root : row);
       return;
     }
     const i = this.tasks.findIndex((x) => x.taskId === p.taskId);
@@ -285,7 +302,7 @@ export default {
           Object.assign(c, m, { taskId: c.taskId, isDir: c.isDir, isFolder: false, xferId: m.taskId });
           if (m.taskId) this._rowByXferId.set(m.taskId, c);
         });
-        this.recalcTree(state.root);
+        this.scheduleRecalc(state.root);
       });
       const childIds = new Set(this._rowByXferId.keys());
       const childKeys = new Set(this._rowByKey.keys());
@@ -327,20 +344,36 @@ export default {
       if (task.isFolder) {
         const state = this.folderState(task.taskId);
         if (state) state.paused = pause;
-        for (const c of this.folderFiles(task)) {
-          if (!c.xferId) continue;
-          try {
-            unwrap(await api.sftpPause(c.xferId, pause));
-            c.status = pause ? 'paused' : 'running';
-          } catch (_) {}
+        const rows = this.folderFiles(task).filter((c) => c.xferId && !this.isTaskFinished(c));
+        const ids = rows.map((c) => c.xferId);
+        if (ids.length) {
+          if (api.sftpPauseBatch) unwrap(await api.sftpPauseBatch(ids, pause));
+          else for (const id of ids) { try { unwrap(await api.sftpPause(id, pause)); } catch (_) {} }
+          rows.forEach((c) => {
+            // Resumed children wait for a transfer slot; the running transition arrives as an event
+            c.status = pause ? 'paused' : 'queued';
+          });
         }
         task.status = pause ? 'paused' : 'running';
         this.recalcTree(task);
         this.syncTasks();
         return;
       }
-      unwrap(await api.sftpPause(task.xferId || task.taskId, pause));
-      this.mergeTask({ ...task, status: pause ? 'paused' : 'running' });
+      const state = task.rootId ? this.folderState(task.rootId) : null;
+      if (!task.xferId && state) {
+        // Not submitted yet: the only meaningful pause is the folder's scan gate
+        state.paused = pause;
+        task.status = pause ? 'paused' : 'queued';
+        this.recalcTree(state.root);
+        this.syncTasks();
+        return;
+      }
+      const r = unwrap(await api.sftpPause(task.xferId || task.taskId, pause));
+      if (!r || !r.ok) {
+        this.syncTasks();
+        return;
+      }
+      this.mergeTask({ ...task, status: r.status || (pause ? 'paused' : 'running') });
       this.syncTasks();
     } catch (e) {
       this.$message.error(e.message);
@@ -370,20 +403,13 @@ export default {
       if (task.isFolder) {
         const state = this.folderState(task.taskId);
         if (state) state.canceled = true;
-        const files = this.folderFiles(task);
-        for (const c of files) {
-          if (!c.xferId) continue;
-          try {
-            unwrap(await api.sftpCancel(c.xferId));
-          } catch (_) {}
-        }
-        for (const c of files) {
-          if (!c.targetPath || !unfinished(c)) continue;
-          if (c.direction === 'download' && api.sftpLocalUnlink) {
-            try { await api.sftpLocalUnlink(c.targetPath, false); } catch (_) {}
-          } else if (c.direction === 'upload' && this.connId && api.sftpUnlink) {
-            try { await api.sftpUnlink(this.connId, c.targetPath, false); } catch (_) {}
-          }
+        const ids = this.folderFiles(task)
+          .filter((c) => c.xferId)
+          .map((c) => c.xferId);
+        if (ids.length) {
+          // Cancelling a subtree must not serialize one round trip per file
+          if (api.sftpCancelBatch) unwrap(await api.sftpCancelBatch(ids));
+          else for (const id of ids) { try { unwrap(await api.sftpCancel(id)); } catch (_) {} }
         }
         this.tasks = this.tasks.filter((x) => x.taskId !== task.taskId);
         this.collapseFolder(task.taskId);

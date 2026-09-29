@@ -90,7 +90,7 @@ export default {
         cur.row.status = 'error';
         cur.row.error = e.message || String(e);
         this.markDirScanned(root.taskId, cur.row);
-        this.recalcTree(root);
+        this.scheduleRecalc(root);
         continue;
       }
       // The task may have been removed while the listing was in flight.
@@ -101,7 +101,7 @@ export default {
         size: Number(x.size) || 0,
       }));
       this.markDirScanned(root.taskId, cur.row);
-      this.recalcTree(root);
+      this.scheduleRecalc(root);
       for (let i = 0; i < entries.length; i++) {
         if (state.canceled) return;
         const row = rows[i];
@@ -127,7 +127,7 @@ export default {
           row.status = 'error';
           row.error = e.message || String(e);
         }
-        this.recalcTree(root);
+        this.scheduleRecalc(root);
       }
     }
   },
@@ -175,7 +175,7 @@ export default {
         cur.row.status = 'error';
         cur.row.error = e.message || String(e);
         this.markDirScanned(root.taskId, cur.row);
-        this.recalcTree(root);
+        this.scheduleRecalc(root);
         continue;
       }
       // The task may have been removed while the listing was in flight.
@@ -186,7 +186,7 @@ export default {
         size: Number(x.size) || 0,
       }));
       this.markDirScanned(root.taskId, cur.row);
-      this.recalcTree(root);
+      this.scheduleRecalc(root);
       for (let i = 0; i < entries.length; i++) {
         if (state.canceled) return;
         const row = rows[i];
@@ -212,7 +212,7 @@ export default {
           row.status = 'error';
           row.error = e.message || String(e);
         }
-        this.recalcTree(root);
+        this.scheduleRecalc(root);
       }
     }
   },
@@ -249,7 +249,7 @@ export default {
       (x) =>
         x.sourcePath === localPath &&
         x.targetPath === remotePath &&
-        (x.status === 'running' || x.status === 'paused')
+        (x.status === 'running' || x.status === 'paused' || x.status === 'queued')
     );
     if (dup) return;
     const name = remotePath.split('/').filter(Boolean).pop() || localPath;
@@ -269,7 +269,7 @@ export default {
       (x) =>
         x.sourcePath === remotePath &&
         x.targetPath === localPath &&
-        (x.status === 'running' || x.status === 'paused')
+        (x.status === 'running' || x.status === 'paused' || x.status === 'queued')
     );
     if (dup) {
       this.pushDlog('startDownload dup skip');
