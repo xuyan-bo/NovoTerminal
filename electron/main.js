@@ -199,17 +199,25 @@ function tabbarScreenRect() {
   };
 }
 
-/** While a detached window is dragged, the cursor — not the window rect — is the drop point. */
-function cursorOverTabbar() {
+/**
+ * While a detached window is dragged, the cursor — not the window rect — is the drop point.
+ * Returns the cursor's x inside the tab bar in page CSS px (so the renderer can show the landing
+ * slot), or null when the cursor is outside the bar.
+ */
+function tabbarDropX() {
   const rect = tabbarScreenRect();
-  if (!rect) return false;
+  if (!rect) return null;
   const point = screen.getCursorScreenPoint();
-  return (
-    point.x >= rect.x &&
-    point.x <= rect.x + rect.width &&
-    point.y >= rect.y &&
-    point.y <= rect.y + rect.height
-  );
+  if (
+    point.x < rect.x ||
+    point.x > rect.x + rect.width ||
+    point.y < rect.y ||
+    point.y > rect.y + rect.height
+  ) {
+    return null;
+  }
+  const zoom = win.webContents.isDestroyed() ? 1 : win.webContents.getZoomFactor();
+  return (point.x - rect.x) / zoom;
 }
 
 function clearDropHint() {
@@ -293,10 +301,11 @@ function createTray() {
 
 function rebuildTrayMenu() {
   if (!tray) return;
+  const en = store.getSettings().lang === 'en';
   const menu = Menu.buildFromTemplate([
-    { label: '打开主窗口', click: () => showMainWindow() },
+    { label: en ? 'Open Main Window' : '打开主窗口', click: () => showMainWindow() },
     { type: 'separator' },
-    { label: '退出 OmniDesk', click: () => { trayDestroying = true; app.quit(); } },
+    { label: en ? 'Quit OmniDesk' : '退出 OmniDesk', click: () => { trayDestroying = true; app.quit(); } },
   ]);
   tray.setContextMenu(menu);
 }
@@ -455,6 +464,7 @@ function registerIpc() {
   handle('store:update-settings', (patch) => {
     const s = unwrap(store.updateSettings(patch));
     applyZoom();
+    rebuildTrayMenu();
     return s;
   });
   /** Get the current main window HWND so the native auth dialog can be parented to it */
@@ -494,7 +504,7 @@ function registerIpc() {
       force: process.platform === 'darwin', lang, log: logger,
     });
     if (!auth.ok) {
-      const e = new Error(auth.message || '系统身份验证失败');
+      const e = new Error(auth.message || (lang === 'en' ? 'System identity verification failed' : '系统身份验证失败'));
       e.code = auth.code || 'AUTH_FAILED';
       throw e;
     }
@@ -507,16 +517,17 @@ function registerIpc() {
       force: process.platform === 'darwin', lang, log: logger,
     });
     if (!auth.ok) {
-      const e = new Error(auth.message || '系统身份验证失败');
+      const e = new Error(auth.message || (lang === 'en' ? 'System identity verification failed' : '系统身份验证失败'));
       e.code = auth.code || 'AUTH_FAILED';
       throw e;
     }
     return unwrap(store.importGroups(text));
   });
   handle('app:browse-data-path', async () => {
+    const en = store.getSettings().lang === 'en';
     const r = await dialog.showOpenDialog(win, {
       properties: ['openDirectory', 'createDirectory'],
-      title: '选择存储位置',
+      title: en ? 'Select storage location' : '选择存储位置',
     });
     if (r.canceled || !r.filePaths[0]) return null;
     store.setCustomPath(r.filePaths[0]);
@@ -723,9 +734,27 @@ function registerIpc() {
     ];
     if (kind === 'ssh' && req.liveSessionId) parts.push('sid=' + encodeURIComponent(String(req.liveSessionId)));
 
-    const detached = new BrowserWindow({
-      width: 1000,
-      height: 660,
+    // A drag-detach resolves the release point from the live OS cursor here: Chromium delivers no
+    // usable coordinates once the pointer has left the window, but dragend still reaches the
+    // renderer. A release over the tab bar row is a reorder/cancel gesture, never a detach.
+    let dropAt = null;
+    if (req && req.fromDrag) {
+      const point = screen.getCursorScreenPoint();
+      const bar = tabbarScreenRect();
+      const overBar =
+        bar &&
+        point.x >= bar.x &&
+        point.x <= bar.x + bar.width &&
+        point.y >= bar.y &&
+        point.y <= bar.y + bar.height;
+      if (overBar) return { ok: true, cancelled: true };
+      dropAt = point;
+    }
+    const DETACHED_W = 1000;
+    const DETACHED_H = 660;
+    const detachedOptions = {
+      width: DETACHED_W,
+      height: DETACHED_H,
       minWidth: 520,
       minHeight: 320,
       title,
@@ -738,7 +767,14 @@ function registerIpc() {
         nodeIntegration: false,
         sandbox: false,
       },
-    });
+    };
+    if (dropAt) {
+      // getDisplayMatching requires a full rect (x/y/width/height) in Electron 33.
+      const area = screen.getDisplayMatching({ x: dropAt.x, y: dropAt.y, width: 1, height: 1 }).workArea;
+      detachedOptions.x = Math.max(area.x, Math.min(dropAt.x - DETACHED_W / 2, area.x + area.width - DETACHED_W));
+      detachedOptions.y = Math.max(area.y, Math.min(dropAt.y - DETACHED_H / 2, area.y + area.height - DETACHED_H));
+    }
+    const detached = new BrowserWindow(detachedOptions);
     const entry = { window: detached, kind };
     detachedWindows.set(tabId, entry);
     detached.on('page-title-updated', (e) => {
@@ -777,10 +813,13 @@ function registerIpc() {
      * the frame's own close button ends the session.
      */
     detached.on('move', () => {
-      const inside = cursorOverTabbar();
-      if (inside === dropHintActive) return;
-      dropHintActive = inside;
-      send('session:drop-hint', { tabId, active: inside });
+      const x = tabbarDropX();
+      if (x === null) {
+        clearDropHint();
+        return;
+      }
+      dropHintActive = true;
+      send('session:drop-hint', { tabId, active: true, x: Math.round(x) });
     });
     detached.on('moved', () => {
       if (!dropHintActive) return;
@@ -988,9 +1027,10 @@ function registerIpc() {
     return sftpManager.closeSession(connId);
   }, true);
   handle('sftp:pick-local-files', async () => {
+    const en = store.getSettings().lang === 'en';
     const r = await dialog.showOpenDialog(win || BrowserWindow.getFocusedWindow(), {
       properties: ['openFile', 'multiSelections'],
-      title: '选择要上传的文件',
+      title: en ? 'Select files to upload' : '选择要上传的文件',
     });
     return r.canceled ? [] : r.filePaths;
   });
@@ -1048,9 +1088,10 @@ function registerIpc() {
     return out;
   });
   handle('sftp:pick-local-dir', async () => {
+    const en = store.getSettings().lang === 'en';
     const r = await dialog.showOpenDialog(win || BrowserWindow.getFocusedWindow(), {
       properties: ['openDirectory', 'createDirectory'],
-      title: '选择保存目录',
+      title: en ? 'Select save folder' : '选择保存目录',
     });
     return r.canceled ? null : r.filePaths[0];
   });

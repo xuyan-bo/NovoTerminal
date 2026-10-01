@@ -54,6 +54,10 @@ class SftpManager {
     this._seq = 0;
   }
 
+  L(zh, en) {
+    return this.store && this.store.getSettings().lang === 'en' ? en : zh;
+  }
+
   _progress(task, opts) {
     const now = Date.now();
     if (!task._lastT) {
@@ -555,14 +559,20 @@ class SftpManager {
       const st = fs.statSync(localPath);
       if (st.isDirectory()) {
         return Promise.reject(
-          Object.assign(new Error('路径是文件夹，请使用文件夹传输'), { code: 'EISDIR' })
+          Object.assign(
+            new Error(this.L('路径是文件夹，请使用文件夹传输', 'Path is a directory; use folder transfer')),
+            { code: 'EISDIR' }
+          )
         );
       }
       size = st.size;
     } catch (e) {
       return Promise.reject(
         Object.assign(
-          new Error(`无法读取本地文件（可能被系统占用）: ${e.code || ''} ${e.message}`),
+          new Error(
+            this.L('无法读取本地文件（可能被系统占用）', 'Cannot read local file (possibly locked by the system)') +
+              `: ${e.code || ''} ${e.message}`
+          ),
           { code: e.code || 'LOCAL_READ' }
         )
       );
@@ -630,7 +640,10 @@ class SftpManager {
     } catch (e) {
       return fail(
         Object.assign(
-          new Error(`无法读取本地文件（可能被系统占用）: ${e.code || ''} ${e.message}`),
+          new Error(
+            this.L('无法读取本地文件（可能被系统占用）', 'Cannot read local file (possibly locked by the system)') +
+              `: ${e.code || ''} ${e.message}`
+          ),
           { code: e.code || 'LOCAL_READ' }
         )
       );

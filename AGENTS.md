@@ -56,7 +56,7 @@
   - 连接失败：`this.log.error('rdp', 'session connect failed', { host, port, code: e.code, message: e.message })`
   - meta 一律禁止 password、私钥、vnc pass 等敏感字段，脱敏交给 `logStore` 兜底仍不应依赖。
 - **滚动条样式**：所有可滚动区域统一使用 Element 的细滚动条（约 6px、圆角，滑块用 `--border`，hover 变 `--text-3`，轨道透明），不出现粗的原生滚动条。SSH 的 `.xterm-viewport`、VNC 及会话视图 `.view` 超出宽高时的右侧/底部滚动条已在此约定内；新增可滚动容器应复用并用 `::webkit-scrollbar` 收敛宽度，避免另起更粗样式。
-- **图标规范**：通用 UI 图标（箭头、刷新、关闭等）统一使用 Element 内置的 `el-icon-*` 字体图标类，禁止用 `‹ › ✕` 之类的文本字符充当图标，也不引入外部图标库；使用前须在已安装的 `element-ui/lib/theme-chalk/index.css` 中核对类名确实存在；操作系统等品牌图标保持内联 SVG。
+- **图标规范**：通用 UI 图标（箭头、刷新、关闭等）首选 Element 内置的 `el-icon-*` 字体图标类，使用前须在已安装的 `element-ui/lib/theme-chalk/index.css` 中核对类名确实存在；`el-icon-*` 中没有合适图标时，告知用户并由用户提供 SVG，图标文件（单色、白色填充/描边）放入 `public/icons/`，页面统一通过全局 `<svg-icon name="…" :size="…">` 组件引用（亮度遮罩 + `currentColor` 跟随主题），组件模板内禁止硬编码内联 `<svg>`；不允许自行用 `‹ › ✕ ＋` 之类的文本字符充当图标，也不引入外部图标库；操作系统等品牌图标作为数据集中在 `src/constants.js` 内渲染，是唯一例外。图标符号不得写进 i18n 文案，菜单图标用菜单项的 `icon` 类名字段承载。
 
 ## 4. Vue 组件与状态所有权
 
@@ -96,10 +96,10 @@
 - 使用 `kind: 'asset'` 标识资产详情，协议页签使用协议 ID；不能仅靠 `assetId` 将会话误渲染成资产详情。
 - 保持稳定页签 ID、组件类型及 key；重复打开同一页签仅激活，不覆盖已存在连接状态。
 - 栏内拖动排序只经 `store.moveTab` 调整原页签对象顺序，首页保持首位，活动页签不变；保留溢出滚动、关闭确认和协议实例。
-- 会话页签（`protocols.js` 注册了 component 的 ssh/vnc/rdp）拖出栏外或经右键菜单可拆成独立窗口：`electron/main.js` 的 `detachedWindows` 是唯一权威状态，经 `session:detached` 广播后由 `store.applyDetached` 落到页签；资产详情、外置 RDP 和首页页签不可拆分，拖出保持原样取消。
+- 会话页签（`protocols.js` 注册了 component 的 ssh/vnc/rdp）拖出栏外或经右键菜单可拆成独立窗口：`electron/main.js` 的 `detachedWindows` 是唯一权威状态，经 `session:detached` 广播后由 `store.applyDetached` 落到页签；资产详情、外置 RDP 和首页页签不可拆分，拖出保持原样取消。拖出过程中显示跟随光标的独立窗口轮廓预览（仅可拆分的会话页签）；拖拽松手由渲染端发 `fromDrag: true` 的 `session:detach`，主进程用 `screen.getCursorScreenPoint()` 实时光标裁决——光标在页签栏矩形内则返回 cancelled 不改宿主，否则以光标为中心创建窗口并 clamp 到所在显示器工作区（Chromium 在光标离开窗口后不再给出可靠坐标，判定必须留在主进程）；右键菜单拆分不带 `fromDrag`，保持默认摆位。
 - 拆分期间页签不在页签栏出现（`TabBar` 过滤 `detached`），活动页签随之交给邻近可见页签；不得改成“空白内容区 + 保留占位页签”。
 - 拆分只切换宿主窗口，不改变连接：SSH 在 `ssh:attach` 里转移 `ownerId` 并重放该会话的输出尾巴；VNC 与内置 RDP 的代理是单客户端的，拆分与合并都会重新握手，凭据已保存所以无需用户输入。
-- 独立窗口保留原生标题栏，移动、缩放和关闭都交给系统，不在渲染进程用鼠标位移驱动 `setPosition`（会与系统移动/缩放互相抖动）。合并回页签栏的唯一手势是拖动该窗口使光标停在页签栏上松开：主进程用 `move`/`moved` 事件配合 `session:tabbar-bounds` 报告的页签栏矩形做光标命中判定，跨窗口 HTML5 拖放不可依赖。
+- 独立窗口保留原生标题栏，移动、缩放和关闭都交给系统，不在渲染进程用鼠标位移驱动 `setPosition`（会与系统移动/缩放互相抖动）。合并回页签栏的唯一手势是拖动该窗口使光标停在页签栏上松开：主进程用 `move`/`moved` 事件配合 `session:tabbar-bounds` 报告的页签栏矩形做光标命中判定，跨窗口 HTML5 拖放不可依赖。命中期间 `session:drop-hint` 附带光标在页签栏内的相对 x（CSS px），`TabBar` 据此显示虚拟页签占位并经 `store.setDockTarget` 记录落位；drop-hint 的清除广播早于合并后的 `session:detached:false`，故 dockTarget 不随清除失效，只在 `applyDetached` 合并分支消费一次（经 `moveTab` 落到光标位置）。
 - 合并（拖回页签栏）必须先 `rehostToTabbar` 转移 SSH 所有权并发 `session:handover`，再等该窗口 `closed` 事件广播 `session:detached:false`，主窗口届时才新建视图实例；`closed` 的其他分支只广播 `session:closed`，由 `store.dropDetachedTab` 移除页签，VNC/RDP 代理由 `onEnd` 停止监听。两条路径不得混淆；主窗口不再主动关闭独立窗口（批量关闭只作用于页签栏内可见页签，见 `TabBar.onTabCtxSelect`）。
 - 独立窗口关闭前要弹与页签栏相同的“活动会话”确认：只有该窗口的视图知道连接状态，主进程在 `close` 里 `preventDefault` 并发 `session:confirm-close`，由 `SessionWindow` 用 `tab.closeConfirmMsg` 判断，确认后先 `ssh:disconnect` 再回 `session:close-answer`；页签侧 `store.closeTab` 同样在点击时就发起断开，不等视图销毁，否则连接会在无人管理的状态下继续运行。未加载完成、已标记 reason 或渲染进程已死时必须跳过确认，否则窗口将无法关闭。
 - 会话切换用 `v-show` 保留实例，不改成切换时销毁的 `v-if`；移除页签才触发相应销毁清理。

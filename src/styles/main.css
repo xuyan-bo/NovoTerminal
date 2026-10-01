@@ -676,6 +676,50 @@ button {
   right: 0;
 }
 
+/* Dragging a session tab outside the bar previews the window that will open at the drop point. */
+.tab-ghost-window {
+  position: fixed;
+  z-index: 3000;
+  width: 320px;
+  height: 190px;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.tab-ghost-window .ghost-bar {
+  flex: 0 0 auto;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  border-bottom: 1px dashed var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-ghost-window .ghost-body {
+  flex: 1;
+}
+
+/* Landing slot while a detached window is dragged back over the bar. */
+.tab.tab-dock-ghost {
+  width: 96px;
+  border-style: dashed;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  pointer-events: none;
+  cursor: default;
+}
+
 .tab .x {
   cursor: pointer;
   width: 16px;

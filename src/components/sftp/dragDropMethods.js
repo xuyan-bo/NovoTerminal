@@ -133,7 +133,7 @@ export default {
       return;
     }
     if (!payload) {
-      this.$message.warning('未识别到拖拽内容，请从列表按住文件拖入');
+      this.$message.warning(this.$t('sftp.dragUnknown'));
       return;
     }
 
@@ -151,7 +151,7 @@ export default {
           : null;
       tSide = zone && zone.getAttribute ? zone.getAttribute('data-side') : null;
       if (!tSide) {
-        this.$message.warning('请拖到「本机文件」或「服务器文件」区域');
+        this.$message.warning(this.$t('sftp.dragZone'));
         return;
       }
       dropDest = tSide === 'remote' ? this.remotePath : this.localDropDir();
@@ -193,7 +193,7 @@ export default {
 
     if (!payload) {
       this.pushDlog('runDrop no payload');
-      this.$message.warning('未识别到拖拽内容，请从列表按住文件拖入');
+      this.$message.warning(this.$t('sftp.dragUnknown'));
       return;
     }
     if (payload.side === tSide) {
@@ -381,7 +381,7 @@ export default {
         if (api.sftpLocalCopy) {
           unwrap(await api.sftpLocalCopy(item.path, dest));
         } else {
-          this.$message.error('本地复制不可用');
+          this.$message.error(this.$t('sftp.localCopyUnavailable'));
         }
         ok += 1;
       } catch (err) {

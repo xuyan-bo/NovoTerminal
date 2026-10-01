@@ -23,39 +23,47 @@
       @drop="onTabDrop"
     >
       <div class="tabbar">
-        <div
-          v-for="(t, index) in tabs"
-          :key="t.id"
-          class="tab"
-          :class="{
-            active: activeTab === t.id,
-            dragging: draggedTabId === t.id,
-            'drop-before': tabDragOver && dropBeforeTabId === t.id,
-            'drop-after': tabDragOver && dropBeforeTabId === null && index === tabs.length - 1,
-          }"
-          :data-tab-id="t.id"
-          :draggable="!!t.closable"
-          @dragstart.stop="onTabDragStart($event, t)"
-          @dragend.stop="endTabDrag"
-          @click="onTabClick(t)"
-          @contextmenu.prevent="onTabContextmenu($event, t)"
-        >
-          <span
-            v-if="t.os"
-            class="tab-os"
-            :class="'os-' + t.os"
-            v-html="osSvg(t.os)"
-          ></span>
-          <span v-else class="tab-glyph">{{ t.icon }}</span>
-          <span>{{ tabTitle(t) }}</span>
-          <i
-            v-if="t.closable"
-            class="x el-icon-close"
-            @mousedown.stop.prevent
-            @dragstart.stop.prevent
-            @click.stop="closeTabById(t.id)"
-          ></i>
-        </div>
+        <template v-for="(t, index) in tabs">
+          <div v-if="dockGhostIndex === index" :key="'dock-ghost-' + t.id" class="tab tab-dock-ghost"></div>
+          <div
+            :key="t.id"
+            class="tab"
+            :class="{
+              active: activeTab === t.id,
+              dragging: draggedTabId === t.id,
+              'drop-before': tabDragOver && dropBeforeTabId === t.id,
+              'drop-after': tabDragOver && dropBeforeTabId === null && index === tabs.length - 1,
+            }"
+            :data-tab-id="t.id"
+            :draggable="!!t.closable"
+            @dragstart.stop="onTabDragStart($event, t)"
+            @dragend.stop="endTabDrag"
+            @click="onTabClick(t)"
+            @contextmenu.prevent="onTabContextmenu($event, t)"
+          >
+            <span
+              v-if="t.os"
+              class="tab-os"
+              :class="'os-' + t.os"
+              v-html="osSvg(t.os)"
+            ></span>
+            <i v-else-if="isGlyphIcon(t.icon)" class="tab-glyph" :class="t.icon" aria-hidden="true"></i>
+            <svg-icon v-else class="tab-glyph" :name="t.icon" />
+            <span>{{ tabTitle(t) }}</span>
+            <i
+              v-if="t.closable"
+              class="x el-icon-close"
+              @mousedown.stop.prevent
+              @dragstart.stop.prevent
+              @click.stop="closeTabById(t.id)"
+            ></i>
+          </div>
+          <div
+            v-if="dockGhostIndex === tabs.length && index === tabs.length - 1"
+            :key="'dock-ghost-last'"
+            class="tab tab-dock-ghost"
+          ></div>
+        </template>
       </div>
     </div>
     <button
@@ -66,12 +74,20 @@
       @click="scrollTabs(1)"
     ><i class="el-icon-arrow-right"></i></button>
     <ctx-menu ref="tabCtxMenu" @select="onTabCtxSelect" />
+    <div
+      v-if="dragGhost.show"
+      class="tab-ghost-window"
+      :style="{ left: dragGhost.left + 'px', top: dragGhost.top + 'px' }"
+    >
+      <div class="ghost-bar"><span>{{ dragGhost.title }}</span></div>
+      <div class="ghost-body"></div>
+    </div>
   </div>
 </template>
 
 <script>
 import CtxMenu from './CtxMenu.vue';
-import { store, closeTab, moveTab, refreshSessionTab, api, detachTab } from '../store';
+import { store, closeTab, moveTab, refreshSessionTab, api, detachTab, setDockTarget } from '../store';
 import { t } from '../i18n';
 import { OS_SVG } from '../constants';
 import { getProtocol } from '../protocols';
@@ -79,6 +95,9 @@ import { getProtocol } from '../protocols';
 const TAB_DRAG_TYPE = 'application/x-omnidesk-tab';
 /** How often the tab bar rect is re-published for the detached window's hit test. */
 const BOUNDS_REPORT_MS = 150;
+/** Preview size of the detached-window outline shown while a tab is dragged out. */
+const GHOST_W = 320;
+const GHOST_H = 190;
 
 export default {
   name: 'TabBar',
@@ -95,6 +114,8 @@ export default {
       tabScrollLeft: false,
       tabScrollRight: false,
       dropHint: false,
+      dragGhost: { show: false, left: 0, top: 0, title: '' },
+      dockGhostIndex: -1,
     };
   },
   computed: {
@@ -123,8 +144,9 @@ export default {
     this._tabDragX = 0;
     this._tabClickBlockedUntil = 0;
     this._tabResizeObs = null;
-    this._dragPoint = null;
     this._dropHandled = false;
+    this._dragDetachable = false;
+    this._dragTitle = '';
     this._boundsTimer = 0;
     this._offDropHint = null;
   },
@@ -135,6 +157,8 @@ export default {
     if (api.onSessionDropHint) {
       this._offDropHint = api.onSessionDropHint((payload) => {
         this.dropHint = !!(payload && payload.active);
+        if (this.dropHint) this.updateDockGhost(payload.tabId, payload.x);
+        else this.dockGhostIndex = -1;
       });
     }
     window.addEventListener('resize', this.scheduleReportBounds);
@@ -149,6 +173,9 @@ export default {
   methods: {
     osSvg(os) {
       return OS_SVG[os] || '';
+    },
+    isGlyphIcon(icon) {
+      return typeof icon === 'string' && icon.startsWith('el-icon-');
     },
     tabTitle(tab) {
       // touch localeTick so the home tab label follows language switches
@@ -165,13 +192,27 @@ export default {
       event.dataTransfer.setData(TAB_DRAG_TYPE, tab.id);
       this.draggedTabId = tab.id;
       this._dropHandled = false;
-      this._dragPoint = null;
-      // dragend coordinates are not reliable, so track the pointer for the whole drag.
+      const protocol = getProtocol(tab.kind);
+      this._dragDetachable = !!(protocol && protocol.component);
+      this._dragTitle = this.tabTitle(tab);
+      this.dragGhost.show = false;
       document.addEventListener('dragover', this.onDocDragOver, true);
     },
     onDocDragOver(event) {
       if (!this.draggedTabId) return;
-      this._dragPoint = { x: event.clientX, y: event.clientY };
+      this.updateDragGhost(event.clientX, event.clientY);
+    },
+    updateDragGhost(x, y) {
+      const row = this.$el && this.$el.getBoundingClientRect ? this.$el.getBoundingClientRect() : null;
+      const outsideRow = !row || x < row.left || x > row.right || y < row.top || y > row.bottom;
+      if (!this._dragDetachable || !outsideRow) {
+        this.dragGhost.show = false;
+        return;
+      }
+      this.dragGhost.title = this._dragTitle;
+      this.dragGhost.left = Math.max(8, Math.min(x - GHOST_W / 2, window.innerWidth - GHOST_W - 8));
+      this.dragGhost.top = Math.max(8, Math.min(y - GHOST_H / 2, window.innerHeight - GHOST_H - 8));
+      this.dragGhost.show = true;
     },
     onTabDragOver(event) {
       if (!this.draggedTabId || !event.dataTransfer || !Array.from(event.dataTransfer.types).includes(TAB_DRAG_TYPE)) return;
@@ -221,28 +262,51 @@ export default {
     },
     endTabDrag() {
       const dragged = this.draggedTabId;
-      const detach = dragged && !this._dropHandled && this.isDraggedOutside();
+      // Releasing outside the window gives no trustworthy coordinates (and no dragexit without a
+      // drop target), so the main process re-checks the live cursor: a release over the tab bar
+      // row comes back cancelled instead of detached.
+      const detach = dragged && !this._dropHandled && this._dragDetachable;
       document.removeEventListener('dragover', this.onDocDragOver, true);
       if (dragged) this._tabClickBlockedUntil = Date.now() + 150;
       this.draggedTabId = '';
       this.dropBeforeTabId = null;
       this.tabDragOver = false;
+      this.dragGhost.show = false;
+      this._dragDetachable = false;
       cancelAnimationFrame(this._tabScrollFrame);
       this._tabScrollFrame = 0;
       this._dropHandled = false;
-      this._dragPoint = null;
-      if (detach) this.detachSessionTab(dragged);
+      if (detach) this.detachSessionTab(dragged, true);
     },
-    /** Released outside the tab bar row means "take this session into its own window". */
-    isDraggedOutside() {
-      const point = this._dragPoint;
-      const row = this.$el && this.$el.getBoundingClientRect ? this.$el.getBoundingClientRect() : null;
-      if (!point || !row) return false;
-      return point.x < row.left || point.x > row.right || point.y < row.top || point.y > row.bottom;
+    /**
+     * A detached window dragged over the bar reports the cursor's x in page CSS px; show the
+     * landing slot there. The store target survives the drop-hint clear because it arrives
+     * before the merge broadcast that consumes it.
+     */
+    updateDockGhost(tabId, x) {
+      const wrap = this.$refs.tabbarWrap;
+      if (!tabId || !wrap || !Number.isFinite(x) || !this.$el) {
+        this.dockGhostIndex = -1;
+        return;
+      }
+      const clientX = this.$el.getBoundingClientRect().left + x;
+      const slots = wrap.querySelectorAll('.tab[data-tab-id]');
+      let index = this.tabs.length;
+      for (let i = 0; i < slots.length; i += 1) {
+        const rect = slots[i].getBoundingClientRect();
+        if (clientX < rect.left + rect.width / 2) {
+          index = i;
+          break;
+        }
+      }
+      index = Math.max(1, Math.min(index, this.tabs.length));
+      this.dockGhostIndex = index;
+      const visible = this.tabs;
+      setDockTarget(tabId, index < visible.length ? visible[index].id : null);
     },
-    async detachSessionTab(tabId) {
+    async detachSessionTab(tabId, fromDrag) {
       try {
-        await detachTab(tabId);
+        await detachTab(tabId, fromDrag);
       } catch (e) {
         this.$message.error(e.code === 'DETACH_KIND' ? t('tab.detachBadKind') : e.message || t('tab.detachFail'));
       }

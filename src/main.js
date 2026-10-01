@@ -5,6 +5,7 @@ import enLocale from 'element-ui/lib/locale/lang/en';
 import locale from 'element-ui/lib/locale';
 import 'element-ui/lib/theme-chalk/index.css';
 import App from './App.vue';
+import SvgIcon from './components/SvgIcon.vue';
 import { refresh, store, api } from './store';
 import { t, setLocale, applySettings } from './i18n';
 import './styles/main.css';
@@ -26,6 +27,7 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 
 Vue.use(ElementUI, { size: 'small' });
+Vue.component('svg-icon', SvgIcon);
 Vue.config.productionTip = false;
 Vue.prototype.$t = function (key, params) {
   // touch localeTick so computed re-render

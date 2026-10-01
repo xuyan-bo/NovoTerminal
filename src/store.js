@@ -7,7 +7,7 @@ import { getProtocol, protocolLabel } from './protocols';
 export const store = Vue.observable({
   snapshot: { groups: [], recent: [], settings: { theme: 'system', lang: 'zh', dataPath: '', zoom: 100, font: 'default' } },
   activeTab: 'home',
-  tabs: [{ id: 'home', title: '首页', closable: false, icon: '⌂', titleKey: 'nav.home' }],
+  tabs: [{ id: 'home', title: '首页', closable: false, icon: 'el-icon-s-home', titleKey: 'nav.home' }],
   activeAssetId: null,
   activeGroupId: null,
   sessionMap: {},
@@ -102,6 +102,16 @@ function isDetachable(tab) {
 }
 
 /**
+ * Insertion slot captured while a detached window hovers the tab bar. The drop-hint clear event
+ * arrives before the merge broadcast, so this survives it and is consumed once by applyDetached.
+ */
+let dockTarget = null;
+
+export function setDockTarget(tabId, beforeId) {
+  dockTarget = { tabId, beforeId };
+}
+
+/**
  * Apply the authoritative detached state broadcast by the main process. A detached session leaves
  * the tab bar entirely, so the active tab has to move to a visible neighbour, and merging back is
  * what brings it into focus again.
@@ -112,6 +122,10 @@ export function applyDetached(tabId, detached) {
   if (detached && tab.kind === 'ssh' && tab.liveSessionId) markSessionHandover(tabId);
   tab.detached = detached;
   if (!detached) {
+    if (dockTarget && dockTarget.tabId === tabId) {
+      moveTab(tabId, dockTarget.beforeId);
+      dockTarget = null;
+    }
     store.activeTab = tabId;
     return;
   }
@@ -123,7 +137,7 @@ export function applyDetached(tabId, detached) {
   store.activeTab = next ? next.id : 'home';
 }
 
-export async function detachTab(tabId) {
+export async function detachTab(tabId, fromDrag) {
   const tab = findTab(tabId);
   if (!tab || !isDetachable(tab) || tab.detached) return;
   unwrap(
@@ -136,6 +150,7 @@ export async function detachTab(tabId) {
       port: tab.port,
       title: tab.title,
       liveSessionId: tab.liveSessionId,
+      fromDrag: !!fromDrag,
     })
   );
 }
@@ -275,7 +290,7 @@ export function openAssetDetail(asset) {
     id: 'asset-' + asset.id,
     title: asset.name,
     closable: true,
-    icon: '▣',
+    icon: 'el-icon-postcard',
     kind: 'asset',
     os: asset.os,
     assetId: asset.id,
@@ -285,7 +300,7 @@ export function openAssetDetail(asset) {
 export async function connectAsset(asset, method) {
   const protocol = getProtocol(method.id);
   if (!protocol) {
-    throw Object.assign(new Error(t('msg.notImpl', { name: method.name || method.id })), {
+    throw Object.assign(new Error(t('msg.notImpl', { name: method.nameKey ? t(method.nameKey) : method.id })), {
       code: 'NOT_IMPLEMENTED',
     });
   }
@@ -320,7 +335,8 @@ export async function connectAsset(asset, method) {
 
 export function connectionErrorMessage(error) {
   if (error.code === 'TCP_TIMEOUT') return t('msg.tcpFail');
-  if (error.code === 'MSTSC_NOT_FOUND') return 'mstsc not found';
+  if (error.code === 'MSTSC_NOT_FOUND') return t('err.mstscNotFound');
+  if (error.code === 'PLATFORM') return t('err.rdpWindowsOnly');
   return error.message || t('err.connect');
 }
 

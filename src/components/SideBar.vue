@@ -1,8 +1,8 @@
 <template>
   <aside class="sidebar">
     <div class="side-toolbar">
-      <el-button type="primary" @click="onNewAsset">{{ $t('sidebar.newAsset') }}</el-button>
-      <el-button @click="onNewGroup">{{ $t('sidebar.newGroup') }}</el-button>
+      <el-button type="primary" icon="el-icon-plus" @click="onNewAsset">{{ $t('sidebar.newAsset') }}</el-button>
+      <el-button icon="el-icon-plus" @click="onNewGroup">{{ $t('sidebar.newGroup') }}</el-button>
     </div>
     <div class="side-search">
       <el-input v-model="filter" size="mini" :placeholder="$t('sidebar.search')" clearable />
@@ -33,7 +33,7 @@
         >
           <span :style="{ transform: g.open ? '' : 'rotate(-90deg)', display: 'inline-block', fontSize: '10px' }">▾</span>
           <span :style="{ width: '8px', height: '8px', borderRadius: '2px', background: g.color, display: 'inline-block' }"></span>
-          <span style="flex:1">{{ g.name }}</span>
+          <span style="flex:1">{{ groupLabel(g) }}</span>
           <span class="pill">{{ g.nodes.length }}</span>
         </div>
         <template v-if="g.open">
@@ -66,7 +66,7 @@
               class="pill"
               :class="pillClass(m.id)"
               @click.stop="connect(n, m)"
-              :title="$t('ctx.connectWith', { name: m.name })"
+              :title="$t('ctx.connectWith', { name: $t(m.nameKey) })"
             >{{ shortProto(m.id) }}</span>
           </div>
         </template>
@@ -81,9 +81,7 @@
         :title="$t('nav.settings')"
         @click="$root.$emit('open-settings')"
       >
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
-          <path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96a7.05 7.05 0 00-1.62-.94l-.36-2.54a.48.48 0 00-.48-.41h-3.84a.48.48 0 00-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87a.48.48 0 00.12.61l2.03 1.58c-.05.3-.07.63-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 00-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.6 3.6 0 0112 15.6z"/>
-        </svg>
+        <svg-icon name="gear" :size="16" />
       </button>
       <button
         type="button"
@@ -91,9 +89,7 @@
         :title="$t('nav.logs')"
         @click="openLog"
       >
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zM6 20V4h7v5h5v11H6zm3-3h6v-2H9v2zm0-4h6v-2H9v2z"/>
-        </svg>
+        <svg-icon name="doc-log" :size="16" />
       </button>
     </div>
     <ctx-menu ref="contextMenu" @select="handleCtx" />
@@ -117,7 +113,7 @@ import {
 import { OS_SVG, methodPillClass, isUngroupedGroup, UNGROUPED_ID } from '../constants';
 import { protocolLabel } from '../protocols';
 import CtxMenu from './CtxMenu.vue';
-import { t } from '../i18n';
+import { t, groupName } from '../i18n';
 
 export default {
   name: 'SideBar',
@@ -336,26 +332,29 @@ export default {
     },
     onBlankCtx(e) {
       this.showMenu(e, [
-        { label: t('ctx.newAsset'), act: 'new-asset' },
-        { label: t('ctx.newGroup'), act: 'new-group' },
+        { label: t('ctx.newAsset'), icon: 'el-icon-plus', act: 'new-asset' },
+        { label: t('ctx.newGroup'), icon: 'el-icon-plus', act: 'new-group' },
       ]);
+    },
+    groupLabel(g) {
+      return groupName(g);
     },
     onGroupCtx(e, g) {
       const ungrouped = isUngroupedGroup(g);
       if (ungrouped) {
         this.showMenu(e, [
-          { label: `分组 · ${g.name}`, title: true },
-          { label: t('ctx.inGroupNew'), act: 'new-asset-g', gid: g.id },
-          { label: t('ctx.editGroup'), act: 'edit-group', gid: g.id },
+          { label: t('sidebar.groupTitle', { name: groupName(g) }), title: true },
+          { label: t('ctx.inGroupNew'), icon: 'el-icon-plus', act: 'new-asset-g', gid: g.id },
+          { label: t('ctx.editGroup'), icon: 'el-icon-edit', act: 'edit-group', gid: g.id },
         ]);
         return;
       }
       this.showMenu(e, [
-        { label: `分组 · ${g.name}`, title: true },
-        { label: t('ctx.inGroupNew'), act: 'new-asset-g', gid: g.id },
-        { label: t('ctx.editGroup'), act: 'edit-group', gid: g.id },
+        { label: t('sidebar.groupTitle', { name: groupName(g) }), title: true },
+        { label: t('ctx.inGroupNew'), icon: 'el-icon-plus', act: 'new-asset-g', gid: g.id },
+        { label: t('ctx.editGroup'), icon: 'el-icon-edit', act: 'edit-group', gid: g.id },
         { sep: true },
-        { label: t('ctx.delGroup'), act: 'del-group', gid: g.id, danger: true },
+        { label: t('ctx.delGroup'), icon: 'el-icon-delete', act: 'del-group', gid: g.id, danger: true },
       ]);
     },
     onNodeCtx(e, g, n) {
@@ -363,13 +362,13 @@ export default {
       const methods = enabledMethods(n);
       const items = [{ label: `${t('ctx.asset')} · ${n.name}`, title: true }];
       methods.forEach((m) => {
-        items.push({ label: t('ctx.connectWith', { name: m.name }), act: 'connect', aid: n.id, mid: m.id });
+        items.push({ label: t('ctx.connectWith', { name: t(m.nameKey) }), icon: 'el-icon-video-play', act: 'connect', aid: n.id, mid: m.id });
       });
       items.push({ sep: true });
-      items.push({ label: t('ctx.edit'), act: 'edit', aid: n.id });
-      items.push({ label: t('ctx.clone'), act: 'clone', aid: n.id });
+      items.push({ label: t('ctx.edit'), icon: 'el-icon-edit', act: 'edit', aid: n.id });
+      items.push({ label: t('ctx.clone'), icon: 'el-icon-document-copy', act: 'clone', aid: n.id });
       items.push({ sep: true });
-      items.push({ label: t('ctx.del'), act: 'del', aid: n.id, danger: true });
+      items.push({ label: t('ctx.del'), icon: 'el-icon-delete', act: 'del', aid: n.id, danger: true });
       this.showMenu(e, items);
     },
     showMenu(e, items) {

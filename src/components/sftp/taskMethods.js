@@ -265,7 +265,7 @@ export default {
     if (i >= 0) this.$set(this.tasks, i, merged);
     else this.tasks.unshift(merged);
     if (merged.status === 'error' && (!prev || prev.status !== 'error')) {
-      this.$message.error(`${merged.name}: ${merged.error || '传输失败'}`);
+      this.$message.error(`${merged.name}: ${merged.error || this.$t('sftp.transferFailed')}`);
     }
     if (merged.status === 'done' && (!prev || prev.status !== 'done')) {
       this.refreshAfterDone(merged);

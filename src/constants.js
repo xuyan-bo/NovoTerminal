@@ -11,7 +11,6 @@ export const OS_NAME = { win: 'Windows', mac: 'macOS', linux: 'Linux' };
 
 /** Reserved default group: always in the tree, not selectable, not deletable */
 export const UNGROUPED_ID = 'g-ungrouped';
-export const UNGROUPED_NAME = '未分组';
 
 /** UI font choices for the settings dialog; 'default' keeps the built-in stack */
 export const UI_FONTS = [
@@ -28,18 +27,18 @@ export function isUngroupedGroup(g) {
 
 export const CATALOG = {
   win: [
-    { id: 'rdp', name: 'RDP', desc: 'Windows 远程桌面', defaultPort: PROTOCOLS.rdp.defaultPort, rec: true },
-    { id: 'ssh', name: 'SSH', desc: '终端 / 命令行（OpenSSH）', defaultPort: PROTOCOLS.ssh.defaultPort, rec: false },
-    { id: 'vnc', name: 'VNC', desc: 'VNC Server 兼容', defaultPort: PROTOCOLS.vnc.defaultPort, rec: false },
+    { id: 'rdp', nameKey: 'cat.name.rdp', descKey: 'cat.desc.winRdp', defaultPort: PROTOCOLS.rdp.defaultPort, rec: true },
+    { id: 'ssh', nameKey: 'cat.name.ssh', descKey: 'cat.desc.winSsh', defaultPort: PROTOCOLS.ssh.defaultPort, rec: false },
+    { id: 'vnc', nameKey: 'cat.name.vnc', descKey: 'cat.desc.winVnc', defaultPort: PROTOCOLS.vnc.defaultPort, rec: false },
   ],
   mac: [
-    { id: 'vnc', name: 'VNC 屏幕共享', desc: 'macOS 自带共享', defaultPort: PROTOCOLS.vnc.defaultPort, rec: true },
-    { id: 'ssh', name: 'SSH', desc: '终端 / SFTP', defaultPort: PROTOCOLS.ssh.defaultPort, rec: false },
+    { id: 'vnc', nameKey: 'cat.name.vncShare', descKey: 'cat.desc.macVnc', defaultPort: PROTOCOLS.vnc.defaultPort, rec: true },
+    { id: 'ssh', nameKey: 'cat.name.ssh', descKey: 'cat.desc.termSftp', defaultPort: PROTOCOLS.ssh.defaultPort, rec: false },
   ],
   linux: [
-    { id: 'ssh', name: 'SSH', desc: '终端 / SFTP', defaultPort: PROTOCOLS.ssh.defaultPort, rec: true },
-    { id: 'vnc', name: 'VNC', desc: 'x11vnc / TurboVNC', defaultPort: PROTOCOLS.vnc.defaultPort, rec: false },
-    { id: 'rdp', name: 'RDP (xrdp)', desc: '需安装 xrdp', defaultPort: PROTOCOLS.rdp.defaultPort, rec: false },
+    { id: 'ssh', nameKey: 'cat.name.ssh', descKey: 'cat.desc.termSftp', defaultPort: PROTOCOLS.ssh.defaultPort, rec: true },
+    { id: 'vnc', nameKey: 'cat.name.vnc', descKey: 'cat.desc.linuxVnc', defaultPort: PROTOCOLS.vnc.defaultPort, rec: false },
+    { id: 'rdp', nameKey: 'cat.name.rdpXrdp', descKey: 'cat.desc.linuxRdp', defaultPort: PROTOCOLS.rdp.defaultPort, rec: false },
   ],
 };
 
@@ -292,15 +291,6 @@ export function resolveAdvanced(methodId, saved) {
     if (v !== '') base[f.key] = v;
   });
   return base;
-}
-
-export function formatTime(ts) {
-  if (!ts) return '';
-  const diff = Date.now() - ts;
-  if (diff < 60000) return '刚刚';
-  if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前';
-  if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前';
-  return '更早';
 }
 
 /** xterm.js default ANSI palette (16 colors) — Xshell classic black fallback */

@@ -3,7 +3,7 @@ export const PROTOCOLS = {
     label: 'RDP',
     defaultPort: 3389,
     pillClass: 'rd',
-    icon: '\u{1F5A5}',
+    icon: 'el-icon-monitor',
     // 内嵌会话仅用于 IronRDP-WASM 引擎；external 引擎由 store.connectAsset 走外部 mstsc 流程
     component: () => import('./components/RdpView.vue'),
   },
@@ -11,14 +11,14 @@ export const PROTOCOLS = {
     label: 'SSH',
     defaultPort: 22,
     pillClass: 'ssh',
-    icon: '⌘',
+    icon: 'ssh',
     component: () => import('./components/TerminalView.vue'),
   },
   vnc: {
     label: 'VNC',
     defaultPort: 5900,
     pillClass: 'vnc',
-    icon: '\u{1F5A5}',
+    icon: 'el-icon-monitor',
     component: () => import('./components/VncView.vue'),
   },
 };

@@ -55,9 +55,7 @@
                 class="recent-connect-btn"
                 @click.stop="connectRecent(r)"
               >
-                <svg viewBox="0 0 1024 1024" width="14" height="14" fill="currentColor" aria-hidden="true">
-                  <path d="M454.6048 328.8576a25.344 25.344 0 1 1-35.84-35.84l203.8784-203.9808c82.1248-82.176 212.992-84.992 292.352-5.632 79.36 79.4112 76.544 210.432-5.632 292.5568l-203.8272 203.9808c-82.1248 82.1248-212.992 84.992-292.352 5.632a25.344 25.344 0 0 1 35.84-35.8912c59.1872 59.2384 158.0032 57.088 220.672-5.632l203.8784-203.9808c62.6176-62.6688 64.8192-161.536 5.632-220.7744-59.2384-59.2384-158.0544-57.088-220.7232 5.632L454.6048 328.8064z m114.7904 366.2848a25.344 25.344 0 1 1 35.84 35.84L401.408 934.9632c-82.1248 82.176-212.992 84.992-292.352 5.632-79.36-79.4112-76.544-210.432 5.632-292.5568L318.464 444.0576c82.1248-82.1248 212.992-84.992 292.352-5.632a25.344 25.344 0 0 1-35.84 35.8912c-59.1872-59.2384-158.0032-57.088-220.672 5.632l-203.8784 203.9808c-62.6176 62.6688-64.8192 161.536-5.632 220.7744 59.2384 59.2384 158.0544 57.088 220.7232-5.632l203.8784-203.9296z"/>
-                </svg>
+                <svg-icon name="link" />
               </button>
             </el-tooltip>
             <el-tooltip :content="$t('home.removeRecent')" placement="top">
@@ -81,8 +79,8 @@
 <script>
 import * as echarts from 'echarts';
 import { store, findAsset, connectAsset, connectionErrorMessage, removeRecent } from '../store';
-import { OS_SVG, formatTime } from '../constants';
-import { t } from '../i18n';
+import { OS_SVG } from '../constants';
+import { t, formatTime } from '../i18n';
 
 export default {
   name: 'HomeView',

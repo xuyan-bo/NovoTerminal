@@ -211,7 +211,7 @@ export default {
         }
         if (ev.type === 'drag-error') {
           this.pushDlog('drag-error ' + (ev.message || ''));
-          this.$message.error(ev.message || '拖出失败');
+          this.$message.error(ev.message || t('sftp.dragOutFail'));
         }
       });
     this._offDragReady =

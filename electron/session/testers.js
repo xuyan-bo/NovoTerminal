@@ -83,7 +83,8 @@ function vncEncrypt(challenge, password) {
   return Buffer.concat([cipher.update(challenge), cipher.final()]);
 }
 
-function testVnc({ host, port, password, timeoutMs = 8000 }) {
+function testVnc({ host, port, password, timeoutMs = 8000, lang }) {
+  const en = lang === 'en';
   return new Promise((resolve) => {
     const t0 = Date.now();
     const sock = new net.Socket();
@@ -143,7 +144,7 @@ function testVnc({ host, port, password, timeoutMs = 8000 }) {
           const len = buf.readUInt32BE(1);
           if (buf.length < 5 + len) return;
           const reason = buf.slice(5, 5 + len).toString('utf8');
-          return finish(false, 'VNC_REJECTED', reason || 'VNC 拒绝连接');
+          return finish(false, 'VNC_REJECTED', reason || (en ? 'VNC connection rejected' : 'VNC 拒绝连接'));
         }
         if (buf.length < 1 + count) return;
         const types = [...buf.slice(1, 1 + count)];
@@ -158,9 +159,16 @@ function testVnc({ host, port, password, timeoutMs = 8000 }) {
           const supported = types.filter((t) => t in NOVNC_TYPES);
           if (supported.length > 0) {
             const names = supported.map((t) => NOVNC_TYPES[t] + '(' + t + ')').join(', ');
-            return finish(true, undefined, undefined, { auth: 'ok', note: '服务器认证类型: ' + names + '（noVNC 可处理）' });
+            return finish(true, undefined, undefined, {
+              auth: 'ok',
+              note: en
+                ? 'Server auth type: ' + names + ' (supported by noVNC)'
+                : '服务器认证类型: ' + names + '（noVNC 可处理）',
+            });
           }
-          return finish(false, 'VNC_NO_AUTH', '服务器认证类型 noVNC 不支持（支持: ' + types.join(',') + '）');
+          return finish(false, 'VNC_NO_AUTH', en
+            ? 'Server auth types not supported by noVNC (offered: ' + types.join(',') + ')'
+            : '服务器认证类型 noVNC 不支持（支持: ' + types.join(',') + '）');
         }
         step();
         return;
@@ -175,9 +183,16 @@ function testVnc({ host, port, password, timeoutMs = 8000 }) {
         } else if (type === 1) {
           stage = 'sec-result';
         } else if (type in NOVNC_TYPES) {
-          return finish(true, undefined, undefined, { auth: 'ok', note: '服务器认证类型: ' + NOVNC_TYPES[type] + '（noVNC 可处理）' });
+          return finish(true, undefined, undefined, {
+            auth: 'ok',
+            note: en
+              ? 'Server auth type: ' + NOVNC_TYPES[type] + ' (supported by noVNC)'
+              : '服务器认证类型: ' + NOVNC_TYPES[type] + '（noVNC 可处理）',
+          });
         } else {
-          return finish(false, 'VNC_NO_AUTH', '服务器认证类型 noVNC 不支持（类型: ' + type + '）');
+          return finish(false, 'VNC_NO_AUTH', en
+            ? 'Server auth type not supported by noVNC (type: ' + type + ')'
+            : '服务器认证类型 noVNC 不支持（类型: ' + type + '）');
         }
         step();
         return;
@@ -198,7 +213,7 @@ function testVnc({ host, port, password, timeoutMs = 8000 }) {
         const r = buf.readUInt32BE(0);
         buf = buf.slice(4);
         if (r === 0) finish(true, undefined, undefined, { auth: 'ok' });
-        else finish(false, 'AUTH_FAILED', 'VNC 密码错误');
+        else finish(false, 'AUTH_FAILED', en ? 'VNC password is incorrect' : 'VNC 密码错误');
       }
     }
 
@@ -226,7 +241,8 @@ function buildRdpRequest() {
   return Buffer.concat([tpkt, x224]);
 }
 
-function testRdp({ host, port, timeoutMs = 5000 }) {
+function testRdp({ host, port, timeoutMs = 5000, lang }) {
+  const en = lang === 'en';
   return new Promise((resolve) => {
     const t0 = Date.now();
     const sock = new net.Socket();
@@ -253,7 +269,7 @@ function testRdp({ host, port, timeoutMs = 5000 }) {
       if (buf.length < 11) return;
       // TPKT(4) + X.224 Connection Confirm (CC = 0xd0 at offset 5)
       if (buf[5] !== 0xd0) {
-        return finish(false, 'RDP_BAD_RESPONSE', '不是有效的 RDP 响应');
+        return finish(false, 'RDP_BAD_RESPONSE', en ? 'Not a valid RDP response' : '不是有效的 RDP 响应');
       }
       let selected = 0;
       const negOffset = 11; // TPKT(4) + fixed X.224 header(7)

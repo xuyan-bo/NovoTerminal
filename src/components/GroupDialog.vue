@@ -99,7 +99,7 @@ export default {
           {
             validator(rule, value, cb) {
               const n = String(value || '').trim().length;
-              if (n && (n < 1 || n > 64)) cb(new Error('1–64 字符'));
+              if (n && (n < 1 || n > 64)) cb(new Error(t('group.len64')));
               else cb();
             },
             trigger: 'blur',
@@ -154,7 +154,7 @@ export default {
         );
         this.form.name = g ? g.name : '';
         this.form.color = normalizeHex(g && g.color);
-        if (this.isUngrouped) this.form.name = this.form.name || '未分组';
+        if (this.isUngrouped) this.form.name = this.form.name || t('sidebar.untitled');
       } else {
         this.form.name = '';
         this.form.color = '#409EFF';

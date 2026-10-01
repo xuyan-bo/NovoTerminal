@@ -24,22 +24,27 @@ let lastVerifiedAt = 0;
 let authGeneration = 0;
 let macAuthProcess = null;
 
-function resultMessage(code) {
+function resultMessage(code, lang) {
   const map = {
-    Verified: '验证通过',
-    Canceled: '已取消验证',
-    UserCanceled: '已取消验证',
-    BadCredentials: '用户名或密码不正确',
-    AccountNotFound: '账号不存在',
-    DeviceNotPresent: '未检测到可用的身份验证设备',
-    NotConfiguredForUser: '系统未配置身份验证（请先在 Windows 设置中启用 Hello / PIN）',
-    DisabledByPolicy: '系统策略禁用了身份验证',
-    DeviceBusy: '身份验证设备忙，请稍后再试',
-    RetriesExhausted: '验证次数过多',
-    UnsupportedPlatform: '当前系统暂不支持系统级身份验证',
-    Failed: '系统身份验证失败',
+    Verified: ['验证通过', 'Identity verified'],
+    Canceled: ['已取消验证', 'Identity verification canceled'],
+    UserCanceled: ['已取消验证', 'Identity verification canceled'],
+    BadCredentials: ['用户名或密码不正确', 'Wrong username or password'],
+    AccountNotFound: ['账号不存在', 'Account does not exist'],
+    DeviceNotPresent: ['未检测到可用的身份验证设备', 'No usable verification device found'],
+    NotConfiguredForUser: ['系统未配置身份验证（请先在 Windows 设置中启用 Hello / PIN）', 'System verification is not set up (enable Windows Hello / PIN first)'],
+    DisabledByPolicy: ['系统策略禁用了身份验证', 'Verification disabled by system policy'],
+    DeviceBusy: ['身份验证设备忙，请稍后再试', 'Verification device busy, try again later'],
+    RetriesExhausted: ['验证次数过多', 'Too many verification attempts'],
+    UnsupportedPlatform: ['当前系统暂不支持系统级身份验证', 'System-level verification is not supported on this platform'],
+    Failed: ['系统身份验证失败', 'System identity verification failed'],
   };
-  return map[code] || map.Failed;
+  const pair = map[code] || map.Failed;
+  return pair[lang === 'en' ? 1 : 0];
+}
+
+function defaultReason(lang) {
+  return lang === 'en' ? 'OmniDesk needs to verify your identity' : 'OmniDesk 需要验证您的身份';
 }
 
 // ---------------------------------------------------------------------------
@@ -50,8 +55,8 @@ function encodePs(script) {
   return Buffer.from(script, 'utf16le').toString('base64');
 }
 
-function buildHelloScript(reason) {
-  const msg = String(reason || 'OmniDesk 需要验证您的身份').replace(/'/g, "''");
+function buildHelloScript(reason, lang) {
+  const msg = String(reason || defaultReason(lang)).replace(/'/g, "''");
   return [
     "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
     "$ErrorActionPreference = 'Stop'",
@@ -82,8 +87,7 @@ function buildHelloScript(reason) {
  * Build the password dialog script. Uses a single-quoted here-string (@' ... '@)
  * for the C# interop so PowerShell does not expand `$`/backslashes inside it.
  */
-function buildPasswordScript(reason) {
-  const msg = String(reason || 'OmniDesk 需要验证您的身份');
+function buildPasswordScript() {
   return [
     'param([int64]$hwnd, [string]$reason)',
     "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
@@ -266,43 +270,48 @@ function runPsFile(psContent, psArgs, options) {
   });
 }
 
-async function verifyWindowsAuth(reason, hwnd) {
+async function verifyWindowsAuth(reason, hwnd, lang) {
   // Step 1 — Windows Hello (face / fingerprint / PIN).
-  const hello = await runPs(buildHelloScript(reason), { timeout: 190000 }).catch(() => null);
+  const hello = await runPs(buildHelloScript(reason, lang), { timeout: 190000 }).catch(() => null);
   const helloCode = hello && hello.out ? hello.out : '';
   if (helloCode === 'Verified') {
-    return { ok: true, code: 'Verified', method: 'hello', message: '验证通过' };
+    return { ok: true, code: 'Verified', method: 'hello', message: resultMessage('Verified', lang) };
   }
   if (['Canceled', 'UserCanceled', 'DisabledByPolicy', 'RetriesExhausted', 'DeviceBusy'].includes(helloCode)) {
-    return { ok: false, code: helloCode, method: 'hello', message: resultMessage(helloCode) };
+    return { ok: false, code: helloCode, method: 'hello', message: resultMessage(helloCode, lang) };
   }
 
   // Step 2 — native password dialog. Parent to the main window (app icon,
   // stays on top, no orphaned taskbar entry).
-  const pwScript = buildPasswordScript(reason);
+  const pwScript = buildPasswordScript();
   const h = hwnd && hwnd > 0 ? String(hwnd) : '0';
-  const pw = await runPsFile(pwScript, [h, reason || 'OmniDesk 需要验证您的身份'], { timeout: 130000 });
+  const pw = await runPsFile(pwScript, [h, reason || defaultReason(lang)], { timeout: 130000 });
 
   if (pw.debug) console.error('[auth] pw:', pw.debug);
   const out = pw.out || 'Failed';
 
   if (out === 'Verified') {
-    return { ok: true, code: 'Verified', method: 'password', message: '验证通过' };
+    return { ok: true, code: 'Verified', method: 'password', message: resultMessage('Verified', lang) };
   }
   if (out === 'Canceled') {
-    return { ok: false, code: 'Canceled', method: 'password', message: '已取消验证' };
+    return { ok: false, code: 'Canceled', method: 'password', message: resultMessage('Canceled', lang) };
   }
   if (out === 'Error:1326') {
-    return { ok: false, code: 'BadCredentials', method: 'password', message: '用户名或密码不正确' };
+    return { ok: false, code: 'BadCredentials', method: 'password', message: resultMessage('BadCredentials', lang) };
   }
   if (out === 'Error:1325') {
-    return { ok: false, code: 'AccountNotFound', method: 'password', message: '账号不存在' };
+    return { ok: false, code: 'AccountNotFound', method: 'password', message: resultMessage('AccountNotFound', lang) };
   }
   if (out.startsWith('Error:')) {
     const code = out.slice(6);
-    return { ok: false, code: 'Failed', method: 'password', message: `身份验证失败（错误码 ${code}）` };
+    return {
+      ok: false,
+      code: 'Failed',
+      method: 'password',
+      message: lang === 'en' ? `Identity verification failed (error code ${code})` : `身份验证失败（错误码 ${code}）`,
+    };
   }
-  return { ok: false, code: 'Failed', method: 'password', message: '密码错误或验证失败' };
+  return { ok: false, code: 'Failed', method: 'password', message: resultMessage('Failed', lang) };
 }
 
 function macAuthResult(code, lang) {
@@ -353,11 +362,11 @@ async function verifySystemAuth(reason, hwnd, { force = false, lang = 'zh', log 
   if (process.platform === 'linux') {
     result = { ok: true, code: 'Skipped', method: 'skipped', message: lang === 'en' ? 'System authentication is skipped on Linux' : 'Linux 跳过系统身份验证' };
   } else if (process.platform !== 'win32' && process.platform !== 'darwin') {
-    result = { ok: false, code: 'UnsupportedPlatform', method: 'system', message: resultMessage('UnsupportedPlatform') };
+    result = { ok: false, code: 'UnsupportedPlatform', method: 'system', message: resultMessage('UnsupportedPlatform', lang) };
   } else if (!force && Date.now() - lastVerifiedAt < AUTH_CACHE_MS) {
     result = { ok: true, code: 'Verified', method: 'cached', message: lang === 'en' ? 'Identity verified' : '验证通过' };
   } else {
-    result = process.platform === 'darwin' ? await verifyMacAuth(reason, lang) : await verifyWindowsAuth(reason, hwnd);
+    result = process.platform === 'darwin' ? await verifyMacAuth(reason, lang) : await verifyWindowsAuth(reason, hwnd, lang);
     if (generation !== authGeneration) {
       result = { ok: false, code: 'Canceled', method: result.method, message: lang === 'en' ? 'Identity verification canceled' : '已取消验证' };
     } else if (result.ok) {

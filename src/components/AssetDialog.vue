@@ -16,8 +16,8 @@
         @click="setType(tp.id)"
       >
         <div class="os-slot" :class="tp.id" v-html="osSvg(tp.id)"></div>
-        <div class="nm">{{ tp.label }}</div>
-        <div class="sub">{{ tp.sub }}</div>
+        <div class="nm">{{ $t('os.' + tp.id) }}</div>
+        <div class="sub">{{ $t(tp.subKey) }}</div>
       </div>
     </div>
 
@@ -74,11 +74,9 @@
             :title="authChecking ? $t('auth.verifying') : (passVisible ? $t('auth.hidePass') : $t('auth.revealPass'))"
             @click="onTogglePassVisible"
           >
-            <svg v-if="authChecking" class="spin-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
-              <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
-            </svg>
-            <img v-else-if="!passVisible" src="/icons/eye-open.svg" alt="" width="20" height="20" aria-hidden="true">
-            <img v-else src="/icons/eye-closed.svg" alt="" width="20" height="20" aria-hidden="true">
+            <svg-icon v-if="authChecking" class="spin-icon" name="spinner" :size="14" />
+            <img v-else-if="!passVisible" :src="'icons/eye-open.svg'" alt="" width="20" height="20" aria-hidden="true">
+            <img v-else :src="'icons/eye-closed.svg'" alt="" width="20" height="20" aria-hidden="true">
           </button>
         </el-input>
       </el-form-item>
@@ -137,9 +135,9 @@ export default {
       testing: false,
       testingId: null,
       types: [
-        { id: 'win', label: 'Windows', sub: 'RDP / SSH / VNC 可选' },
-        { id: 'mac', label: 'macOS', sub: 'VNC / SSH 可选' },
-        { id: 'linux', label: 'Linux', sub: 'VNC / SSH / xrdp' },
+        { id: 'win', subKey: 'asset.subWin' },
+        { id: 'mac', subKey: 'asset.subMac' },
+        { id: 'linux', subKey: 'asset.subLinux' },
       ],
       form: {
         name: '',
@@ -171,7 +169,7 @@ export default {
           {
             validator(rule, value, cb) {
               const n = String(value || '').trim().length;
-              if (n && n > 128) cb(new Error('1–128 字符'));
+              if (n && n > 128) cb(new Error(t('asset.len128')));
               else cb();
             },
             trigger: 'blur',
@@ -270,10 +268,9 @@ export default {
           (g) => g.id === this.form.gid && isUngroupedGroup(g)
         );
       if (onUngrouped) {
-        const ug = (store.snapshot.groups || []).find((g) => isUngroupedGroup(g));
         list.unshift({
           id: this.form.gid || UNGROUPED_ID,
-          name: (ug && ug.name) || '未分组',
+          name: t('sidebar.untitled'),
           disabled: true,
         });
       }
@@ -285,9 +282,9 @@ export default {
     summary() {
       const on = this.catalog
         .filter((m) => this.draft[m.id] && this.draft[m.id].enabled)
-        .map((m) => `${m.name}:${this.draft[m.id].port}`);
+        .map((m) => `${t(m.nameKey)}:${this.draft[m.id].port}`);
       return `${OS_NAME[this.form.os]} · ${this.form.host || '?'} · ${
-        on.join(' | ') || '未启用'
+        on.join(' | ') || t('asset.notEnabled')
       }`;
     },
     methodAdvancedResult() {
@@ -325,7 +322,7 @@ export default {
       if (!row) return;
       openMethodAdvanced({
         methodId: m.id,
-        methodName: m.name,
+        methodName: t(m.nameKey),
         advanced: row.advanced || {},
         context: { type: 'asset-dialog' },
       });
@@ -495,7 +492,7 @@ export default {
           })
         );
         if (r && r.ok) {
-          const parts = [`${m.name} · ${r.latencyMs ?? '-'} ms`];
+          const parts = [`${t(m.nameKey)} · ${r.latencyMs ?? '-'} ms`];
           if (r.nla) parts.push(t('asset.testNla'));
           if (r.note) parts.push(r.note);
           this.$message.success(parts.join(' · '));

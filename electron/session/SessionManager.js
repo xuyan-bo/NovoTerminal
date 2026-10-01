@@ -32,9 +32,10 @@ class SessionManager {
     const asset = req.asset || {};
     const method = req.method || {};
     const host = asset.host;
-    if (!host) return { ok: false, code: 'NO_HOST', error: '缺少主机地址' };
+    if (!host) return { ok: false, code: 'NO_HOST' };
     const port = method.port;
     const advanced = method.advanced || {};
+    const lang = (this.store && this.store.getSettings && this.store.getSettings().lang) || 'zh';
 
     if (protocol === 'ssh') {
       return testSsh({
@@ -48,10 +49,10 @@ class SessionManager {
       });
     }
     if (protocol === 'vnc') {
-      return testVnc({ host, port, password: advanced.password || asset.pass });
+      return testVnc({ host, port, password: advanced.password || asset.pass, lang });
     }
     if (protocol === 'rdp') {
-      return testRdp({ host, port });
+      return testRdp({ host, port, lang });
     }
     return tcpProbe(host, port);
   }

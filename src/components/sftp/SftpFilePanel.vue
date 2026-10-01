@@ -15,10 +15,10 @@
       </span>
       <div class="path-bar">
         <button type="button" class="path-icon-btn" :title="$t('sftp.back')" @click="$emit('up', $event)">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+          <svg-icon name="chevron-left" />
         </button>
         <button type="button" class="path-icon-btn" :title="$t('sftp.home')" @click="$emit('home', $event)">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+          <svg-icon name="home" />
         </button>
         <el-input
           :value="pathInput"
@@ -34,7 +34,7 @@
           :disabled="loading || refreshDisabled"
           @click="$emit('refresh', $event)"
         >
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M17.65 6.35A7.96 7.96 0 0012 4a8 8 0 107.73 10h-2.08A6 6 0 1112 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+          <svg-icon name="refresh-cloud" />
         </button>
       </div>
     </div>
@@ -248,7 +248,7 @@ export default {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.path-icon-btn.spinning svg {
+.path-icon-btn.spinning .svg-icon {
   animation: sftp-spin 0.8s linear infinite;
 }
 @keyframes sftp-spin {

@@ -7,7 +7,7 @@
           <h3>
             {{ asset.name }}
             <span class="pill">{{ osName }}</span>
-            <span v-if="primaryName" class="badge-primary">主 {{ primaryName }}</span>
+            <span v-if="primaryName" class="badge-primary">{{ $t('asset.primary') }} {{ primaryName }}</span>
           </h3>
           <div class="sub">{{ asset.user || '-' }} @ {{ asset.host }}</div>
         </div>
@@ -40,8 +40,8 @@
               <span class="pill" :class="pillClass(m.id)">{{ short(m.id) }}</span>
               <div class="mc-info">
                 <div class="mc-name">
-                  {{ m.name }}
-                  <span v-if="m.primary" class="badge-primary">主</span>
+                  {{ $t(m.nameKey) }}
+                  <span v-if="m.primary" class="badge-primary">{{ $t('asset.primary') }}</span>
                 </div>
                 <div class="mc-meta">{{ asset.host }}:{{ m.port }} · {{ asset.user || '-' }}</div>
               </div>
@@ -52,9 +52,7 @@
                   :class="{ customized: hasCustomAdv(m) }"
                   @click="openAdvanced(m)"
                 >
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                    <path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96a7.05 7.05 0 00-1.62-.94l-.36-2.54a.48.48 0 00-.48-.41h-3.84a.48.48 0 00-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87a.48.48 0 00.12.61l2.03 1.58c-.05.3-.07.63-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 00-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.6 3.6 0 0112 15.6z"/>
-                  </svg>
+                  <svg-icon name="gear" />
                 </button>
               </el-tooltip>
               <el-button
@@ -81,6 +79,7 @@
 import { store, findAsset, enabledMethods, openMethodAdvanced, connectAsset, connectionErrorMessage } from '../store';
 import { OS_SVG, OS_NAME, methodPillClass } from '../constants';
 import { protocolLabel } from '../protocols';
+import { groupName } from '../i18n';
 
 export default {
   name: 'AssetDetailView',
@@ -107,17 +106,17 @@ export default {
     },
     primaryName() {
       const p = this.methods.find((m) => m.primary);
-      return p ? p.name : '';
+      return p ? this.$t(p.nameKey) : '';
     },
     fields() {
       const a = this.asset;
       if (!a) return [];
       return [
-        ['OS 类型', this.osName],
-        ['IP / 主机', a.host || '-'],
-        ['用户名', a.user || '-'],
-        ['分组', this.hit && this.hit.group ? this.hit.group.name : '-'],
-        ['访问方式数', this.methods.length + ' 种'],
+        [this.$t('detail.osKind'), this.osName],
+        [this.$t('asset.host'), a.host || '-'],
+        [this.$t('asset.user'), a.user || '-'],
+        [this.$t('asset.group'), this.hit && this.hit.group ? groupName(this.hit.group) : '-'],
+        [this.$t('detail.methodCount'), this.$t('detail.kindCount', { count: this.methods.length })],
       ];
     },
   },
@@ -135,7 +134,7 @@ export default {
     openAdvanced(m) {
       openMethodAdvanced({
         methodId: m.id,
-        methodName: m.name,
+        methodName: this.$t(m.nameKey),
         advanced: m.advanced || {},
         context: { type: 'detail', assetId: this.assetId },
       });

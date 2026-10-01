@@ -1,4 +1,6 @@
 /** Renderer API wrapper with local mock fallback when preload missing. */
+import { t } from './i18n';
+
 const hasBridge = typeof window !== 'undefined' && !!window.omniDesk;
 
 const mockState = {
@@ -12,13 +14,24 @@ const mockState = {
     },
   ],
   recent: [],
-  settings: { theme: 'system', lang: 'zh', dataPath: '(预览模式，无 Electron）', zoom: 100, font: 'default', closeAction: 'ask' },
 };
+
+function mockSettings() {
+  return {
+    theme: 'system',
+    lang: 'zh',
+    dataPath: t('settings.previewDataPath'),
+    zoom: 100,
+    font: 'default',
+    closeAction: 'ask',
+  };
+}
 
 async function local(method, ...args) {
   // browser-only prototype fallback for vite dev without electron
-  if (method === 'store:snapshot' || method === 'store:settings') return JSON.parse(JSON.stringify(mockState.settings ? { ...mockState, settings: mockState.settings } : mockState));
-  return { __error: true, message: '需要在 Electron 中运行以使用完整功能', code: 'NO_BRIDGE' };
+  if (method === 'store:snapshot') return { ...mockState, settings: mockSettings() };
+  if (method === 'store:settings') return mockSettings();
+  return { __error: true, message: t('msg.needElectron'), code: 'NO_BRIDGE' };
 }
 
 export const api = hasBridge
@@ -34,31 +47,31 @@ export const api = hasBridge
         return false;
       },
       async getSnapshot() {
-        return JSON.parse(JSON.stringify(mockState));
+        return JSON.parse(JSON.stringify({ ...mockState, settings: mockSettings() }));
       },
       async getSettings() {
-        return mockState.settings;
+        return mockSettings();
       },
       async exportGroups() {
         return JSON.stringify(mockState.groups, null, 2);
       },
       async verifySystemAuth() {
-        return { ok: false, code: 'NO_BRIDGE', message: '需要在 Electron 中运行以使用系统身份验证' };
+        return { ok: false, code: 'NO_BRIDGE', message: t('auth.needElectron') };
       },
       async importGroups() {
-        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       async reorderGroups() {
-        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       async reorderAsset() {
-        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       async removeRecent() {
-        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       async sessionDetach() {
-        return { __error: true, message: '浏览器预览模式无法拆分为独立窗口，请用 npm run electron 启动', code: 'NO_BRIDGE' };
+        return { __error: true, message: t('msg.previewDetach'), code: 'NO_BRIDGE' };
       },
       async sessionCloseAnswer() {
         return { ok: false, code: 'NO_BRIDGE' };
@@ -82,16 +95,16 @@ export const api = hasBridge
         return () => {};
       },
       async sessionConnect() {
-        throw Object.assign(new Error('浏览器预览模式无法连接，请用 npm run electron 启动'), { code: 'NO_BRIDGE' });
+        throw Object.assign(new Error(t('msg.previewConnect')), { code: 'NO_BRIDGE' });
       },
       async sessionTest() {
-        return { ok: false, error: '浏览器预览模式' };
+        return { ok: false, error: t('msg.previewMode') };
       },
       async sessionDisconnect() {
         return { ok: true };
       },
       async sshConnect() {
-        throw Object.assign(new Error('浏览器预览模式无法 SSH，请用 npm run electron 启动'), { code: 'NO_BRIDGE' });
+        throw Object.assign(new Error(t('msg.previewSsh')), { code: 'NO_BRIDGE' });
       },
       async sshWrite() {
         return false;
@@ -100,7 +113,7 @@ export const api = hasBridge
         return false;
       },
       async sshAuthReply() {
-        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       onSshAuthPrompt() {
         return () => {};
@@ -112,7 +125,7 @@ export const api = hasBridge
         return false;
       },
       async sshAttach() {
-        throw Object.assign(new Error('浏览器预览模式无法接管 SSH 会话'), { code: 'NO_BRIDGE' });
+        throw Object.assign(new Error(t('msg.previewAttach')), { code: 'NO_BRIDGE' });
       },
       async sshDisconnect() {
         return { ok: true };
@@ -124,7 +137,7 @@ export const api = hasBridge
         return () => {};
       },
       async rdpConnect() {
-        throw Object.assign(new Error('浏览器预览模式无法打开 RDP'), { code: 'NO_BRIDGE' });
+        throw Object.assign(new Error(t('msg.previewRdp')), { code: 'NO_BRIDGE' });
       },
       async rdpDisconnect() {
         return { ok: true };
@@ -136,19 +149,19 @@ export const api = hasBridge
         return () => {};
       },
       async sftpOpenWindow() {
-        throw Object.assign(new Error('浏览器预览模式无法打开 SFTP'), { code: 'NO_BRIDGE' });
+        throw Object.assign(new Error(t('msg.previewSftp')), { code: 'NO_BRIDGE' });
       },
       async sftpOpen() {
-        throw Object.assign(new Error('浏览器预览模式'), { code: 'NO_BRIDGE' });
+        throw Object.assign(new Error(t('msg.previewMode')), { code: 'NO_BRIDGE' });
       },
       async sftpList() {
-        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       async sftpLocalExists() {
         return { exists: false };
       },
       async sftpLocalCopy() {
-        return { __error: true, message: '浏览器预览模式', code: 'NO_BRIDGE' };
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       sftpStartDrag() {},
       onSftpDragReady() {

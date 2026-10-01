@@ -1,7 +1,7 @@
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 const { BaseAdapter } = require('./BaseAdapter');
-const { tcpProbe, testRdp } = require('../testers');
+const { tcpProbe } = require('../testers');
 
 function findMstsc() {
   const candidates = [
@@ -52,18 +52,9 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
     return args;
   }
 
-  async testConnection(payload) {
-    if (process.platform !== 'win32') {
-      return { ok: false, error: '仅 Windows 支持 mstsc RDP' };
-    }
-    const host = payload.asset.host;
-    const port = (payload.method && payload.method.port) || 3389;
-    return testRdp({ host, port });
-  }
-
   async connect(payload, sessionId) {
     if (process.platform !== 'win32') {
-      throw Object.assign(new Error('仅 Windows 支持 mstsc RDP'), { code: 'PLATFORM' });
+      throw Object.assign(new Error('mstsc RDP requires Windows'), { code: 'PLATFORM' });
     }
     const mstsc = findMstsc();
     const args = this.buildMstscArgs(payload);

@@ -53,13 +53,12 @@
                   :disabled="isTaskFinished(scope.row)"
                   @click.stop="$emit('toggle-pause', scope.row)"
                 >
-                  <svg v-if="scope.row.status !== 'paused'" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
-                  <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                  <svg-icon :name="scope.row.status !== 'paused' ? 'pause' : 'play'" />
                 </button>
               </el-tooltip>
               <el-tooltip :content="$t('sftp.removeTask')" placement="top">
                 <button type="button" class="op-icon-btn danger" @click.stop="$emit('remove-task', scope.row)">
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 7h12l-1 14H7L6 7zm3-3h6l1 2H8l1-2z"/></svg>
+                  <svg-icon name="trash" />
                 </button>
               </el-tooltip>
             </template>
@@ -89,7 +88,7 @@ export default {
       return `${row.percent || 0}%`;
     },
     shortErr(row) {
-      const e = String(row.error || '传输失败');
+      const e = String(row.error || this.$t('sftp.transferFailed'));
       return e.length > 48 ? e.slice(0, 48) + '…' : e;
     },
     onExpandChange(row, expandedRows) {

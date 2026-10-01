@@ -10,10 +10,7 @@
           class="gear-icon-btn"
           @click="onToggleFullscreen"
         >
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path v-if="!isFullscreen" d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-            <path v-else d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
-          </svg>
+          <svg-icon :name="isFullscreen ? 'fullscreen-out' : 'fullscreen-in'" />
         </button>
       </el-tooltip>
       <el-tooltip :content="$t('theme.tip')" placement="top">
@@ -22,12 +19,7 @@
           class="gear-icon-btn"
           @click="openThemeDialog"
         >
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M12 21a9 9 0 1 1 9-9c0 2.2-1.8 3.5-4 3.5h-1.4c-1 0-1.8.8-1.8 1.8 0 .4.2.8.4 1.1.3.4.4.8.4 1.1 0 .8-.6 1.4-1.6 1.4z"/>
-            <circle cx="7.5" cy="11.5" r="1.2" fill="currentColor"/>
-            <circle cx="11" cy="7.5" r="1.2" fill="currentColor"/>
-            <circle cx="15.5" cy="9" r="1.2" fill="currentColor"/>
-          </svg>
+          <svg-icon name="palette" />
         </button>
       </el-tooltip>
       <el-tooltip :content="$t('sftp.openTip')" placement="top">
@@ -37,10 +29,7 @@
           :disabled="!assetId"
           @click="openSftp"
         >
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-            <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/>
-            <path d="M12 10v6m0-6l-2.5 2.5M12 10l2.5 2.5" fill="none" stroke="#0f1419" stroke-width="1.4"/>
-          </svg>
+          <svg-icon name="folder-download" />
         </button>
       </el-tooltip>
       <el-tooltip :content="connToggleTip" placement="top">
@@ -51,12 +40,7 @@
           @click="onConnToggle"
         >
           <!-- disconnected → reconnect (link); connecting/ready → disconnect (broken link) -->
-          <svg v-if="isDisconnected" viewBox="0 0 1024 1024" width="14" height="14" fill="currentColor" aria-hidden="true">
-            <path d="M454.6048 328.8576a25.344 25.344 0 1 1-35.84-35.84l203.8784-203.9808c82.1248-82.176 212.992-84.992 292.352-5.632 79.36 79.4112 76.544 210.432-5.632 292.5568l-203.8272 203.9808c-82.1248 82.1248-212.992 84.992-292.352 5.632a25.344 25.344 0 0 1 35.84-35.8912c59.1872 59.2384 158.0032 57.088 220.672-5.632l203.8784-203.9808c62.6176-62.6688 64.8192-161.536 5.632-220.7744-59.2384-59.2384-158.0544-57.088-220.7232 5.632L454.6048 328.8064z m114.7904 366.2848a25.344 25.344 0 1 1 35.84 35.84L401.408 934.9632c-82.1248 82.176-212.992 84.992-292.352 5.632-79.36-79.4112-76.544-210.432 5.632-292.5568L318.464 444.0576c82.1248-82.1248 212.992-84.992 292.352-5.632a25.344 25.344 0 0 1-35.84 35.8912c-59.1872-59.2384-158.0032-57.088-220.672 5.632l-203.8784 203.9808c-62.6176 62.6688-64.8192 161.536-5.632 220.7744 59.2384 59.2384 158.0544 57.088 220.7232-5.632l203.8784-203.9296z"/>
-          </svg>
-          <svg v-else viewBox="0 0 1024 1024" width="14" height="14" fill="currentColor" aria-hidden="true">
-            <path d="M465.0496 349.93664a25.344 25.344 0 1 1-35.84-35.84l203.8784-203.9808c82.1248-82.176 212.992-84.992 292.352-5.632 79.36 79.4112 76.544 210.432-5.632 292.5568l-185.9072 186.04032a25.33376 25.33376 0 0 1-35.82464 0.01536l-0.02048-0.02048a25.38496 25.38496 0 0 1 0.01024-35.88096l185.94816-186.04544c62.6176-62.6688 64.8192-161.536 5.632-220.7744-59.2384-59.2384-158.0544-57.088-220.7232 5.632l-203.8784 203.8784v0.0512z m129.1264 339.0464a25.344 25.344 0 0 1 11.264 42.5984l-203.8272 203.9808c-82.1248 82.176-212.992 84.992-292.352 5.632-79.36-79.4112-76.544-210.432 5.632-292.5568l185.84576-186.04032a25.32864 25.32864 0 0 1 35.82464-0.01536l0.02048 0.02048a25.38496 25.38496 0 0 1-0.01024 35.88608L150.6304 684.52864c-62.6176 62.6688-64.8192 161.536-5.632 220.7744 59.2384 59.2384 158.0544 57.088 220.7232-5.632l203.8784-203.9296a25.344 25.344 0 0 1 24.576-6.7584zM403.15904 249.46688a23.04 23.04 0 0 1-45.2352-8.79616l19.53792-100.51584a23.04 23.04 0 0 1 45.2352 8.79104l-19.53792 100.52096zM143.33952 391.95136a23.04 23.04 0 1 1 8.79616-45.2352l100.51584 19.54304a23.04 23.04 0 1 1-8.79104 45.23008l-100.52096-19.53792z m54.3232-178.176a23.04 23.04 0 1 1 34.77504-30.2336l67.17952 77.28128a23.04 23.04 0 1 1-34.77504 30.22848L197.66272 213.77024zM659.4048 789.0432a23.04 23.04 0 0 1 45.73696 5.61664l-12.48256 101.632a23.04 23.04 0 0 1-45.73696-5.61152l12.48256-101.63712z m249.24672-160.256a23.04 23.04 0 0 1-5.61152 45.73184l-101.63712-12.47744a23.04 23.04 0 0 1 5.61664-45.73696l101.632 12.48256z m-43.27424 185.14944a23.04 23.04 0 0 1-34.77504 30.22848l-67.17952-77.28128a23.04 23.04 0 0 1 34.77504-30.2336l67.17952 77.2864z"/>
-          </svg>
+          <svg-icon :name="isDisconnected ? 'link' : 'link-broken'" />
         </button>
       </el-tooltip>
     </div>
@@ -299,7 +283,7 @@ export default {
         if (api.clipboardWriteText) {
           const ok = await api.clipboardWriteText(value);
           if (ok) {
-            this.$message.success('已复制');
+            this.$message.success(this.$t('clipboard.copied'));
             return;
           }
         }
@@ -307,7 +291,7 @@ export default {
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
           await navigator.clipboard.writeText(value);
-          this.$message.success('已复制');
+          this.$message.success(this.$t('clipboard.copied'));
           return;
         }
       } catch (_) {}
@@ -320,9 +304,9 @@ export default {
         ta.select();
         document.execCommand('copy');
         document.body.removeChild(ta);
-        this.$message.success('已复制');
+        this.$message.success(this.$t('clipboard.copied'));
       } catch (err) {
-        this.$message.error('复制失败');
+        this.$message.error(this.$t('clipboard.copyFail'));
       }
     },
     async pasteFromClipboard() {
@@ -344,7 +328,7 @@ export default {
         }
       }
       if (!text) {
-        this.$message.warning('剪贴板为空');
+        this.$message.warning(this.$t('clipboard.empty'));
         return;
       }
       const term = this.term;
@@ -357,7 +341,7 @@ export default {
           await this.sendInput(text.replace(/\r?\n/g, '\r'));
         }
       } catch (err) {
-        this.$message.error('粘贴失败');
+        this.$message.error(this.$t('clipboard.pasteFail'));
       }
     },
 

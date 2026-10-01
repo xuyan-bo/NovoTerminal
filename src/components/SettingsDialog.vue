@@ -135,18 +135,14 @@ export default {
     return {
       saving: false,
       browsing: false,
-      themes: [
-        { id: 'dark', label: '深色' },
-        { id: 'light', label: '浅色' },
-        { id: 'system', label: '跟随系统' },
-      ],
+      themes: [{ id: 'dark' }, { id: 'light' }, { id: 'system' }],
       fonts: UI_FONTS,
       form: { theme: 'system', lang: 'zh', dataPath: '', zoom: 100, font: 'default', closeAction: 'ask' },
       rules: {
         theme: [
           {
             validator(rule, value, cb) {
-              if (!value) cb(new Error('请选择主题'));
+              if (!value) cb(new Error(t('settings.themeRequired')));
               else cb();
             },
             trigger: 'change',
@@ -155,7 +151,7 @@ export default {
         lang: [
           {
             validator(rule, value, cb) {
-              if (!value) cb(new Error('请选择语言'));
+              if (!value) cb(new Error(t('settings.langRequired')));
               else cb();
             },
             trigger: 'change',

@@ -186,6 +186,10 @@ class AssetStore {
     return this.snapshot().groups;
   }
 
+  L(zh, en) {
+    return this.data.settings && this.data.settings.lang === 'en' ? en : zh;
+  }
+
   findGroup(gid) {
     return this.data.groups.find((g) => g.id === gid);
   }
@@ -201,7 +205,7 @@ class AssetStore {
   createGroup(payload) {
     const g = {
       id: 'g-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
-      name: payload.name || '未命名分组',
+      name: payload.name || this.L('未命名分组', 'Unnamed group'),
       color: payload.color || '#409EFF',
       open: true,
       nodes: [],
@@ -276,10 +280,10 @@ class AssetStore {
     if (i < 0) throw new Error('group not found');
     const g = this.data.groups[i];
     if (isUngroupedGroup(g)) {
-      throw new Error('默认分组「未分组」不可删除');
+      throw new Error(this.L('默认分组「未分组」不可删除', 'The default “Ungrouped” group cannot be deleted'));
     }
     if (this.data.groups.length <= 1) {
-      throw new Error('至少保留一个分组');
+      throw new Error(this.L('至少保留一个分组', 'Keep at least one group'));
     }
     const ug = this.ensureUngrouped();
     // move assets into ungrouped instead of dropping them
@@ -309,7 +313,7 @@ class AssetStore {
     }
     const asset = {
       id: 'a-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
-      name: payload.name || '未命名资产',
+      name: payload.name || this.L('未命名资产', 'Unnamed asset'),
       os: payload.os || 'win',
       host: payload.host || '',
       user: payload.user || '',
