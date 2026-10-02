@@ -54,6 +54,8 @@ const api = {
   sessionConnect: (req) => ipcRenderer.invoke('session:connect', req),
   sessionDisconnect: (sessionId) => ipcRenderer.invoke('session:disconnect', sessionId),
   sessionList: () => ipcRenderer.invoke('session:list'),
+  rdpProbeClient: (clientId) => ipcRenderer.invoke('rdp:probe-client', clientId),
+  rdpPickClientBinary: (clientId) => ipcRenderer.invoke('rdp:pick-client-binary', clientId),
 
   // SSH terminal sessions (xterm)
   sshConnect: (req) => ipcRenderer.invoke('ssh:connect', req),

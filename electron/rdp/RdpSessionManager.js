@@ -3,8 +3,9 @@ const { RdpProxy } = require('../session/RdpProxy');
 const ADVANCED_RDP_DEFAULTS = {
   engine: 'ironrdp',
   client: '',
+  clientPath: '',
   resolution: 'auto',
-  screenMode: 'window',
+  screenMode: 'fullscreen',
   monitors: 'single',
   clipboard: true,
   promptCredentials: false,

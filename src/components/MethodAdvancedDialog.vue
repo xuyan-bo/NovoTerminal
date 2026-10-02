@@ -9,11 +9,20 @@
     :show-close="!saving"
     append-to-body
   >
-    <el-form label-width="186px" size="small" :disabled="saving" @submit.native.prevent>
+    <el-form
+      ref="advForm"
+      :model="form"
+      :rules="formRules"
+      label-width="186px"
+      size="small"
+      :disabled="saving"
+      @submit.native.prevent
+    >
       <el-form-item
           v-for="f in fields"
           :key="f.key"
           :label="fieldLabel(f)"
+          :prop="f.key"
         >
           <template #label>
             {{ fieldLabel(f) }}
@@ -34,9 +43,10 @@
           <template v-else-if="f.type === 'clientSelect'">
             <el-select
               v-model="form[f.key]"
-              style="width: 100%"
+              class="client-select"
               :placeholder="$t('adv.rdp.client.placeholder')"
               :disabled="!clientOptions.length"
+              @change="onClientChange"
             >
               <el-option
                 v-for="opt in clientOptions"
@@ -47,6 +57,30 @@
             </el-select>
             <div v-if="!clientOptions.length" class="hint client-none">
               {{ $t('adv.rdp.client.none') }}
+            </div>
+          </template>
+          <template v-else-if="f.type === 'clientPathInput'">
+            <div class="client-path-row">
+              <el-input
+                v-model="form[f.key]"
+                class="client-path-input"
+                clearable
+                :placeholder="ph(f)"
+              >
+                <template slot="append">
+                  <el-button icon="el-icon-search" :disabled="!canBrowse" @click="runClientBrowse">
+                    {{ $t('adv.rdp.clientPath.browse') }}
+                  </el-button>
+                </template>
+              </el-input>
+              <el-button
+                class="client-path-probe"
+                :disabled="!form.client || !canProbe"
+                :loading="probing"
+                @click="runClientProbe"
+              >
+                {{ $t('adv.rdp.client.probe') }}
+              </el-button>
             </div>
           </template>
           <el-select
@@ -102,6 +136,7 @@ import {
   ADVANCED_DEFAULTS,
   advancedKey,
   resolveAdvanced,
+  requiredRule,
   RDP_CLIENT_CATALOG,
   osKeyFromPlatform,
 } from '../constants';
@@ -110,7 +145,7 @@ import { t } from '../i18n';
 export default {
   name: 'MethodAdvancedDialog',
   data() {
-    return { form: {}, saving: false };
+    return { form: {}, saving: false, probing: false };
   },
   computed: {
     dlg() {
@@ -135,13 +170,26 @@ export default {
     },
     fields() {
       const engine = this.form.engine;
-      return this.allFields.filter((f) =>
-        (!f.engines || f.engines.includes(engine)) &&
-        (!f.showWhen || Object.entries(f.showWhen).every(([key, value]) => this.form[key] === value))
-      );
+      const client = this.form.client;
+      return this.allFields.filter((f) => {
+        if (f.engines && !f.engines.includes(engine)) return false;
+        if (f.showWhen && !Object.entries(f.showWhen).every(([key, value]) => this.form[key] === value)) return false;
+        // 外部客户端专属字段：需先选定 client，且该 client 支持此字段
+        if (engine === 'external' && f.clients) {
+          if (!client || !f.clients.includes(client)) return false;
+        }
+        return true;
+      });
     },
     allFields() {
       return ADVANCED_FIELDS[this.schemaKey] || [];
+    },
+    formRules() {
+      if (this.schemaKey !== 'rdp' || this.form.engine !== 'external') return {};
+      return {
+        client: [{ ...requiredRule(t, 'adv.rdp.client.required', 'change'), required: true }],
+        clientPath: [{ ...requiredRule(t, 'adv.rdp.clientPath.ph', ['blur', 'change']), required: true }],
+      };
     },
     platformKey() {
       const p = (window.omniDesk && window.omniDesk.platform) || '';
@@ -149,6 +197,12 @@ export default {
     },
     clientOptions() {
       return RDP_CLIENT_CATALOG[this.platformKey] || [];
+    },
+    canProbe() {
+      return typeof api.rdpProbeClient === 'function';
+    },
+    canBrowse() {
+      return typeof api.rdpPickClientBinary === 'function';
     },
     title() {
       return t('adv.title', { name: this.methodName });
@@ -177,10 +231,67 @@ export default {
     loadForm() {
       const saved = (this.dlg && this.dlg.advanced) || {};
       this.form = resolveAdvanced(this.methodId, saved);
+      this.probing = false;
+      this.clearFieldErrors();
     },
     reset() {
       if (this.saving) return;
       this.form = this.defaults();
+      this.probing = false;
+      this.clearFieldErrors();
+    },
+    onClientChange() {
+      this.form.clientPath = '';
+      this.probing = false;
+      this.clearFieldErrors(['client', 'clientPath']);
+    },
+    validateForm() {
+      const form = this.$refs.advForm;
+      if (!form) return Promise.resolve(true);
+      return new Promise((resolve) => {
+        form.validate((valid) => resolve(!!valid));
+      });
+    },
+    clearFieldErrors(props) {
+      this.$nextTick(() => {
+        if (this.$refs.advForm) this.$refs.advForm.clearValidate(props);
+      });
+    },
+    async runClientProbe() {
+      if (this.probing) return;
+      const id = String(this.form.client || '');
+      if (!id || !api.rdpProbeClient) return;
+      this.probing = true;
+      try {
+        const res = unwrap(await api.rdpProbeClient(id));
+        if (this.form.client !== id) return;
+        if (res && res.ok && res.path) {
+          this.form.clientPath = res.path;
+          this.clearFieldErrors('clientPath');
+          this.$message.success(t('adv.rdp.clientPath.detectOk', { path: res.path }));
+        } else {
+          this.$message.warning(t('adv.rdp.clientPath.detectMissing'));
+        }
+      } catch (e) {
+        if (this.form.client !== id) return;
+        this.$message.warning(t('adv.rdp.clientPath.detectMissing'));
+      } finally {
+        this.probing = false;
+      }
+    },
+    async runClientBrowse() {
+      if (!api.rdpPickClientBinary) return;
+      try {
+        const res = unwrap(await api.rdpPickClientBinary(String(this.form.client || '')));
+        if (res && res.ok && res.path) {
+          this.form.clientPath = res.path;
+          this.clearFieldErrors('clientPath');
+        } else if (res && (res.code === 'MISMATCH' || res.code === 'NOT_FOUND')) {
+          this.$message.error(t('adv.rdp.clientPath.wrongFile'));
+        }
+      } catch (e) {
+        this.$message.error(e.message || t('err.connect'));
+      }
     },
     validate() {
       if (this.schemaKey !== 'ssh') return true;
@@ -207,7 +318,9 @@ export default {
       return true;
     },
     async confirm() {
-      if (this.saving || !this.validate()) return;
+      if (this.saving) return;
+      const formOk = await this.validateForm();
+      if (!formOk || !this.validate()) return;
       const dlg = this.dlg;
       const methodId = this.methodId;
       const started = Date.now();
@@ -309,6 +422,24 @@ export default {
 .client-none {
   margin-top: 6px;
   font-size: 12px;
+}
+.client-select {
+  width: 100%;
+}
+.client-path-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.client-path-row .client-path-probe {
+  flex: 0 0 auto;
+  width: 60px;
+  padding-left: 0;
+  padding-right: 0;
+}
+.client-path-row .client-path-input {
+  flex: 1;
+  min-width: 0;
 }
 .adv-default-tip {
   float: left;

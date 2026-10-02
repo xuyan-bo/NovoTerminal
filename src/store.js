@@ -336,7 +336,12 @@ export async function connectAsset(asset, method) {
 export function connectionErrorMessage(error) {
   if (error.code === 'TCP_TIMEOUT') return t('msg.tcpFail');
   if (error.code === 'MSTSC_NOT_FOUND') return t('err.mstscNotFound');
+  if (error.code === 'XFREERDP_NOT_FOUND') return t('err.xfreerdpNotFound');
+  if (error.code === 'WFREERDP_NOT_FOUND') return t('err.wfreerdpNotFound');
   if (error.code === 'PLATFORM') return t('err.rdpWindowsOnly');
+  if (error.code === 'XFREERDP_PLATFORM') return t('err.rdpXfreerdpPlatform');
+  if (error.code === 'WFREERDP_PLATFORM') return t('err.rdpWfreerdpPlatform');
+  if (error.code === 'RDP_CLIENT_UNKNOWN') return error.message || t('err.connect');
   return error.message || t('err.connect');
 }
 

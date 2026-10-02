@@ -21,11 +21,16 @@ const { verifySystemAuth, resetAuthCache } = require('./auth/systemAuth');
 /** Advanced defaults mirrored from renderer constants — used when method.advanced is missing */
 const ADVANCED_DEFAULTS = {
   rdp: {
+    engine: 'ironrdp',
+    client: '',
+    clientPath: '',
     resolution: 'auto',
-    screenMode: 'window',
+    screenMode: 'fullscreen',
     monitors: 'single',
     promptCredentials: false,
     adminSession: false,
+    clipboard: true,
+    nla: true,
   },
   ssh: SSH_DEFAULTS,
 };
@@ -570,6 +575,20 @@ function registerIpc() {
   });
   handle('session:disconnect', (sid) => sessions.disconnect(sid));
   handle('session:list', () => sessions.listActive());
+  handle('rdp:probe-client', (clientId) => sessions.probeClient(clientId));
+  handle('rdp:pick-client-binary', async (clientId) => {
+    const en = store.getSettings().lang === 'en';
+    const parent = win && !win.isDestroyed() ? win : BrowserWindow.getFocusedWindow();
+    const r = await dialog.showOpenDialog(parent, {
+      properties: ['openFile'],
+      title: en ? 'Select RDP client executable' : '选择 RDP 客户端可执行文件',
+    });
+    if (r.canceled || !r.filePaths[0]) return { ok: false, code: 'CANCELED' };
+    const check = sessions.verifyClientPath(clientId, r.filePaths[0]);
+    if (!check.ok) return check;
+    logger.info('rdp', 'client binary selected', { clientId: String(clientId || ''), path: check.path });
+    return check;
+  });
 
   // ---- SSH terminal ----
   handle('ssh:connect', async (sender, req) => {

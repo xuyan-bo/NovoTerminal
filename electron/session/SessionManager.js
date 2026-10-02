@@ -1,4 +1,7 @@
+const fs = require('fs');
 const { RdpWindowsMstscAdapter } = require('./adapters/RdpWindowsMstscAdapter');
+const { RdpXfreerdpAdapter } = require('./adapters/RdpXfreerdpAdapter');
+const { RdpWfreerdpAdapter } = require('./adapters/RdpWfreerdpAdapter');
 const { tcpProbe, testSsh, testVnc, testRdp } = require('./testers');
 
 class SessionManager {
@@ -6,25 +9,81 @@ class SessionManager {
     this.store = store;
     this.send = send || (() => {});
     this.log = log;
+    const onRdpEvent = (ev) => {
+      this.send('session:state', ev);
+      if (ev.type === 'ended') {
+        this.active.delete(ev.sessionId);
+        this.log &&
+          this.log.info('rdp', 'session closed', {
+            protocol: 'rdp',
+            sessionId: ev.sessionId,
+            code: ev.code,
+          });
+      }
+    };
+    this.rdpAdapters = {
+      mstsc: new RdpWindowsMstscAdapter(onRdpEvent),
+      xfreerdp: new RdpXfreerdpAdapter(onRdpEvent),
+      wfreerdp: new RdpWfreerdpAdapter(onRdpEvent),
+    };
+    // adapters[protocol] 保留默认入口，connect 时会按 advanced.client 二次分派
     this.adapters = {
-      rdp: new RdpWindowsMstscAdapter((ev) => {
-        this.send('session:state', ev);
-        if (ev.type === 'ended') {
-          this.active.delete(ev.sessionId);
-          this.log &&
-            this.log.info('rdp', 'session closed', {
-              protocol: 'rdp',
-              sessionId: ev.sessionId,
-              code: ev.code,
-            });
-        }
-      }),
+      rdp: this.rdpAdapters.mstsc,
     };
     this.active = new Map();
   }
 
+  /**
+   * 依据 method.advanced.client 选择 RDP 适配器；未指定时按当前平台兜底：
+   * Windows → mstsc，macOS/Linux → xfreerdp。避免旧资产（client=''）在 mac 上错走 mstsc。
+   */
+  resolveRdpAdapter(advanced) {
+    const id = String((advanced && advanced.client) || '').toLowerCase();
+    if (id && this.rdpAdapters[id]) return this.rdpAdapters[id];
+    if (id && !this.rdpAdapters[id]) {
+      throw Object.assign(new Error(`Unknown RDP client: ${id}`), { code: 'RDP_CLIENT_UNKNOWN' });
+    }
+    if (process.platform === 'darwin' || process.platform === 'linux') return this.rdpAdapters.xfreerdp;
+    return this.rdpAdapters.mstsc;
+  }
+
   getAdapter(protocol) {
     return this.adapters[String(protocol || '').toLowerCase()] || null;
+  }
+
+  findAdapterById(id) {
+    for (const key of Object.keys(this.rdpAdapters)) {
+      const a = this.rdpAdapters[key];
+      if (a.id === id) return a;
+    }
+    for (const key of Object.keys(this.adapters)) {
+      const a = this.adapters[key];
+      if (a && a.id === id) return a;
+    }
+    return null;
+  }
+
+  async probeClient(clientId) {
+    const id = String(clientId || '').toLowerCase();
+    const adapter = this.rdpAdapters[id];
+    if (!adapter) throw Object.assign(new Error(`Unknown RDP client: ${id}`), { code: 'RDP_CLIENT_UNKNOWN' });
+    if (typeof adapter.probe !== 'function') {
+      return { ok: false, code: 'PROBE_UNSUPPORTED', message: `${id} probe not implemented` };
+    }
+    return adapter.probe();
+  }
+
+  /** 校验用户手动选择的文件确实存在且为目标客户端可执行文件，防止选错程序 */
+  verifyClientPath(clientId, filePath) {
+    const id = String(clientId || '').toLowerCase();
+    const adapter = this.rdpAdapters[id];
+    if (!adapter) throw Object.assign(new Error(`Unknown RDP client: ${id}`), { code: 'RDP_CLIENT_UNKNOWN' });
+    const p = String(filePath || '');
+    let exists = false;
+    try { exists = fs.existsSync(p); } catch (_) {}
+    if (!exists) return { ok: false, code: 'NOT_FOUND' };
+    if (!adapter.matchesBinary(p)) return { ok: false, code: 'MISMATCH' };
+    return { ok: true, path: p };
   }
 
   async testConnection(req, context = {}) {
@@ -60,12 +119,13 @@ class SessionManager {
   async connect(req) {
     const sessionId = 's-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
     const protocol = (req.method && req.method.protocol) || 'rdp';
-    const adapter = this.getAdapter(protocol);
+    const adapter = protocol === 'rdp' ? this.resolveRdpAdapter(req.method.advanced) : this.getAdapter(protocol);
     if (!adapter) throw Object.assign(new Error('unknown protocol'), { code: 'UNKNOWN_PROTOCOL' });
 
     this.send('session:state', { type: 'connecting', sessionId, assetId: req.assetId, protocol });
     const logMeta = {
       protocol,
+      client: (req.method && req.method.advanced && req.method.advanced.client) || adapter.id,
       assetId: req.assetId,
       host: req.asset && req.asset.host,
       port: req.method && req.method.port,
@@ -79,11 +139,11 @@ class SessionManager {
 
     try {
       const result = await adapter.connect(payload, sessionId);
-      this.active.set(sessionId, { assetId: req.assetId, protocol, startedAt: Date.now() });
+      this.active.set(sessionId, { assetId: req.assetId, protocol, adapterId: adapter.id, startedAt: Date.now() });
       this.log && this.log.info(protocol, 'external client launched', { ...logMeta, sessionId });
 
       const hit = this.store.findAsset(req.assetId);
-      if (hit && adapter.id === 'rdp-windows-mstsc') {
+      if (hit && protocol === 'rdp') {
         this.store.pushRecent(hit.asset, {
           id: (req.method && req.method.id) || 'rdp',
           proto: 'RDP',
@@ -114,7 +174,7 @@ class SessionManager {
   async disconnect(sessionId) {
     const info = this.active.get(sessionId);
     if (!info) return { ok: true };
-    const adapter = this.getAdapter(info.protocol);
+    const adapter = info.adapterId ? this.findAdapterById(info.adapterId) : this.getAdapter(info.protocol);
     if (adapter && adapter.disconnect) return adapter.disconnect(sessionId);
     this.active.delete(sessionId);
     return { ok: true };

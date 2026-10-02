@@ -103,6 +103,12 @@ export const api = hasBridge
       async sessionDisconnect() {
         return { ok: true };
       },
+      async rdpProbeClient() {
+        return { ok: false, code: 'NO_BRIDGE', message: t('msg.needElectron') };
+      },
+      async rdpPickClientBinary() {
+        return { ok: false, code: 'NO_BRIDGE', message: t('msg.needElectron') };
+      },
       async sshConnect() {
         throw Object.assign(new Error(t('msg.previewSsh')), { code: 'NO_BRIDGE' });
       },

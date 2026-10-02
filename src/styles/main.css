@@ -51,6 +51,17 @@ html.theme-light .el-button--default {
   color: var(--text);
 }
 
+/* append/prepend 内嵌按钮必须保持 Element 的无边框嵌入样式，否则被上面的默认按钮样式盖成浮块 */
+html.theme-light .el-input-group__append button.el-button--default,
+html.theme-light .el-input-group__prepend button.el-button--default {
+  background: transparent;
+  border-color: transparent;
+  color: inherit;
+}
+html.theme-light .el-input-group__append button.el-button--default:hover {
+  color: var(--accent);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

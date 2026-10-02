@@ -49,13 +49,17 @@ export function methodPillClass(id) {
 
 /**
  * RDP 外部客户端程序目录：按客户机系统区分可选程序。
- * 当前仅实现 Windows 的 mstsc，其余系统为空（后续扩展 FreeRDP/Remmina 等）。
+ * Windows：系统自带 mstsc；如装了 FreeRDP MSI，可选 wfreerdp（原生 Win32 客户端）。
+ * macOS/Linux：FreeRDP 的 xfreerdp（mac 需 XQuartz）。
  * key 与 OS_KEY 一致（win/mac/linux）。
  */
 export const RDP_CLIENT_CATALOG = {
-  win: [{ value: 'mstsc', labelKey: 'adv.rdp.client.mstsc' }],
-  mac: [],
-  linux: [],
+  win: [
+    { value: 'mstsc', labelKey: 'adv.rdp.client.mstsc' },
+    { value: 'wfreerdp', labelKey: 'adv.rdp.client.wfreerdp' },
+  ],
+  mac: [{ value: 'xfreerdp', labelKey: 'adv.rdp.client.xfreerdp' }],
+  linux: [{ value: 'xfreerdp', labelKey: 'adv.rdp.client.xfreerdp' }],
 };
 
 /** 将 process.platform / api.platform 归一化为 OS_KEY（win/mac/linux） */
@@ -81,8 +85,9 @@ export const ADVANCED_DEFAULTS = {
     // engine: 'ironrdp' 走内置 IronRDP-WASM（默认）；'external' 走外部客户端程序（如 mstsc）
     engine: 'ironrdp',
     client: '', // 外部客户端 id，按客户机系统选择，见 RDP_CLIENT_CATALOG
+    clientPath: '', // 外部客户端可执行文件绝对路径，留空时按默认安装位置/PATH 探测
     resolution: 'auto',
-    screenMode: 'window',
+    screenMode: 'fullscreen',
     monitors: 'single',
     promptCredentials: false,
     adminSession: false,
@@ -134,10 +139,19 @@ export const ADVANCED_FIELDS = {
       engines: ['external'],
     },
     {
+      key: 'clientPath',
+      type: 'clientPathInput',
+      labelKey: 'adv.rdp.clientPath',
+      placeholderKey: 'adv.rdp.clientPath.ph',
+      engines: ['external'],
+      clients: ['mstsc', 'xfreerdp', 'wfreerdp'],
+    },
+    {
       key: 'resolution',
       type: 'select',
       labelKey: 'adv.rdp.resolution',
       engines: ['external', 'ironrdp'],
+      clients: ['mstsc', 'xfreerdp', 'wfreerdp'],
       options: [
         { value: 'auto', labelKey: 'adv.rdp.resolution.auto', externalLabelKey: 'adv.rdp.resolution.system' },
         { value: '1024x768', label: '1024 × 768' },
@@ -154,9 +168,10 @@ export const ADVANCED_FIELDS = {
       type: 'select',
       labelKey: 'adv.rdp.screenMode',
       engines: ['external'],
+      clients: ['mstsc', 'xfreerdp', 'wfreerdp'],
       options: [
-        { value: 'window', labelKey: 'adv.rdp.screenMode.default' },
-        { value: 'fullscreen', labelKey: 'adv.screenMode.fullscreen' },
+        { value: 'window', labelKey: 'adv.rdp.screenMode.window' },
+        { value: 'fullscreen', labelKey: 'adv.rdp.screenMode.fullscreen' },
       ],
     },
     {
@@ -164,8 +179,9 @@ export const ADVANCED_FIELDS = {
       type: 'select',
       labelKey: 'adv.rdp.monitors',
       engines: ['external'],
+      clients: ['mstsc', 'xfreerdp', 'wfreerdp'],
       options: [
-        { value: 'single', labelKey: 'adv.rdp.monitors.default' },
+        { value: 'single', labelKey: 'adv.rdp.monitors.single' },
         { value: 'multi', labelKey: 'adv.rdp.monitors.multi' },
       ],
     },
@@ -173,17 +189,19 @@ export const ADVANCED_FIELDS = {
       key: 'clipboard',
       type: 'switch',
       labelKey: 'adv.rdp.clipboard',
-      engines: ['ironrdp'],
+      engines: ['ironrdp', 'external'],
+      clients: ['xfreerdp', 'wfreerdp'],
     },
     {
       key: 'promptCredentials',
       type: 'switch',
       labelKey: 'adv.rdp.promptCredentials',
       engines: ['external'],
+      clients: ['mstsc'],
     },
-    { key: 'adminSession', type: 'switch', labelKey: 'adv.rdp.adminSession', engines: ['external'] },
-    // IronRDP-WASM 引擎专属能力
-    { key: 'nla', type: 'switch', labelKey: 'adv.rdp.nla', engines: ['ironrdp'] },
+    { key: 'adminSession', type: 'switch', labelKey: 'adv.rdp.adminSession', engines: ['external'], clients: ['mstsc', 'xfreerdp', 'wfreerdp'] },
+    // IronRDP-WASM 引擎专属能力；xfreerdp/wfreerdp 通过 /sec:rdp 亦可关闭 NLA 协商
+    { key: 'nla', type: 'switch', labelKey: 'adv.rdp.nla', engines: ['ironrdp', 'external'], clients: ['xfreerdp', 'wfreerdp'] },
   ],
   ssh: [
     {

@@ -85,6 +85,12 @@ import { getProtocol } from './protocols';
 const MIN_SIDEBAR_W = 180;
 const MAX_SIDEBAR_W = 640;
 const SIDEBAR_W_KEY = 'omnidesk.sidebarWidth';
+// 适配器 id → 客户端可执行文件名，用于会话结束提示；专有名词，不翻译
+const RDP_CLIENT_NAMES = {
+  'rdp-windows-mstsc': 'mstsc',
+  'rdp-xfreerdp': 'xfreerdp',
+  'rdp-wfreerdp': 'wfreerdp',
+};
 
 function parseHashRoute(prefix) {
   const h = String((typeof location !== 'undefined' && location.hash) || '').replace(/^#\/?/, '');
@@ -253,7 +259,8 @@ export default {
     async onSession(payload) {
       if (payload && payload.type === 'ended') {
         await refresh();
-        this.$message.info(t('msg.sessionEnded'));
+        const client = RDP_CLIENT_NAMES[payload.client] || 'RDP';
+        this.$message.info(t('msg.sessionEnded', { client }));
       }
       if (payload && payload.type === 'error') {
         this.$message.error(payload.message || payload.code || t('err.connect'));
