@@ -2,112 +2,126 @@
   <el-dialog
     :title="$t('settings.title')"
     :visible.sync="visible"
-    width="560px"
+    width="760px"
     top="5vh"
     :close-on-click-modal="false"
   >
-    <el-form
-      ref="form"
-      :model="form"
-      :rules="rules"
-      label-width="140px"
-      size="small"
-      @submit.native.prevent
-    >
-      <div class="set-section">
-        <h4 class="set-h">{{ $t('settings.ui') }}</h4>
-        <el-form-item :label="$t('settings.theme')" prop="theme">
-          <div class="theme-picks">
-            <button
-              v-for="th in themes"
-              :key="th.id"
-              type="button"
-              class="theme-pick"
-              :class="{ on: form.theme === th.id }"
-              @click="onTheme(th.id)"
-            >{{ $t('settings.theme.' + th.id) }}</button>
-          </div>
-        </el-form-item>
-        <el-form-item :label="$t('settings.lang')" prop="lang">
-          <div class="theme-picks">
-            <button
-              type="button"
-              class="theme-pick"
-              :class="{ on: form.lang === 'zh' }"
-              @click="onLang('zh')"
-            >中文</button>
-            <button
-              type="button"
-              class="theme-pick"
-              :class="{ on: form.lang === 'en' }"
-              @click="onLang('en')"
-            >English</button>
-          </div>
-          <span class="hint" style="margin-left:8px">{{ $t('settings.previewLang') }}</span>
-        </el-form-item>
-        <el-form-item :label="$t('settings.zoom')">
-          <div class="zoom-row">
-            <el-slider v-model="form.zoom" :min="50" :max="200" :step="10" />
-            <span class="zoom-val">{{ form.zoom }}%</span>
-          </div>
-          <span class="hint">{{ $t('settings.zoomApply') }}</span>
-        </el-form-item>
-        <el-form-item :label="$t('settings.font')">
-          <el-select v-model="form.font" style="width:100%" @change="onFont">
-            <el-option
-              v-for="f in fonts"
-              :key="f.id"
-              :label="$t('settings.font.' + f.id)"
-              :value="f.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item :label="$t('settings.closeAction')">
-          <el-radio-group v-model="form.closeAction">
-            <el-radio :label="'ask'">{{ $t('settings.closeActionAsk') }}</el-radio>
-            <el-radio :label="'minimize'">{{ $t('settings.closeActionMin') }}</el-radio>
-            <el-radio :label="'quit'">{{ $t('settings.closeActionQuit') }}</el-radio>
-          </el-radio-group>
-        </el-form-item>
+    <div class="settings-layout">
+      <div class="settings-nav">
+        <button
+          v-for="sec in sections"
+          :key="sec.id"
+          type="button"
+          class="nav-item"
+          :class="{ on: activeMenu === sec.id }"
+          @click="activeMenu = sec.id"
+        >
+          <i :class="sec.icon"></i>
+          <span>{{ $t('settings.' + sec.id) }}</span>
+        </button>
       </div>
+      <div class="settings-body">
+        <el-form
+          ref="form"
+          :model="form"
+          :rules="rules"
+          label-width="110px"
+          size="small"
+          @submit.native.prevent
+        >
+        <div v-show="activeMenu === 'general'" class="set-section">
+          <el-form-item :label="$t('settings.theme')" prop="theme">
+            <div class="theme-picks">
+              <button
+                v-for="th in themes"
+                :key="th.id"
+                type="button"
+                class="theme-pick"
+                :class="{ on: form.theme === th.id }"
+                @click="onTheme(th.id)"
+              >{{ $t('settings.theme.' + th.id) }}</button>
+            </div>
+          </el-form-item>
+          <el-form-item :label="$t('settings.lang')" prop="lang">
+            <div class="theme-picks">
+              <button
+                type="button"
+                class="theme-pick"
+                :class="{ on: form.lang === 'zh' }"
+                @click="onLang('zh')"
+              >中文</button>
+              <button
+                type="button"
+                class="theme-pick"
+                :class="{ on: form.lang === 'en' }"
+                @click="onLang('en')"
+              >English</button>
+            </div>
+            <span class="hint" style="margin-left:8px">{{ $t('settings.previewLang') }}</span>
+          </el-form-item>
+          <el-form-item :label="$t('settings.zoom')">
+            <div class="zoom-row">
+              <el-slider v-model="form.zoom" :min="50" :max="200" :step="10" />
+              <span class="zoom-val">{{ form.zoom }}%</span>
+            </div>
+            <span class="hint">{{ $t('settings.zoomApply') }}</span>
+          </el-form-item>
+          <el-form-item :label="$t('settings.font')">
+            <el-select v-model="form.font" style="width:100%" @change="onFont">
+              <el-option
+                v-for="f in fonts"
+                :key="f.id"
+                :label="$t('settings.font.' + f.id)"
+                :value="f.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item :label="$t('settings.closeAction')">
+            <el-radio-group v-model="form.closeAction">
+              <el-radio :label="'ask'">{{ $t('settings.closeActionAsk') }}</el-radio>
+              <el-radio :label="'minimize'">{{ $t('settings.closeActionMin') }}</el-radio>
+              <el-radio :label="'quit'">{{ $t('settings.closeActionQuit') }}</el-radio>
+            </el-radio-group>
+          </el-form-item>
+        </div>
 
-      <div class="set-section">
-        <h4 class="set-h">{{ $t('settings.data') }}</h4>
-        <el-form-item prop="dataPath">
-          <template slot="label">
-            {{ $t('settings.dataPath') }}
-            <el-tooltip :content="$t('settings.dataPathTip')" placement="top">
-              <i class="el-icon-info"></i>
-            </el-tooltip>
-          </template>
-          <div class="path-row">
-            <el-input v-model="form.dataPath" readonly />
-            <el-button :loading="browsing" @click="browse">{{ $t('settings.browse') }}</el-button>
-          </div>
-        </el-form-item>
-        <el-form-item :label="$t('settings.backup')">
-          <el-button size="mini" icon="el-icon-download" @click="exportJson">{{ $t('settings.exportCfg') }}</el-button>
-          <el-button size="mini" icon="el-icon-upload2" @click="importJson">{{ $t('settings.importCfg') }}</el-button>
-        </el-form-item>
-      </div>
+        <div v-show="activeMenu === 'data'" class="set-section">
+          <el-form-item prop="dataPath">
+            <template slot="label">
+              {{ $t('settings.dataPath') }}
+              <el-tooltip :content="$t('settings.dataPathTip')" placement="top">
+                <i class="el-icon-info"></i>
+              </el-tooltip>
+            </template>
+            <div class="path-row">
+              <el-input v-model="form.dataPath" readonly />
+              <el-button :loading="browsing" @click="browse">{{ $t('settings.browse') }}</el-button>
+            </div>
+          </el-form-item>
+          <el-form-item :label="$t('settings.backup')">
+            <el-button size="mini" icon="el-icon-download" @click="exportJson">{{ $t('settings.exportCfg') }}</el-button>
+            <el-button size="mini" icon="el-icon-upload2" @click="importJson">{{ $t('settings.importCfg') }}</el-button>
+          </el-form-item>
+        </div>
 
-      <div class="set-section">
-        <h4 class="set-h">{{ $t('settings.about') }}</h4>
-        <div class="about-box">
-          <img class="logo-mark" src="../assets/logo.svg" alt="OmniDesk" width="36" height="36" />
-          <div>
-            <div style="font-family:Consolas,monospace;font-weight:600">OmniDesk v0.1.0</div>
-            <div class="meta" v-html="$t('settings.aboutBody')"></div>
-            <div class="meta">
-              {{ $t('settings.aboutSource') }}
-              <a class="meta-link" @click="openUrl('https://gitee.com/xu-san333/omni-desk')">Gitee</a>
-              <span class="meta-sep"> · </span>
-              <a class="meta-link" @click="openUrl('https://github.com/xu-san333/omni-desk')">GitHub</a>
+        <div v-show="activeMenu === 'about'" class="set-section">
+          <div class="about-box">
+            <img class="logo-mark" src="../assets/logo.svg" alt="OmniDesk" width="36" height="36" />
+            <div>
+              <div style="font-family:Consolas,monospace;font-weight:600">OmniDesk v0.1.0</div>
+              <div class="meta" v-html="$t('settings.aboutBody')"></div>
+              <div class="meta">
+                {{ $t('settings.aboutSource') }}
+                <a class="meta-link" @click="openUrl('https://gitee.com/xu-san333/omni-desk')">Gitee</a>
+                <span class="meta-sep"> · </span>
+                <a class="meta-link" @click="openUrl('https://github.com/xu-san333/omni-desk')">GitHub</a>
+              </div>
             </div>
           </div>
         </div>
+        </el-form>
       </div>
-    </el-form>
+    </div>
 
     <template #footer>
       <span style="float:left;color:var(--text-3);font-size:11px;line-height:28px">
@@ -135,6 +149,12 @@ export default {
     return {
       saving: false,
       browsing: false,
+      activeMenu: 'general',
+      sections: [
+        { id: 'general', icon: 'el-icon-setting' },
+        { id: 'data', icon: 'el-icon-folder' },
+        { id: 'about', icon: 'el-icon-info' },
+      ],
       themes: [{ id: 'dark' }, { id: 'light' }, { id: 'system' }],
       fonts: UI_FONTS,
       form: { theme: 'system', lang: 'zh', dataPath: '', zoom: 100, font: 'default', closeAction: 'ask' },
@@ -178,7 +198,10 @@ export default {
   },
   watch: {
     visible(v) {
-      if (v) this.load();
+      if (v) {
+        this.activeMenu = 'general';
+        this.load();
+      }
     },
   },
   methods: {
@@ -318,19 +341,62 @@ export default {
 </script>
 
 <style scoped>
-.set-h {
-  font-size: 12px;
+.settings-layout {
+  display: flex;
+  align-items: stretch;
+  min-height: 380px;
+}
+.settings-nav {
+  flex: none;
+  width: 148px;
+  padding-right: 10px;
+  border-right: 1px solid var(--border);
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  margin-bottom: 4px;
+  background: none;
+  border: none;
+  border-radius: 6px;
   color: var(--text-2);
-  margin: 0 0 12px;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.nav-item:hover {
+  background: var(--bg-hover);
+}
+.nav-item.on {
+  background: var(--bg-hover);
+  color: var(--accent);
   font-weight: 600;
+}
+.settings-body {
+  flex: 1;
+  min-width: 0;
+  padding-left: 20px;
+  max-height: 62vh;
+  overflow-y: auto;
+}
+.settings-body::-webkit-scrollbar {
+  width: 6px;
+}
+.settings-body::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.settings-body::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+.settings-body::-webkit-scrollbar-track {
+  background: transparent;
 }
 .set-section {
   margin-bottom: 4px;
-}
-.set-section + .set-section {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--border);
 }
 .path-row {
   display: flex;

@@ -101,17 +101,6 @@
             <span class="sec-badge mono">{{ netNowText }}</span>
           </div>
           <div ref="netChart" class="chart" style="height: 120px"></div>
-          <div class="net-table">
-            <span></span>
-            <span class="hd">{{ $t('monitor.speed') }}</span>
-            <span class="hd">{{ $t('monitor.total') }}</span>
-            <span class="rowlbl"><span class="dot" style="background: var(--accent)"></span>{{ $t('monitor.download') }}</span>
-            <span class="cell mono">{{ fmtRate(snap.net && snap.net.rxKBs) }}</span>
-            <span class="cell mono">{{ snap.net && snap.net.rxGB != null ? snap.net.rxGB + ' G' : '—' }}</span>
-            <span class="rowlbl"><span class="dot" style="background: var(--success)"></span>{{ $t('monitor.upload') }}</span>
-            <span class="cell mono">{{ fmtRate(snap.net && snap.net.txKBs) }}</span>
-            <span class="cell mono">{{ snap.net && snap.net.txGB != null ? snap.net.txGB + ' G' : '—' }}</span>
-          </div>
         </section>
 
         <!-- 硬盘 -->
@@ -131,8 +120,8 @@
                 <span class="io-line"><span>{{ $t('monitor.read') }}</span><b>{{ d.readKBs == null ? '—' : fmtRate(d.readKBs) }}</b></span>
                 <span class="io-line"><span>{{ $t('monitor.write') }}</span><b>{{ d.writeKBs == null ? '—' : fmtRate(d.writeKBs) }}</b></span>
               </span>
-              <span class="disk-tank"><span class="fill" :class="tankClass(d)" :style="{ height: diskPct(d) + '%' }"></span></span>
               <span class="disk-pct mono">{{ diskPct(d).toFixed(0) }}%<br><span class="disk-cap">{{ d.totalGB }}/{{ d.usedGB }}G</span></span>
+              <span class="disk-tank"><span class="fill" :class="tankClass(d)" :style="{ height: diskPct(d) + '%' }"></span></span>
             </div>
           </div>
         </section>
@@ -379,9 +368,20 @@ export default {
       const spark = (data, color, max) => ({
         animation: false,
         grid: { left: 30, right: 6, top: 6, bottom: 16 },
+        tooltip: {
+          trigger: 'axis',
+          confine: true,
+          backgroundColor: c.elevated,
+          borderColor: c.border,
+          textStyle: { color: c.text, fontSize: 11 },
+          axisPointer: { type: 'line', lineStyle: { color: c.text3, type: 'dashed' } },
+          formatter: (params) => params
+            .map((p) => p.marker + ' ' + p.seriesName + '&nbsp;&nbsp;' + p.value + '%')
+            .join('<br>'),
+        },
         xAxis: catAxis,
         yAxis: Object.assign(axis('{value}%'), { max }),
-        series: [{ type: 'line', data, symbol: 'none', lineStyle: { color, width: 1.4 }, areaStyle: { color, opacity: 0.12 } }],
+        series: [{ name: 'CPU', type: 'line', data, symbol: 'none', lineStyle: { color, width: 1.4 }, areaStyle: { color, opacity: 0.12 } }],
       });
 
       const cpuChart = this.ensureChart('cpuSpark', this.$refs.cpuSpark);
@@ -416,11 +416,22 @@ export default {
         netChart.setOption({
           animation: false,
           grid: { left: 38, right: 6, top: 8, bottom: 18 },
+          tooltip: {
+            trigger: 'axis',
+            confine: true,
+            backgroundColor: c.elevated,
+            borderColor: c.border,
+            textStyle: { color: c.text, fontSize: 11 },
+            axisPointer: { type: 'line', lineStyle: { color: c.text3, type: 'dashed' } },
+            formatter: (params) => params
+              .map((p) => p.marker + ' ' + p.seriesName + '&nbsp;&nbsp;' + this.fmtRate(p.value))
+              .join('<br>'),
+          },
           xAxis: Object.assign({}, catAxis, { data: this._hist.rx.map((_, i) => i) }),
           yAxis: axis((v) => (v >= 1024 ? (v / 1024).toFixed(0) + 'M' : v + 'K')),
           series: [
-            { type: 'line', data: this._hist.rx.map((v) => +v.toFixed(0)), symbol: 'none', lineStyle: { color: c.accent, width: 1.4 }, areaStyle: { color: c.accent, opacity: 0.14 } },
-            { type: 'line', data: this._hist.tx.map((v) => +v.toFixed(0)), symbol: 'none', lineStyle: { color: c.success, width: 1.4 }, areaStyle: { color: c.success, opacity: 0.1 } },
+            { name: this.$t('monitor.download'), type: 'line', data: this._hist.rx.map((v) => +v.toFixed(0)), symbol: 'none', lineStyle: { color: c.accent, width: 1.4 }, areaStyle: { color: c.accent, opacity: 0.14 } },
+            { name: this.$t('monitor.upload'), type: 'line', data: this._hist.tx.map((v) => +v.toFixed(0)), symbol: 'none', lineStyle: { color: c.success, width: 1.4 }, areaStyle: { color: c.success, opacity: 0.1 } },
           ],
         });
       }
@@ -577,23 +588,19 @@ export default {
 .mem-item .val { color: var(--text); font-size: 12px; }
 .mem-item .pct { margin-left: 3px; color: var(--text-3); font-size: 10px; }
 .mem-donut { width: 118px; height: 118px; flex: 0 0 auto; }
-
-.net-table { display: grid; grid-template-columns: auto auto auto; justify-items: start; column-gap: 16px; margin-top: 6px; font-size: 11px; }
-.net-table .hd { color: var(--text-3); font-size: 10px; }
-.net-table .rowlbl { display: flex; align-items: center; gap: 5px; color: var(--text-2); font-size: 10.5px; }
-.net-table .cell { color: var(--text); }
-
 .disk-list { display: flex; flex-direction: column; gap: 8px; }
 .disk-row {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 8px;
   border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
   background: var(--bg-panel);
+  min-width: 0;
 }
-.disk-mount { font-size: 12px; font-weight: 700; color: var(--text); width: 52px; flex: 0 0 auto; overflow: hidden; text-overflow: ellipsis; }
-.disk-fs { font-size: 9.5px; color: var(--accent); background: var(--accent-soft); border-radius: 3px; padding: 1px 5px; flex: 0 0 auto; }
-.disk-io { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.disk-io .io-line { display: flex; justify-content: flex-start; gap: 8px; font-size: 10px; color: var(--text-2); font-family: Consolas, monospace; }
-.disk-io .io-line b { color: var(--text); font-weight: 600; }
+.disk-mount { font-size: 12px; font-weight: 700; color: var(--text); width: 62px; flex: 0 0 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.disk-fs { font-size: 9.5px; color: var(--accent); background: var(--accent-soft); border-radius: 3px; padding: 1px 5px; flex: 0 0 auto; white-space: nowrap; }
+.disk-io { flex: 1 1 0; display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow: hidden; }
+.disk-io .io-line { display: flex; justify-content: flex-start; gap: 6px; font-size: 10px; color: var(--text-2); font-family: Consolas, monospace; min-width: 0; white-space: nowrap; }
+.disk-io .io-line span { flex: 0 0 auto; }
+.disk-io .io-line b { color: var(--text); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .disk-tank {
   width: 22px; height: 46px; flex: 0 0 auto;
   border: 1px solid var(--border); border-radius: 4px;
@@ -606,6 +613,6 @@ export default {
 }
 .disk-tank .fill.warn { background: var(--warning); }
 .disk-tank .fill.hot { background: var(--danger); }
-.disk-pct { width: 72px; flex: 0 0 auto; text-align: right; font-size: 11px; color: var(--text-2); }
+.disk-pct { width: 72px; flex: 0 1 auto; min-width: 52px; white-space: nowrap; overflow: hidden; text-align: right; font-size: 11px; color: var(--text-2); }
 .disk-cap { font-size: 9.5px; color: var(--text-3); }
 </style>
