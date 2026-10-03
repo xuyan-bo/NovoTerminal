@@ -9,6 +9,7 @@
     :show-close="!saving"
     append-to-body
   >
+    <div v-if="note" class="hint adv-note">{{ note }}</div>
     <el-form
       ref="advForm"
       :model="form"
@@ -134,6 +135,7 @@ import { store, api, unwrap, refresh, findAsset } from '../store';
 import {
   ADVANCED_FIELDS,
   ADVANCED_DEFAULTS,
+  ADVANCED_NOTES,
   advancedKey,
   resolveAdvanced,
   requiredRule,
@@ -206,6 +208,10 @@ export default {
     },
     title() {
       return t('adv.title', { name: this.methodName });
+    },
+    note() {
+      const key = ADVANCED_NOTES[this.schemaKey];
+      return key ? t(key) : '';
     },
   },
   watch: {
@@ -294,7 +300,7 @@ export default {
       }
     },
     validate() {
-      if (this.schemaKey !== 'ssh') return true;
+      if (this.schemaKey !== 'ssh' && this.schemaKey !== 'sftp') return true;
       const defaults = this.defaults();
       for (const f of this.fields) {
         const v = this.form[f.key];
@@ -305,7 +311,10 @@ export default {
         } else if (f.type === 'number') {
           const n = blank ? defaults[f.key] : Number(v);
           if (!Number.isFinite(n) || (f.integer && !Number.isInteger(n)) || n < f.min || n > f.max) {
-            error = t('adv.ssh.keepAliveInvalid');
+            error =
+              this.schemaKey === 'ssh'
+                ? t('adv.ssh.keepAliveInvalid')
+                : t('adv.sftp.rangeInvalid', { name: t(f.labelKey), min: f.min, max: f.max });
           }
         } else if (f.required && (typeof v !== 'string' || blank)) {
           error = t('adv.ssh.privateKeyRequired');
@@ -422,6 +431,11 @@ export default {
 .client-none {
   margin-top: 6px;
   font-size: 12px;
+}
+.adv-note {
+  margin: -8px 0 12px;
+  padding-left: 4px;
+  line-height: 1.6;
 }
 .client-select {
   width: 100%;

@@ -12,6 +12,7 @@ const { SshMonitorManager } = require('./ssh/SshMonitorManager');
 const { SSH_DEFAULTS } = require('./ssh/connection');
 const { createHostKeyVerifier } = require('./ssh/hostKeys');
 const { SshPrompts } = require('./ssh/SshPrompts');
+const { probeRemoteCwd, sanitizeRemotePath } = require('./ssh/cwdProbe');
 const { fileURLToPath } = require('url');
 const { VncSessionManager } = require('./vnc/VncSessionManager');
 const { RdpSessionManager } = require('./rdp/RdpSessionManager');
@@ -99,8 +100,60 @@ const logger = {
   warn: (source, message, meta) => logStore && logStore.warn(source, message, meta),
   error: (source, message, meta) => logStore && logStore.error(source, message, meta),
 };
-const sftpWindows = new Map(); // assetId -> BrowserWindow
 const detachedWindows = new Map(); // tabId -> { window, kind, reason }
+/** SFTP 面板是单实例窗口，多个远端会话作为面板内页签共存。 */
+let sftpPanel = null;
+/** 面板渲染层完成订阅后置位；此前到达的会话先排队，由 sftp:sessions-ready 一次交出。 */
+let sftpPanelReady = false;
+/** 关闭拦截已解除（用户确认过关窗、应用正在退出、渲染进程已死）与正在等待面板答复。 */
+const sftpCloseGuard = { bypass: false, asking: false };
+const sftpPendingSessions = [];
+
+/** 面板就绪前只排队（同一资产可以有多个会话），否则会丢掉在渲染层订阅前到达的会话。 */
+function deliverSftpSession(meta) {
+  if (!sftpPanelReady) {
+    sftpPendingSessions.push(meta);
+    return;
+  }
+  if (sftpPanel && !sftpPanel.isDestroyed() && !sftpPanel.webContents.isDestroyed()) {
+    sftpPanel.webContents.send('sftp:add-session', meta);
+  }
+}
+
+/** 目录探测整体上限：远端 exec 全部卡住时也不能让面板干等。 */
+const SFTP_CWD_DEADLINE_MS = 4000;
+
+/**
+ * 从 SSH 终端打开 SFTP 时，让远端面板落在终端当前所在的目录。
+ * 渲染层的 OSC 7 结果优先（shell 自带集成时零开销），否则用同一条会话反查交互 shell 的 cwd。
+ * 两者都拿不到就返回 null，由面板回退到家目录。路径本身不进日志。
+ */
+async function resolveSftpInitialPath(sender, req, assetId) {
+  const fromRenderer = sanitizeRemotePath(req && req.remotePath);
+  if (fromRenderer) return fromRenderer;
+  const sessionId = req && req.sshSessionId;
+  if (typeof sessionId !== 'string' || !sessionId) return null;
+  const target = sshSessions.execTarget(sessionId);
+  // 只认本窗口自己、且属于同一资产的会话，避免跨窗口或跨资产读目录
+  if (!target || target.ownerId !== sender.id || target.assetId !== assetId) return null;
+  const started = Date.now();
+  const meta = { sessionId, host: target.host, port: target.port };
+  let timer;
+  try {
+    const cwd = await Promise.race([
+      probeRemoteCwd(target).finally(() => clearTimeout(timer)),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), SFTP_CWD_DEADLINE_MS); }),
+    ]);
+    logger.info('ssh', 'sftp initial cwd probe', { ...meta, found: !!cwd, ms: Date.now() - started });
+    return cwd;
+  } catch (error) {
+    logger.warn('ssh', 'sftp initial cwd probe failed', {
+      ...meta, code: error.code || 'SSH_CWD', message: error.message, ms: Date.now() - started,
+    });
+    return null;
+  }
+}
+
 /** Page-space rect of the main window's tab bar, resolved to screen px on each drop hit test. */
 let tabbarDropRect = null;
 /** Last drop-hint state, so we only broadcast when the highlight should change. */
@@ -952,48 +1005,50 @@ function registerIpc() {
     return { ok: true };
   }, true);
 
-  // ---- SFTP window & transfers ----
-  handle('sftp:open-window', async (req) => {
+  // ---- SFTP panel window & transfers ----
+  const loadSftpPanel = async (panel) => {
+    const htmlPath = path.join(__dirname, '..', 'dist', 'index.html');
+    const cacheQs = `t=${Date.now()}`;
+    // bust HTTP/file cache so a rebuild is always picked up
+    try {
+      await panel.webContents.session.clearCache();
+    } catch (_) {}
+    if (isDev && process.env.VITE_DEV_SERVER_URL) {
+      await panel.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${cacheQs}#/sftp`);
+    } else {
+      await panel.loadURL('file://' + htmlPath.replace(/\\/g, '/') + '?' + cacheQs + '#sftp');
+    }
+  };
+
+  handle('sftp:open-window', async (sender, req) => {
     const assetId = req && req.assetId;
     if (!assetId) throw new Error('assetId required');
     const hit = store.findAsset(assetId);
     if (!hit) throw new Error('asset not found');
-    const host = hit.asset.host || '';
-    const port =
-      (hit.asset.methods && hit.asset.methods.ssh && hit.asset.methods.ssh.port) || 22;
+    const meta = sftpManager.sessionMeta(hit.asset);
+    store.pushRecent(hit.asset, { id: 'sftp', proto: 'SFTP', port: meta.port });
+    send('store:changed', { reason: 'recent' });
+    // 目录探测与建窗/加载并行；探测本身出任何问题都不能挡住面板打开
+    const initialPath = resolveSftpInitialPath(sender, req, assetId).catch(() => null);
 
-    const existing = sftpWindows.get(assetId);
-    const hash = `sftp?assetId=${encodeURIComponent(assetId)}&host=${encodeURIComponent(host)}&port=${port}&name=${encodeURIComponent(hit.asset.name || '')}`;
-    const htmlPath = path.join(__dirname, '..', 'dist', 'index.html');
-    const cacheQs = `t=${Date.now()}`;
-
-    const loadSftp = async (winRef) => {
-      // bust HTTP/file cache so a rebuild is always picked up
-      try {
-        await winRef.webContents.session.clearCache();
-      } catch (_) {}
-      if (isDev && process.env.VITE_DEV_SERVER_URL) {
-        await winRef.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${cacheQs}#/${hash}`);
-      } else {
-        await winRef.loadURL(
-          'file://' + htmlPath.replace(/\\/g, '/') + '?' + cacheQs + '#' + hash
-        );
-      }
-    };
-
-    if (existing && !existing.isDestroyed()) {
-      await loadSftp(existing);
-      existing.focus();
-      existing.setTitle(`${hit.asset.name || host} · SFTP · ${host}:${port}`);
+    if (sftpPanel && !sftpPanel.isDestroyed()) {
+      // 复用面板时绝不重载页面：现有会话可能正在传输，重载会全部断开
+      sftpPanel.show();
+      sftpPanel.focus();
+      meta.initialPath = await initialPath;
+      deliverSftpSession(meta);
       return { ok: true, reused: true };
     }
 
-    const sftpWin = new BrowserWindow({
-      width: 1100,
-      height: 720,
+    sftpPanelReady = false;
+    sftpPendingSessions.length = 0;
+    const panel = new BrowserWindow({
+      // 与主窗口默认尺寸（1280x800）保持一致，略小 20px 以便和主窗口错开
+      width: 1260,
+      height: 780,
       minWidth: 800,
       minHeight: 520,
-      title: `${hit.asset.name || host} · SFTP · ${host}:${port}`,
+      title: 'SFTP',
       icon: path.join(__dirname, 'assets', 'icon.png'),
       backgroundColor: '#0f1419',
       autoHideMenuBar: true,
@@ -1004,17 +1059,76 @@ function registerIpc() {
         sandbox: false,
       },
     });
-    await loadSftp(sftpWin);
-    sftpWindows.set(assetId, sftpWin);
-    sftpWin.on('page-title-updated', (e) => {
+    sftpPanel = panel;
+    panel.on('page-title-updated', (e) => {
       e.preventDefault();
     });
-    sftpWin.setTitle(`${hit.asset.name || host} · SFTP · ${host}:${port}`);
-    sftpWin.on('closed', () => {
-      sftpWindows.delete(assetId);
+    panel.on('closed', () => {
+      if (sftpPanel === panel) {
+        sftpPanel = null;
+        sftpPanelReady = false;
+        sftpPendingSessions.length = 0;
+        sftpCloseGuard.bypass = false;
+        sftpCloseGuard.asking = false;
+      }
     });
+    /**
+     * 关窗会断开面板里的全部 SFTP 会话，而连接状态只有面板自己知道，所以把决定发过去问。
+     * 页面还没加载完、渲染进程已死或应用正在退出时必须放行，否则窗口会关不掉。
+     */
+    panel.on('close', (e) => {
+      if (trayDestroying || sftpCloseGuard.bypass || sftpCloseGuard.asking || !sftpPanelReady) return;
+      e.preventDefault();
+      sftpCloseGuard.asking = true;
+      panel.webContents.send('sftp:confirm-close');
+    });
+    panel.webContents.on('render-process-gone', () => {
+      // 渲染进程已死：既不会再答复关闭询问，也不能被 open-window 当作可复用面板
+      sftpCloseGuard.bypass = true;
+      if (!panel.isDestroyed()) panel.destroy();
+    });
+    let loadError = null;
+    const loading = loadSftpPanel(panel).catch((error) => {
+      loadError = error;
+    });
+    meta.initialPath = await initialPath;
+    deliverSftpSession(meta);
+    await loading;
+    if (loadError) {
+      // 留着一个空白面板会让后续打开一直复用它，会话就此丢失
+      logger.error('sftp', 'panel load failed', { code: loadError.code || 'LOAD', message: loadError.message });
+      if (!panel.isDestroyed()) panel.destroy();
+      throw loadError;
+    }
     return { ok: true, reused: false };
-  });
+  }, true);
+
+  /** 面板订阅完 sftp:add-session 后报到，交出排队期间的会话，避免订阅前丢事件。 */
+  handle('sftp:sessions-ready', (sender) => {
+    if (!sftpPanel || sftpPanel.isDestroyed() || sftpPanel.webContents !== sender) {
+      throw Object.assign(new Error('Untrusted SFTP panel sender'), { code: 'SSH_OWNER' });
+    }
+    sftpPanelReady = true;
+    const sessions = sftpPendingSessions.splice(0, sftpPendingSessions.length);
+    return { ok: true, sessions };
+  }, true);
+
+  /** 面板对关窗询问的答复：确认后解除拦截并真正关窗，面板内会话随 webContents 一起结束。 */
+  handle('sftp:close-answer', (sender, req) => {
+    if (!sftpPanel || sftpPanel.isDestroyed() || sftpPanel.webContents !== sender) {
+      throw Object.assign(new Error('Untrusted SFTP panel sender'), { code: 'SSH_OWNER' });
+    }
+    if (!sftpCloseGuard.asking) return { ok: true, closed: false };
+    sftpCloseGuard.asking = false;
+    if (!(req && req.confirmed === true)) {
+      logger.info('sftp', 'panel close cancelled');
+      return { ok: true, closed: false };
+    }
+    sftpCloseGuard.bypass = true;
+    sftpPanel.close();
+    logger.info('sftp', 'panel closed after confirm');
+    return { ok: true, closed: true };
+  }, true);
 
   handle('sftp:open', (sender, req) => sftpManager.openSession({ assetId: req && req.assetId, ...sshRequestContext(sender) }), true);
   handle('sftp:list', (connId, remotePath) => sftpManager.list(connId, remotePath));
@@ -1059,7 +1173,7 @@ function registerIpc() {
     (Array.isArray(ids) ? ids : []).filter((x) => typeof x === 'string' && x.length > 0);
   handle('sftp:pause-batch', (ids, pause) => sftpManager.pauseTasks(sftpTaskIds(ids), !!pause));
   handle('sftp:cancel-batch', async (ids) => sftpManager.cancelTasks(sftpTaskIds(ids)));
-  handle('sftp:tasks', () => sftpManager.listTasks());
+  handle('sftp:tasks', (connId) => sftpManager.listTasks(connId));
   handle('sftp:close', (sender, connId) => {
     const rec = sftpManager.conns.get(connId);
     if (rec && rec.ownerId !== sender.id) throw Object.assign(new Error('SFTP session is not owned by this window'), { code: 'SSH_OWNER' });

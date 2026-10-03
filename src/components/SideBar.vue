@@ -60,14 +60,16 @@
               <div class="node-name">{{ n.name }}</div>
               <div class="node-host">{{ n.host }}<template v-if="n.user"> · {{ n.user }}</template></div>
             </div>
-            <span
-              v-for="m in methodsOf(n)"
-              :key="m.id"
-              class="pill"
-              :class="pillClass(m.id)"
-              @click.stop="connect(n, m)"
-              :title="$t('ctx.connectWith', { name: $t(m.nameKey) })"
-            >{{ shortProto(m.id) }}</span>
+            <div class="node-pills">
+              <span
+                v-for="m in methodsOf(n)"
+                :key="m.id"
+                class="pill"
+                :class="pillClass(m.id)"
+                @click.stop="connect(n, m)"
+                :title="$t('ctx.connectWith', { name: $t(m.nameKey) })"
+              >{{ shortProto(m.id) }}</span>
+            </div>
           </div>
         </template>
       </div>

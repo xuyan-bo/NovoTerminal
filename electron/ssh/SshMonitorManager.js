@@ -1,5 +1,5 @@
-const iconv = require('iconv-lite');
 const collectors = require('./monitor/collectors');
+const { exec: remoteExec, platformOf } = require('./exec');
 
 const PROBE_TIMEOUT_MS = 6000;
 const META_TIMEOUT_MS = 12000;
@@ -11,60 +11,9 @@ function monitorError(code, message) {
   return Object.assign(new Error(message), { code });
 }
 
-/** `ver` is localized ("[Version …]" / "[版本 …]") and the label can be mojibake across codepages,
- *  so match only the stable ASCII parts: the "Microsoft Windows" prefix and a dotted version. */
-function looksWindowsVer(text) {
-  return /Microsoft Windows.*\d+\.\d+\.\d+/i.test(String(text == null ? '' : text));
-}
-
-/** Run one command over the session's SSH client and collect its decoded output. */
+/** 沿用监控自己的超时错误码，避免调用方看到通用的 SSH_EXEC_TIMEOUT。 */
 function exec(client, command, charset, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let channel;
-    const finish = (fn, arg) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn(arg);
-    };
-    const timer = setTimeout(() => {
-      try { if (channel) channel.close(); } catch (_) {}
-      try { if (channel) channel.destroy(); } catch (_) {}
-      finish(reject, monitorError('SSH_MONITOR_TIMEOUT', 'monitor command timed out'));
-    }, timeoutMs);
-    try {
-      client.exec(command, (err, chan) => {
-        if (err) return finish(reject, err);
-        if (settled) {
-          try { chan.destroy(); } catch (_) {}
-          return;
-        }
-        channel = chan;
-        let stdout = '';
-        let stderr = '';
-        let decoder;
-        try {
-          decoder = iconv.getDecoder(charset || 'UTF-8');
-        } catch (_) {
-          decoder = iconv.getDecoder('UTF-8');
-        }
-        chan.on('data', (data) => { stdout += decoder.write(Buffer.from(data)); });
-        if (chan.stderr) chan.stderr.on('data', (data) => { stderr += decoder.write(Buffer.from(data)); });
-        chan.on('close', () => {
-          if (settled) return;
-          try {
-            stdout += decoder.end();
-            stderr += decoder.end();
-          } catch (_) {}
-          finish(resolve, { stdout, stderr });
-        });
-        chan.on('error', (e) => finish(reject, e));
-      });
-    } catch (e) {
-      finish(reject, e);
-    }
-  });
+  return remoteExec(client, command, charset, timeoutMs, 'SSH_MONITOR_TIMEOUT');
 }
 
 class SshMonitorManager {
@@ -81,7 +30,7 @@ class SshMonitorManager {
   async start(sessionId, intervalSec) {
     if (typeof sessionId !== 'string') throw monitorError('SSH_MONITOR', 'Invalid session id');
     const requestedMs = Number.isInteger(intervalSec) && intervalSec >= 1 && intervalSec <= 60 ? intervalSec * 1000 : null;
-    const target = this.ssh.monitorTarget(sessionId);
+    const target = this.ssh.execTarget(sessionId);
     if (!target) {
       this.log && this.log.warn('ssh', 'ssh monitor start skipped: session not ready', { sessionId });
       return { ok: true, supported: false, reason: 'not-ready' };
@@ -114,14 +63,14 @@ class SshMonitorManager {
   }
 
   async runStart(sessionId, runner) {
-    const target = this.ssh.monitorTarget(sessionId);
+    const target = this.ssh.execTarget(sessionId);
     if (!target) {
       this.log && this.log.warn('ssh', 'ssh monitor target lost before probe', { sessionId });
       this.runners.delete(sessionId);
       return { ok: true, supported: false, reason: 'not-ready' };
     }
     const { client, charset, host, port } = target;
-    const platform = await this.probe(client, charset, { sessionId, host, port });
+    const platform = await this.probe(target, { sessionId, host, port });
     if (!platform) {
       runner.supported = false;
       runner.pending = null;
@@ -157,37 +106,21 @@ class SshMonitorManager {
     return { ok: true, supported: true, platform, meta, snapshot, intervalSec: runner.intervalMs / 1000 };
   }
 
-  async probe(client, charset, logMeta) {
-    let uname = '';
-    try {
-      uname = (await exec(client, 'uname -s', charset, PROBE_TIMEOUT_MS)).stdout.trim();
-    } catch (_) { /* no uname outside unix-ish shells */ }
-    if (/linux/i.test(uname)) return 'linux';
-    if (/darwin/i.test(uname)) return 'darwin';
-    // Git-for-Windows uname prints e.g. MINGW64_NT-10.0 — that also means a Windows host.
-    if (/NT-|MINGW|CYGWIN/i.test(uname)) return 'windows';
-    let ver = '';
-    try {
-      // `cmd /c` works whether sshd's DefaultShell is cmd.exe or PowerShell; plain `ver` covers cmd only.
-      ver = (await exec(client, 'cmd /c ver', charset, PROBE_TIMEOUT_MS)).stdout;
-    } catch (_) { /* fall back to plain ver */ }
-    if (!looksWindowsVer(ver)) {
-      try {
-        ver = (await exec(client, 'ver', charset, PROBE_TIMEOUT_MS)).stdout;
-      } catch (_) { /* not windows either */ }
+  async probe(target, logMeta) {
+    const info = await platformOf(target, PROBE_TIMEOUT_MS);
+    if (!info.platform) {
+      this.log && this.log.warn('ssh', 'ssh monitor probe inconclusive', {
+        ...logMeta,
+        uname: String(info.uname || '').slice(0, 80) || undefined,
+        ver: String(info.ver || '').trim().slice(0, 80) || undefined,
+      });
     }
-    if (looksWindowsVer(ver)) return 'windows';
-    this.log && this.log.warn('ssh', 'ssh monitor probe inconclusive', {
-      ...logMeta,
-      uname: uname.slice(0, 80) || undefined,
-      ver: String(ver).trim().slice(0, 80) || undefined,
-    });
-    return null;
+    return info.platform;
   }
 
   async pollOnce(sessionId, runner) {
     if (this.runners.get(sessionId) !== runner || runner.stopRequested) return null;
-    const target = this.ssh.monitorTarget(sessionId);
+    const target = this.ssh.execTarget(sessionId);
     if (!target) {
       this.stop(sessionId);
       return null;
@@ -222,7 +155,7 @@ class SshMonitorManager {
 
   handleFailure(sessionId, runner, error) {
     runner.failures += 1;
-    const target = this.ssh.monitorTarget(sessionId);
+    const target = this.ssh.execTarget(sessionId);
     const meta = { sessionId, host: target && target.host, code: error.code, message: error.message, failures: runner.failures };
     if (runner.failures >= MAX_POLL_FAILURES) {
       this.log && this.log.error('ssh', 'ssh monitor stopped after failures', meta);
@@ -245,7 +178,7 @@ class SshMonitorManager {
 
   stopOwner(ownerId) {
     for (const [sessionId] of this.runners) {
-      const target = this.ssh.monitorTarget(sessionId);
+      const target = this.ssh.execTarget(sessionId);
       if (!target || target.ownerId === ownerId) this.stop(sessionId);
     }
   }

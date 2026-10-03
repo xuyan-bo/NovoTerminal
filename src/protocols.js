@@ -21,6 +21,13 @@ export const PROTOCOLS = {
     icon: 'el-icon-monitor',
     component: () => import('./components/VncView.vue'),
   },
+  // SFTP 没有内嵌视图：由独立的单实例控制面板窗口承载多会话，故不注册 component
+  sftp: {
+    label: 'SFTP',
+    defaultPort: 22,
+    pillClass: 'sftp',
+    icon: 'el-icon-files',
+  },
 };
 
 export function getProtocol(id) {

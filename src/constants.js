@@ -29,14 +29,17 @@ export const CATALOG = {
   win: [
     { id: 'rdp', nameKey: 'cat.name.rdp', descKey: 'cat.desc.winRdp', defaultPort: PROTOCOLS.rdp.defaultPort, rec: true },
     { id: 'ssh', nameKey: 'cat.name.ssh', descKey: 'cat.desc.winSsh', defaultPort: PROTOCOLS.ssh.defaultPort, rec: false },
+    { id: 'sftp', nameKey: 'cat.name.sftp', descKey: 'cat.desc.sftp', defaultPort: PROTOCOLS.sftp.defaultPort, rec: false },
     { id: 'vnc', nameKey: 'cat.name.vnc', descKey: 'cat.desc.winVnc', defaultPort: PROTOCOLS.vnc.defaultPort, rec: false },
   ],
   mac: [
     { id: 'vnc', nameKey: 'cat.name.vncShare', descKey: 'cat.desc.macVnc', defaultPort: PROTOCOLS.vnc.defaultPort, rec: true },
-    { id: 'ssh', nameKey: 'cat.name.ssh', descKey: 'cat.desc.termSftp', defaultPort: PROTOCOLS.ssh.defaultPort, rec: false },
+    { id: 'ssh', nameKey: 'cat.name.ssh', descKey: 'cat.desc.sshTerm', defaultPort: PROTOCOLS.ssh.defaultPort, rec: false },
+    { id: 'sftp', nameKey: 'cat.name.sftp', descKey: 'cat.desc.sftp', defaultPort: PROTOCOLS.sftp.defaultPort, rec: false },
   ],
   linux: [
-    { id: 'ssh', nameKey: 'cat.name.ssh', descKey: 'cat.desc.termSftp', defaultPort: PROTOCOLS.ssh.defaultPort, rec: true },
+    { id: 'ssh', nameKey: 'cat.name.ssh', descKey: 'cat.desc.sshTerm', defaultPort: PROTOCOLS.ssh.defaultPort, rec: true },
+    { id: 'sftp', nameKey: 'cat.name.sftp', descKey: 'cat.desc.sftp', defaultPort: PROTOCOLS.sftp.defaultPort, rec: false },
     { id: 'vnc', nameKey: 'cat.name.vnc', descKey: 'cat.desc.linuxVnc', defaultPort: PROTOCOLS.vnc.defaultPort, rec: false },
     { id: 'rdp', nameKey: 'cat.name.rdpXrdp', descKey: 'cat.desc.linuxRdp', defaultPort: PROTOCOLS.rdp.defaultPort, rec: false },
   ],
@@ -117,6 +120,13 @@ export const ADVANCED_DEFAULTS = {
     scale: 'fit',
     clipboard: true,
     localCursor: true,
+  },
+  // SFTP 复用同资产 SSH 行的认证、跳板机与主机密钥策略，此处只放传输专属参数
+  sftp: {
+    concurrentTransfers: 16,
+    chunkSize: 64,
+    compression: false,
+    connectTimeout: 20,
   },
 };
 
@@ -279,7 +289,45 @@ export const ADVANCED_FIELDS = {
     { key: 'clipboard', type: 'switch', labelKey: 'adv.vnc.clipboard' },
     { key: 'localCursor', type: 'switch', labelKey: 'adv.vnc.localCursor' },
   ],
+  sftp: [
+    {
+      key: 'concurrentTransfers',
+      type: 'number',
+      labelKey: 'adv.sftp.concurrent',
+      min: 1,
+      max: 16,
+      integer: true,
+      placeholderKey: 'adv.sftp.concurrentPh',
+      hintKey: 'adv.sftp.concurrentHint',
+    },
+    {
+      key: 'chunkSize',
+      type: 'select',
+      labelKey: 'adv.sftp.chunk',
+      hintKey: 'adv.sftp.chunkHint',
+      options: [
+        { value: 32, label: '32 KB' },
+        { value: 64, label: '64 KB' },
+        { value: 256, label: '256 KB' },
+        { value: 1024, label: '1 MB' },
+      ],
+    },
+    { key: 'compression', type: 'switch', labelKey: 'adv.sftp.compression', hintKey: 'adv.sftp.compressionHint' },
+    {
+      key: 'connectTimeout',
+      type: 'number',
+      labelKey: 'adv.sftp.timeout',
+      min: 5,
+      max: 300,
+      integer: true,
+      placeholderKey: 'adv.sftp.timeoutPh',
+      hintKey: 'adv.sftp.timeoutHint',
+    },
+  ],
 };
+
+/** 表单顶部说明：该方式的凭据/认证由谁提供 */
+export const ADVANCED_NOTES = { sftp: 'adv.sftp.authNote' };
 
 export function advancedKey(methodId) {
   const id = String(methodId || '').toLowerCase();

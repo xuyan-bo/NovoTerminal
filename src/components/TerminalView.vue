@@ -99,6 +99,8 @@ import createFullscreenMixin from './session/fullscreen';
 
 const FIT_DEBOUNCE_MS = 120;
 const REMOTE_RESIZE_DEBOUNCE_MS = 220;
+/** 页签状态点：ended 与 idle 同样归为未连接的灰色。 */
+const DOT_STATE = { connecting: 'connecting', ready: 'ready', error: 'error' };
 
 export default {
   name: 'TerminalView',
@@ -171,7 +173,7 @@ export default {
     status(val) {
       const connected = val === 'connecting' || val === 'ready';
       const tab = store.tabs.find((t) => t.id === this.sessionId);
-      if (tab) tab.connected = connected;
+      if (tab) tab.connState = DOT_STATE[val] || 'idle';
       this.$emit('connection', connected);
       if (val === 'ready') {
         if (this.monitorOpen && this.monitorState !== 'live') this.startMonitor();
@@ -208,6 +210,8 @@ export default {
     this._offMonitorEnd = null;
     this._splitMove = null;
     this._splitUp = null;
+    this._offOsc7 = null;
+    this._oscCwd = null;
   },
   mounted() {
     this._fitTimer = null;
@@ -304,6 +308,8 @@ export default {
       term.open(this.$refs.termEl);
       this.term = term;
       this.fit = fit;
+      // 远端 shell 自带集成时会用 OSC 7 报告当前目录，记下它供 SFTP 打开时定位
+      this._offOsc7 = term.parser.registerOscHandler(7, (data) => this.onOscCwd(data));
       // sync CSS background variable with theme (canvas bg comes from options.theme)
       this.syncSurface(this.getAssetTheme());
       this._lastW = 0;
@@ -523,6 +529,13 @@ export default {
         } catch (_) {}
       }
       this._onTermCtx = null;
+      if (this._offOsc7) {
+        try {
+          this._offOsc7.dispose();
+        } catch (_) {}
+        this._offOsc7 = null;
+      }
+      this._oscCwd = null;
       if (this.term) {
         try {
           this.term.dispose();
@@ -818,17 +831,35 @@ export default {
       window.addEventListener('mouseup', onUp);
     },
 
+    /** OSC 7 载荷形如 file://host/percent/encoded/path，可能再跟 ; 附加参数。 */
+    onOscCwd(data) {
+      const raw = String(data == null ? '' : data);
+      const at = raw.indexOf('file://');
+      if (at < 0) return false;
+      const rest = raw.slice(at + 7).split(';')[0];
+      const slash = rest.indexOf('/');
+      if (slash < 0) return false;
+      let p = null;
+      try {
+        p = decodeURIComponent(rest.slice(slash));
+      } catch (_) {
+        return false;
+      }
+      if (p && p.charAt(0) === '/' && p.length <= 4096) this._oscCwd = p;
+      return true;
+    },
+
     async openSftp() {
       if (!api.sftpOpenWindow) {
         this.$message.error(t('msg.needElectron'));
         return;
       }
+      const req = { assetId: this.assetId };
+      // 终端当前目录：shell 自己报过就用它，否则把会话 ID 交给主进程去反查
+      if (this._oscCwd) req.remotePath = this._oscCwd;
+      else if (this.status === 'ready' && this.liveSessionId) req.sshSessionId = this.liveSessionId;
       try {
-        unwrap(
-          await api.sftpOpenWindow({
-            assetId: this.assetId,
-          })
-        );
+        unwrap(await api.sftpOpenWindow(req));
       } catch (e) {
         this.$message.error(e.message || String(e));
       }
@@ -839,6 +870,8 @@ export default {
       if (this._rsTimer) clearTimeout(this._rsTimer);
       const sid = this.liveSessionId;
       this.liveSessionId = null;
+      // 重连后旧目录已无意义，交给下次 OSC 7 或主进程探测重新确定
+      this._oscCwd = null;
       if (this.offData) {
         this.offData();
         this.offData = null;

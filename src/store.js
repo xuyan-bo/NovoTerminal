@@ -330,7 +330,7 @@ function buildSessionTab(asset, method, protocol) {
     host: asset.host || '',
     port: method.port || protocol.defaultPort,
     assetName,
-    connected: false,
+    connState: 'idle',
     detached: false,
     liveSessionId: null,
   };
@@ -352,6 +352,11 @@ export async function connectAsset(asset, method) {
     // SSH opens a fresh session on every connect; the other embedded protocols keep a stable tab id,
     // so openTab's dedupe just activates the one session they allow per asset.
     openTab(buildSessionTab(asset, method, protocol));
+    return;
+  }
+  // SFTP 不占页签栏：单实例控制面板窗口，重复打开只是在面板里追加或激活对应会话页签
+  if (method.id === 'sftp') {
+    unwrap(await api.sftpOpenWindow({ assetId: asset.id }));
     return;
   }
   unwrap(await api.sessionConnect({ assetId: asset.id, methodId: method.id }));

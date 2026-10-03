@@ -97,6 +97,9 @@ function parseResolution(res) {
   return null;
 }
 
+/** 页签状态点：内嵌 RDP 的 connected 归到共用的 ready，ended 与 idle 是不连接的灰色。 */
+const DOT_STATE = { connecting: 'connecting', connected: 'ready', error: 'error' };
+
 export default {
   name: 'RdpView',
   mixins: [
@@ -149,7 +152,7 @@ export default {
     status(val) {
       const connected = val === 'connecting' || val === 'connected';
       const tab = store.tabs.find((t) => t.id === this.sessionId);
-      if (tab) tab.connected = connected;
+      if (tab) tab.connState = DOT_STATE[val] || 'idle';
       this.$emit('connection', connected);
     },
     active(v) {

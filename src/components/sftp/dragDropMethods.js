@@ -86,27 +86,30 @@ export default {
   onZoneDrop(e, zoneSide) {
     e.preventDefault();
     e.stopPropagation();
+    // 页签排序的拖拽经过面板时不是文件拖放
+    if (this._tabDragging) return;
+    const s = this.s;
     const payload = this._lastDrag || this.dragPayload;
     const external = this.collectExternalPaths(e);
     this.pushDlog(
-      `zone-drop ${zoneSide} p=${payload ? payload.side : 'null'} ext=${external.length} conn=${this.connId || 'null'}`
+      `zone-drop ${zoneSide} p=${payload ? payload.side : 'null'} ext=${external.length} conn=${(s && s.connId) || 'null'}`
     );
 
     // OS files from Explorer / Desktop
     if (external.length) {
       this._lastDrag = null;
       this.dragPayload = null;
-      this.handleExternalDrop(external, zoneSide, e);
+      this.handleExternalDrop(s, external, zoneSide, e);
       return;
     }
 
     // In-app drag from the other panel: files and folders both land here.
-    if (payload && payload.side !== zoneSide && this.connId) {
+    if (payload && payload.side !== zoneSide && s && s.connId) {
       const items = payload.list || [];
       this.pushDlog(`zone-drop DIRECT ${payload.side}→${zoneSide} n=${items.length}`);
       this._lastDrag = null;
       this.dragPayload = null;
-      this.runTransfers(items, zoneSide).catch((err) => {
+      this.runTransfers(s, items, zoneSide).catch((err) => {
         this.pushDlog('zone-drop DIRECT fail ' + (err && err.message));
         this.$message.error(err.message || String(err));
       });
@@ -118,9 +121,11 @@ export default {
   onRootDragOver() {},
   /** Fallback for panel zones and document drops; keep distinct from direct transfers. */
   async runDrop(e, zoneSide) {
+    if (this._tabDragging) return;
     if (e && e._omniHandled) return;
     if (e) e._omniHandled = true;
     this.dropHi = '';
+    let s = this.s;
     const payload = this._lastDrag || this.dragPayload;
     const external = this.collectExternalPaths(e);
     this.pushDlog(
@@ -129,16 +134,21 @@ export default {
     if (external.length) {
       this._lastDrag = null;
       this.dragPayload = null;
-      await this.handleExternalDrop(external, zoneSide || 'remote', e);
+      await this.handleExternalDrop(s, external, zoneSide || 'remote', e);
       return;
     }
     if (!payload) {
       this.$message.warning(this.$t('sftp.dragUnknown'));
       return;
     }
+    // A drag can only come from the visible panels, so it always targets the active session.
+    if (!s) {
+      this.pushDlog('runDrop no session tab');
+      return;
+    }
 
     const dest =
-      zoneSide === 'remote' ? this.remotePath : zoneSide === 'local' ? this.localDropDir() : null;
+      zoneSide === 'remote' ? s.remotePath : zoneSide === 'local' ? this.localDropDir() : null;
 
     // no zone hint → detect from element under cursor
     let tSide = zoneSide;
@@ -154,7 +164,7 @@ export default {
         this.$message.warning(this.$t('sftp.dragZone'));
         return;
       }
-      dropDest = tSide === 'remote' ? this.remotePath : this.localDropDir();
+      dropDest = tSide === 'remote' ? s.remotePath : this.localDropDir();
       const row = el && el.closest ? el.closest('.file-row') : null;
       if (
         row &&
@@ -165,12 +175,12 @@ export default {
         if (name) {
           dropDest =
             tSide === 'remote'
-              ? joinRemote(this.remotePath, name)
+              ? joinRemote(s.remotePath, name)
               : joinLocal(this.localDropDir(), name);
         }
       }
     } else if (!dropDest) {
-      dropDest = tSide === 'remote' ? this.remotePath : this.localDropDir();
+      dropDest = tSide === 'remote' ? s.remotePath : this.localDropDir();
     }
 
     // dropped onto a folder row in the zone
@@ -184,35 +194,38 @@ export default {
       if (name && zoneSide) {
         dropDest =
           tSide === 'remote'
-            ? joinRemote(this.remotePath, name)
+            ? joinRemote(s.remotePath, name)
             : joinLocal(this.localDropDir(), name);
       }
     }
 
-    this.pushDlog(`runDrop dest=${tSide}:${dropDest} conn=${this.connId || 'null'} n=${payload ? (payload.list || []).length : '-'} side=${payload ? payload.side : '-'}`);
+    this.pushDlog(`runDrop dest=${tSide}:${dropDest} conn=${s.connId || 'null'} n=${(payload.list || []).length} side=${payload.side}`);
 
-    if (!payload) {
-      this.pushDlog('runDrop no payload');
-      this.$message.warning(this.$t('sftp.dragUnknown'));
-      return;
-    }
     if (payload.side === tSide) {
       this.pushDlog('runDrop same-side skip');
       return;
     }
-    if (!this.connId) {
+    if (!s.connId) {
       this.pushDlog('runDrop no connId, reopen session');
       try {
-        const r = unwrap(await api.sftpOpen({ assetId: this.assetId }));
-        this.connId = r.connId;
-        this.status = 'ready';
-        this.pushDlog('runDrop reconnected conn=' + this.connId);
+        const r = unwrap(await api.sftpOpen({ assetId: s.assetId }));
+        // 重连返回时页签可能已关闭：新连接必须立刻释放，否则没人再管它
+        if (!s.alive) {
+          this.pushDlog('runDrop reopen after release, drop conn=' + r.connId);
+          if (r.connId && api.sftpClose) api.sftpClose(r.connId).catch(() => {});
+          return;
+        }
+        s.connId = r.connId;
+        s.status = 'ready';
+        this.pushDlog('runDrop reconnected conn=' + s.connId);
       } catch (err) {
         this.pushDlog('runDrop reconnect fail ' + (err && err.message));
-        this.$message.error(err.message || t('sftp.status.idle'));
+        this.$message.error(err.message || t('conn.idle'));
         return;
       }
     }
+    // Reopening can outlive the tab it belongs to; re-resolve before touching its state.
+    s = this.sessionById(s.id) || s;
 
     const lockKey = `${payload.side}:${(payload.list || []).map((x) => x.path).join(', ')}>${tSide}:${dropDest}`;
     if (this._dropLock[lockKey]) {
@@ -227,8 +240,8 @@ export default {
     try {
       const items = payload.list || [];
       this.pushDlog(`runDrop transfer ${payload.side}→${tSide} n=${items.length}`);
-      await this.runTransfers(items, tSide, dropDest);
-      this.syncTasks();
+      await this.runTransfers(s, items, tSide, dropDest);
+      this.syncTasks(s);
     } catch (err) {
       this.pushDlog('runDrop fail ' + (err && err.message));
       this.$message.error(err.message || String(err));
@@ -325,9 +338,12 @@ export default {
   },
 
   /** Upload OS files into remote / copy into local folder */
-  async handleExternalDrop(external, zoneSide, e) {
-    let dest =
-      zoneSide === 'remote' ? this.remotePath : this.localDropDir();
+  async handleExternalDrop(s, external, zoneSide, e) {
+    if (zoneSide === 'remote' && (!s || !s.connId)) {
+      this.$message.error(t('conn.idle'));
+      return;
+    }
+    let dest = zoneSide === 'remote' ? s.remotePath : this.localDropDir();
     const rowEl = e && e.target && e.target.closest ? e.target.closest('.file-row') : null;
     if (
       rowEl &&
@@ -338,16 +354,12 @@ export default {
       if (name) {
         dest =
           zoneSide === 'remote'
-            ? joinRemote(this.remotePath, name)
+            ? joinRemote(s.remotePath, name)
             : joinLocal(this.localPath, name);
       }
     }
     this.pushDlog(`external drop → ${zoneSide}:${dest} n=${external.length}`);
     if (zoneSide === 'remote') {
-      if (!this.connId) {
-        this.$message.error(t('sftp.status.idle'));
-        return;
-      }
       let ok = 0;
       for (const item of external) {
         try {
@@ -359,9 +371,9 @@ export default {
             } catch (_) {}
           }
           if (isDir) {
-            await this.transferFolderUpload(item.path, dest);
+            await this.transferFolderUpload(s, item.path, dest);
           } else {
-            await this.startUpload(item.path, joinRemote(dest, item.name));
+            await this.startUpload(s, item.path, joinRemote(dest, item.name));
           }
           ok += 1;
         } catch (err) {
@@ -369,8 +381,8 @@ export default {
         }
       }
       if (ok) {
-        setTimeout(() => this.goRemote(dest), 400);
-        this.syncTasks();
+        setTimeout(() => this.goRemote(s, dest), 400);
+        this.syncTasks(s);
       }
       return;
     }

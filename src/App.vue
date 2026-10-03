@@ -1,12 +1,6 @@
 <template>
   <div class="app-root" :class="{ 'is-sftp': isSftpRoute, 'is-session': isSessionRoute }">
-    <sftp-page
-      v-if="isSftpRoute"
-      :asset-id="sftpQuery.assetId || ''"
-      :host="sftpQuery.host || ''"
-      :port="Number(sftpQuery.port) || 22"
-      :asset-name="sftpQuery.name || ''"
-    />
+    <sftp-page v-if="isSftpRoute" />
     <session-window v-else-if="isSessionRoute" :query="sessionQuery" />
     <template v-else>
     <div class="body-row">
@@ -128,7 +122,6 @@ export default {
       sidebarWidth: 268,
       resizing: false,
       treeHidden: false,
-      sftpQuery: parseHashRoute('sftp') || {},
       isSftpRoute: !!parseHashRoute('sftp'),
       sessionQuery: parseHashRoute('session') || {},
       isSessionRoute: !!parseHashRoute('session'),
@@ -161,7 +154,6 @@ export default {
   created() {
     this._onHash = () => {
       const q = parseHashRoute('sftp');
-      this.sftpQuery = q || {};
       this.isSftpRoute = !!q;
       const s = parseHashRoute('session');
       this.sessionQuery = s || {};

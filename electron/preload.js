@@ -143,8 +143,15 @@ const api = {
   sftpCancel: (taskId) => ipcRenderer.invoke('sftp:cancel', taskId),
   sftpPauseBatch: (ids, pause) => ipcRenderer.invoke('sftp:pause-batch', ids, pause),
   sftpCancelBatch: (ids) => ipcRenderer.invoke('sftp:cancel-batch', ids),
-  sftpTasks: () => ipcRenderer.invoke('sftp:tasks'),
+  sftpTasks: (connId) => ipcRenderer.invoke('sftp:tasks', connId),
+  sftpSessionsReady: () => ipcRenderer.invoke('sftp:sessions-ready'),
   sftpClose: (connId) => ipcRenderer.invoke('sftp:close', connId),
+  sftpCloseAnswer: (req) => ipcRenderer.invoke('sftp:close-answer', req),
+  onSftpConfirmClose: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('sftp:confirm-close', handler);
+    return () => ipcRenderer.removeListener('sftp:confirm-close', handler);
+  },
   sftpPickLocalFiles: () => ipcRenderer.invoke('sftp:pick-local-files'),
   sftpPickLocalDir: () => ipcRenderer.invoke('sftp:pick-local-dir'),
   sftpLocalHome: () => ipcRenderer.invoke('sftp:local-home'),
@@ -156,6 +163,11 @@ const api = {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('sftp:drag-ready', handler);
     return () => ipcRenderer.removeListener('sftp:drag-ready', handler);
+  },
+  onSftpAddSession: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('sftp:add-session', handler);
+    return () => ipcRenderer.removeListener('sftp:add-session', handler);
   },
   onSftpProgress: (cb) => {
     const handler = (_e, payload) => cb(payload);

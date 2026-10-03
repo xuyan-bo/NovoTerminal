@@ -141,11 +141,20 @@ class SshSessionManager {
     return !!rec && rec.ownerId === ownerId;
   }
 
-  /** Handles the monitor needs to exec read-only commands on a live session. */
-  monitorTarget(sessionId) {
+  /** 监控与 cwd 探测都需要在已就绪的会话上开只读 exec 通道；cache 随会话销毁。 */
+  execTarget(sessionId) {
     const rec = this.sessions.get(sessionId);
     if (!rec || !rec.ready || !rec.client) return null;
-    return { client: rec.client, charset: rec.adv.charset, host: rec.host, port: rec.port, ownerId: rec.ownerId };
+    if (!rec.probeCache) rec.probeCache = {};
+    return {
+      client: rec.client,
+      charset: rec.adv.charset,
+      host: rec.host,
+      port: rec.port,
+      ownerId: rec.ownerId,
+      assetId: rec.assetId,
+      cache: rec.probeCache,
+    };
   }
 
   /** Hand an existing session to another window's webContents without touching the SSH connection. */

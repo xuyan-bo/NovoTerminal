@@ -39,6 +39,9 @@ import { t } from '../i18n';
 import RFB from '@novnc/novnc';
 import createFullscreenMixin from './session/fullscreen';
 
+/** 页签状态点：ended 与 idle 同样归为未连接的灰色。 */
+const DOT_STATE = { connecting: 'connecting', ready: 'ready', error: 'error' };
+
 export default {
   name: 'VncView',
   mixins: [createFullscreenMixin({
@@ -88,7 +91,7 @@ export default {
     status(val) {
       const connected = val === 'connecting' || val === 'ready';
       const tab = store.tabs.find((t) => t.id === this.sessionId);
-      if (tab) tab.connected = connected;
+      if (tab) tab.connState = DOT_STATE[val] || 'idle';
       this.$emit('connection', connected);
     },
     active(v) {

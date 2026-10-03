@@ -2,6 +2,9 @@ const net = require('net');
 const crypto = require('crypto');
 const { createSshConnection } = require('../ssh/connection');
 
+/** ssh2 的子系统请求没有自带超时，服务器接受请求却不响应时不能让探测一直挂着。 */
+const SFTP_HANDSHAKE_TIMEOUT_MS = 8000;
+
 /** Plain TCP reachability probe. */
 function tcpProbe(host, port, timeoutMs = 2500) {
   return new Promise((resolve) => {
@@ -49,6 +52,55 @@ async function testSsh({ host, port, username, password, advanced, verifyHostKey
   } catch (error) {
     const code = error.code || (/authentication methods failed/i.test(error.message) ? 'AUTH_FAILED' : 'SSH_ERROR');
     log && log.warn('ssh', 'ssh authentication test failed', { host, port: Number(port) || 22, code, durationMs: Date.now() - started });
+    return result(false, code, error.message);
+  } finally {
+    if (connection) {
+      connection.close();
+      await connection.ready.catch(() => {});
+    }
+  }
+}
+
+// ---------- SFTP: SSH authentication + sftp subsystem handshake ----------
+
+/**
+ * SFTP 复用 SSH 认证，因此探测必须在认证之上真正打开 sftp 子系统并完成版本协商：
+ * 只有 TCP 可达或 SSH 认证成功都不代表服务器装了 sftp-server。
+ */
+async function testSftp({ host, port, username, password, advanced, verifyHostKey, promptKeyboard, log, onConnection }) {
+  const started = Date.now();
+  const probePort = Number(port) || 22;
+  let connection;
+  try {
+    connection = createSshConnection({ host, port: probePort, username, password, advanced, verifyHostKey, promptKeyboard, log });
+    if (onConnection) onConnection(connection);
+    const client = await connection.ready;
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(Object.assign(new Error('SFTP subsystem handshake timed out'), { code: 'SFTP_UNAVAILABLE' }));
+      }, SFTP_HANDSHAKE_TIMEOUT_MS);
+      client.sftp((error, sftp) => {
+        clearTimeout(timer);
+        if (sftp) {
+          try {
+            sftp.end();
+          } catch (_) {}
+        }
+        if (error) {
+          // ssh2 在子系统启动失败时把退出码写进 error.code（数字），统一收敛为稳定字符串码
+          return reject(Object.assign(error, {
+            code: typeof error.code === 'string' ? error.code : 'SFTP_UNAVAILABLE',
+            message: error.message || 'SFTP subsystem unavailable',
+          }));
+        }
+        resolve();
+      });
+    });
+    log && log.info('sftp', 'sftp subsystem test succeeded', { host, port: probePort, durationMs: Date.now() - started });
+    return result(true, undefined, undefined, Date.now() - started, { auth: 'ok', scope: 'subsystem' });
+  } catch (error) {
+    const code = error.code || (/authentication methods failed/i.test(error.message) ? 'AUTH_FAILED' : 'SFTP_ERROR');
+    log && log.warn('sftp', 'sftp subsystem test failed', { host, port: probePort, code, durationMs: Date.now() - started });
     return result(false, code, error.message);
   } finally {
     if (connection) {
@@ -283,4 +335,4 @@ function testRdp({ host, port, timeoutMs = 5000, lang }) {
   });
 }
 
-module.exports = { tcpProbe, testSsh, testVnc, testRdp };
+module.exports = { tcpProbe, testSsh, testSftp, testVnc, testRdp };

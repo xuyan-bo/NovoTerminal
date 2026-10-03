@@ -26,6 +26,7 @@
             </span>
           </template>
         </el-table-column>
+        <el-table-column prop="sessionName" :label="$t('sftp.colSession')" width="110" show-overflow-tooltip />
         <el-table-column prop="sizeText" :label="$t('sftp.colSize')" width="80" />
         <el-table-column :label="$t('sftp.colProgress')" min-width="160">
           <template slot-scope="scope">

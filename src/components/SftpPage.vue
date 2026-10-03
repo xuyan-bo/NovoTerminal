@@ -38,50 +38,124 @@
 
       <div class="splitter splitter-v" @mousedown.prevent="startSplit('v', $event)"></div>
 
-      <sftp-file-panel
-        side="remote"
-        :style="{ width: (100 - leftPct) + '%' }"
-        :items="remoteItems"
-        :path-input="remotePathInput"
-        :selected="remoteSel"
-        :sort="remoteSort"
-        :loading="remoteLoading"
-        :drop-hi="dropHi"
-        :refresh-disabled="!connId"
-        @path-input="remotePathInput = $event"
-        @select="onRowSelect"
-        @marquee="onMarquee"
-        @blank-click="onBlankClick"
-        @sort-change="onSortChange"
-        @navigate="goRemote"
-        @up="remoteUp"
-        @home="goRemote(remoteHome || '/')"
-        @refresh="goRemote(remotePath)"
-        @item-dbl="onRemoteDbl"
-        @blank-context="onBlankCtx"
-        @item-context="onItemCtx"
-        @drag-start="onDragStart"
-        @drag-end="onDragEnd"
-        @drag-over="onZoneDragOver"
-        @row-over="onRowOver"
-        @drag-leave="dropHi = ''"
-        @zone-drop="onZoneDrop"
-      >
-        <span slot="connection" class="conn-tag" :class="status">{{ statusText }}</span>
-      </sftp-file-panel>
+      <div class="sftp-right" :style="{ width: (100 - leftPct) + '%' }">
+        <div class="sftp-tabbar-row">
+          <button
+            v-show="tabOverflow"
+            type="button"
+            class="tab-arrow"
+            :disabled="!tabScrollLeft"
+            :aria-label="$t('tab.scrollLeft')"
+            :title="$t('tab.scrollLeft')"
+            @click="scrollTabs(-1)"
+          ><i class="el-icon-arrow-left"></i></button>
+          <div ref="tabbar" class="sftp-tabbar tabbar-wrap" @scroll.passive="updateTabArrows">
+            <div class="tabbar">
+              <div
+                v-for="s in sessions"
+                :key="s.id"
+                class="tab sftp-tab"
+                :class="{
+                  active: s.id === activeId,
+                  dragging: tabDragId === s.id,
+                  'drop-before': !!tabDragId && tabDropHint === s.id,
+                  'drop-after': !!tabDragId && tabDropHint === 'END' && isLastTab(s),
+                }"
+                :data-tab-id="s.id"
+                :title="s.host + ':' + s.port"
+                draggable="true"
+                @dragstart.stop="onSessionDragStart($event, s)"
+                @dragend.stop="endSessionDrag($event)"
+                @click="onTabClick(s)"
+                @contextmenu.prevent="onTabContextmenu($event, s)"
+              >
+                <i class="tab-glyph el-icon-files" aria-hidden="true"></i>
+                <span class="c-name">{{ s.label }}</span>
+                <span class="conn-dot" :class="s.status"></span>
+                <i
+                  class="x el-icon-close"
+                  @mousedown.stop.prevent
+                  @dragstart.stop.prevent
+                  @click.stop="closeTab(s)"
+                ></i>
+              </div>
+            </div>
+          </div>
+          <button
+            v-show="tabOverflow"
+            type="button"
+            class="tab-arrow"
+            :disabled="!tabScrollRight"
+            :aria-label="$t('tab.scrollRight')"
+            :title="$t('tab.scrollRight')"
+            @click="scrollTabs(1)"
+          ><i class="el-icon-arrow-right"></i></button>
+        </div>
+
+        <div class="sftp-remote-area">
+          <div
+            v-for="s in sessions"
+            :key="s.id"
+            v-show="s.id === activeId"
+            class="sftp-remote-slot"
+          >
+            <sftp-file-panel
+              side="remote"
+              :items="s.remoteItems"
+              :path-input="s.remotePathInput"
+              :selected="s.remoteSel"
+              :sort="s.remoteSort"
+              :loading="s.remoteLoading"
+              :drop-hi="dropHi"
+              :refresh-disabled="!s.connId"
+              @path-input="s.remotePathInput = $event"
+              @select="onRowSelect"
+              @marquee="onMarquee"
+              @blank-click="onBlankClick"
+              @sort-change="onSortChange"
+              @navigate="goRemote(s, $event)"
+              @up="remoteUp(s)"
+              @home="goRemote(s, s.remoteHome || '/')"
+              @refresh="goRemote(s, s.remotePath)"
+              @item-dbl="onRemoteDbl(s, $event)"
+              @blank-context="onBlankCtx"
+              @item-context="onItemCtx"
+              @drag-start="onDragStart"
+              @drag-end="onDragEnd"
+              @drag-over="onZoneDragOver"
+              @row-over="onRowOver"
+              @drag-leave="dropHi = ''"
+              @zone-drop="onZoneDrop"
+            >
+              <span slot="connection" class="conn-meta">
+                <span class="conn-tag" :class="s.status">{{ statusText(s) }}</span>
+                <span class="conn-host">{{ s.host }}:{{ s.port }}</span>
+              </span>
+            </sftp-file-panel>
+            <div v-if="s.status === 'error'" class="sftp-session-error">
+              <span class="err-text">{{ s.error || $t('conn.error') }}</span>
+              <el-button size="mini" @click="bootSession(s)">{{ $t('sftp.retry') }}</el-button>
+            </div>
+          </div>
+          <div v-if="!sessions.length" class="sftp-empty">{{ $t('sftp.tabs.empty') }}</div>
+        </div>
+      </div>
     </div>
 
     <div class="splitter splitter-h" @mousedown.prevent="startSplit('h', $event)"></div>
 
+    <!-- 队列是整个面板公用的：所有会话的任务合并成一张表，行上用所属会话列区分 -->
     <sftp-transfer-queue
       :style="{ height: (100 - topPct) + '%' }"
-      :tasks="tasks"
+      :tasks="queueTasks"
       :expanded-keys="expandedKeys"
       @expand-change="onExpandChange"
       @load-children="loadTreeChildren"
       @toggle-pause="togglePause"
       @remove-task="removeTask"
     />
+
+    <ctx-menu ref="tabCtxMenu" @select="onTabCtxSelect" />
 
     <div v-if="ctx.visible" class="sftp-ctx" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @click.stop>
       <div
@@ -98,6 +172,7 @@
 <script>
 import { api, unwrap } from '../store';
 import { t } from '../i18n';
+import CtxMenu from './CtxMenu.vue';
 import SftpFilePanel from './sftp/SftpFilePanel.vue';
 import SftpTransferQueue from './sftp/SftpTransferQueue.vue';
 import { PARENT_ROW, joinLocal, joinRemote, parentLocal, parentRemote, normalizeRemotePath, sortItems } from './sftp/utils';
@@ -106,20 +181,51 @@ import transferMethods from './sftp/transferMethods';
 import dragDropMethods from './sftp/dragDropMethods';
 import selectionMethods from './sftp/selectionMethods';
 
+const TAB_DRAG_TYPE = 'application/x-omnidesk-sftp-tab';
+
+/** One tab per SFTP session: an asset can be opened several times, like SSH. */
+function createSession(meta, id, seq) {
+  const name = meta.name || meta.host || '';
+  return {
+    id,
+    assetId: meta.assetId,
+    name,
+    label: seq > 1 ? `${name} (${seq})` : name,
+    seq,
+    host: meta.host || '',
+    port: Number(meta.port) || 22,
+    connId: null,
+    status: 'idle',
+    error: '',
+    alive: true,
+    remotePath: '/',
+    remotePathInput: '/',
+    remoteHome: '/',
+    // 从 SSH 终端进来时带的当前目录，连上后作为首个目录，用完即清（重试不该再跳回去）
+    initialPath: meta.initialPath || '',
+    remoteItems: [],
+    remoteSel: [],
+    remoteAnchor: '',
+    remoteSort: { key: 'name', dir: 'asc' },
+    remoteLoading: false,
+    tasks: [],
+    // Tree bookkeeping is per session so a background transfer keeps updating its own rows.
+    folderStates: new Map(),
+    rowByKey: new Map(),
+    rowByXferId: new Map(),
+    recalcPending: new Set(),
+    recalcTimer: null,
+  };
+}
+
 export default {
   name: 'SftpPage',
-  components: { SftpFilePanel, SftpTransferQueue },
-  props: {
-    assetId: { type: String, required: true },
-    host: { type: String, default: '' },
-    port: { type: Number, default: 22 },
-    assetName: { type: String, default: '' },
-  },
+  components: { CtxMenu, SftpFilePanel, SftpTransferQueue },
   data() {
     return {
-      buildTag: 'rd2-1647',
-      connId: null,
-      status: 'idle',
+      sessions: [],
+      activeId: '',
+      // 本机面板由所有会话页签共享
       localPath: '',
       localPathInput: '',
       localHome: '',
@@ -129,48 +235,56 @@ export default {
       localAnchor: '',
       localSort: { key: 'name', dir: 'asc' },
       localLoading: false,
-      remotePath: '/',
-      remotePathInput: '/',
-      remoteHome: '/',
-      remoteItems: [],
-      remoteSel: [],
-      remoteAnchor: '',
-      remoteSort: { key: 'name', dir: 'asc' },
-      remoteLoading: false,
       activeSide: 'local',
-      tasks: [],
       dropHi: '',
       dragPayload: null,
       clipHasFiles: false,
       ctx: { visible: false, x: 0, y: 0, items: [], side: '', item: null },
-      offProgress: null,
-      topPct: 58,
       leftPct: 50,
+      topPct: 58,
+      tabDragId: '',
+      tabDropHint: '',
+      tabOverflow: false,
+      tabScrollLeft: false,
+      tabScrollRight: false,
       expandedKeys: [],
     };
   },
   computed: {
-    statusText() {
-      const map = {
-        idle: t('sftp.status.idle'),
-        connecting: t('sftp.status.connecting'),
-        ready: t('sftp.status.ready'),
-        error: t('sftp.status.error'),
-      };
-      return map[this.status] || this.status;
+    /** 拖放、选择与列头排序只可能作用在可见页签上，因此统一走这个当前会话。 */
+    s() {
+      return this.sessionById(this.activeId);
     },
-    winTitle() {
-      return `${this.assetName || this.host || 'SFTP'} · SFTP · ${this.host}:${this.port}`;
+    connId() {
+      return this.s ? this.s.connId : null;
     },
-  },
-  watch: {
-    winTitle: {
-      immediate: true,
-      handler(v) {
-        if (typeof document !== 'undefined') {
-          document.title = `${v} · ${this.buildTag}`;
-        }
-      },
+    remotePath() {
+      return this.s ? this.s.remotePath : '/';
+    },
+    remoteItems: {
+      get() { return this.s ? this.s.remoteItems : []; },
+      set(v) { if (this.s) this.s.remoteItems = v; },
+    },
+    remoteSel: {
+      get() { return this.s ? this.s.remoteSel : []; },
+      set(v) { if (this.s) this.s.remoteSel = v; },
+    },
+    remoteAnchor: {
+      get() { return this.s ? this.s.remoteAnchor : ''; },
+      set(v) { if (this.s) this.s.remoteAnchor = v; },
+    },
+    remoteSort: {
+      get() { return this.s ? this.s.remoteSort : { key: 'name', dir: 'asc' }; },
+      set(v) { if (this.s) this.s.remoteSort = v; },
+    },
+    /** 公用队列：各会话的任务合并后按提交时间倒序，行上的 sessionName 标明归属。 */
+    queueTasks() {
+      const rows = [];
+      for (let i = 0; i < this.sessions.length; i += 1) {
+        const list = this.sessions[i].tasks;
+        for (let j = 0; j < list.length; j += 1) rows.push(list[j]);
+      }
+      return rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     },
   },
   created() {
@@ -181,46 +295,49 @@ export default {
     this._marqueeBase = null;
     this._split = null;
     this._pollTimer = null;
-    this._sftpDestroyed = false;
-    // Folder task trees: scan state plus row indexes for progress events and lazy rendering.
-    this._folderStates = new Map();
-    this._rowByKey = new Map();
-    this._rowByXferId = new Map();
-    this._recalcPending = new Set();
-    this._recalcTimer = null;
+    this._seq = 0;
+    this._destroyed = false;
+    this._tabDragging = false;
+    this._tabClickBlockedUntil = 0;
+    this._tabScrollFrame = 0;
+    this._tabResizeObs = null;
+    this._tabDragX = 0;
+    this._tabOverBar = false;
   },
   async mounted() {
-    document.title = `${this.winTitle} · ${this.buildTag}`;
-    this.pushDlog(`mounted UI=${this.buildTag}`);
     this._onWinErr = (msg) => {
-      this.pushDlog('window.onerror ' + msg);
+      console.log('[sftp] window.onerror ' + msg);
     };
     window.addEventListener('error', this._onWinErr);
-    this.offProgress =
+    this._offProgress =
       api.onSftpProgress &&
       api.onSftpProgress((p) => {
         if (!p || !p.taskId) return;
-        this.mergeTask(p);
+        // 进度事件带 connId：后台页签的传输也要继续更新自己的任务行
+        const s = this.sessions.find((x) => x.connId === p.connId);
+        if (s) this.mergeTask(s, p);
       });
     this._offSshState =
       api.onSshState &&
       api.onSshState((ev) => {
         if (!ev) return;
-        if (ev.type === 'drag-preparing') {
-          this.pushDlog('drag-preparing ' + (ev.message || ''));
-        }
         if (ev.type === 'drag-error') {
-          this.pushDlog('drag-error ' + (ev.message || ''));
           this.$message.error(ev.message || t('sftp.dragOutFail'));
         }
       });
     this._offDragReady =
       api.onSftpDragReady &&
-      api.onSftpDragReady((p) => {
-        this.pushDlog('drag-ready ' + (p && (p.localPath || p.name)));
+      api.onSftpDragReady(() => {
         this.$message.success(t('sftp.dragReady'));
       });
-    this.pushDlog('mounted sftp page');
+    // 先订阅再报到：主进程把就绪前到达的会话一次性交出来，之后都走事件
+    this._offAddSession =
+      api.onSftpAddSession &&
+      api.onSftpAddSession((meta) => this.addSession(meta));
+    // 关窗询问：主进程只负责拦截 close，有没有活动会话由面板回答。
+    this._offWinConfirm =
+      api.onSftpConfirmClose &&
+      api.onSftpConfirmClose(() => this.confirmWindowClose());
 
     this._nativeDragOver = (e) => {
       e.preventDefault();
@@ -251,7 +368,6 @@ export default {
       const el = e.target;
       const inZone =
         el && el.closest && el.closest('.sftp-panel, .file-list, .file-row');
-      this.pushDlog(`doc-drop inZone=${!!inZone}`);
       e.preventDefault();
       // Panels handle their own drops; document only covers leftover areas
       if (inZone) return;
@@ -261,90 +377,414 @@ export default {
     document.addEventListener('drop', this._docDrop, true);
     document.addEventListener('keydown', this.onGlobalKey);
     window.addEventListener('focus', this.refreshClipFiles);
+    window.addEventListener('resize', this.updateTabArrows);
 
     this.$nextTick(() => {
-      if (this._sftpDestroyed) return;
+      if (this._destroyed) return;
       const root = this.$refs.root;
       if (root) {
         root.addEventListener('dragenter', this._nativeDragEnter, false);
         root.addEventListener('dragover', this._nativeDragOver, false);
         root.addEventListener('drop', this._nativeDrop, false);
       }
+      this.observeTabBar();
+      this.updateTabArrows();
     });
-    await this.boot();
-    if (this._sftpDestroyed) return;
-    this._pollTimer = setInterval(() => this.syncTasks(), 1000);
+
+    await this.bootLocal();
+    if (this._destroyed) return;
+    if (api.sftpSessionsReady) {
+      try {
+        const r = unwrap(await api.sftpSessionsReady());
+        (r && r.sessions ? r.sessions : []).forEach((meta) => this.addSession(meta));
+      } catch (_) {}
+    }
+    if (this._destroyed) return;
+    this._pollTimer = setInterval(() => {
+      this.sessions.forEach((s) => {
+        if (s.connId) this.syncTasks(s);
+      });
+    }, 1000);
     window.addEventListener('beforeunload', this.onUnload);
   },
   beforeDestroy() {
-    this._sftpDestroyed = true;
+    this._destroyed = true;
+    this.endSessionDrag();
     window.removeEventListener('beforeunload', this.onUnload);
     if (this._onWinErr) window.removeEventListener('error', this._onWinErr);
     const root = this.$refs.root;
     if (root) {
-      if (this._nativeDragEnter) root.removeEventListener('dragenter', this._nativeDragEnter);
-      if (this._nativeDragOver) root.removeEventListener('dragover', this._nativeDragOver);
-      if (this._nativeDrop) root.removeEventListener('drop', this._nativeDrop);
+      root.removeEventListener('dragenter', this._nativeDragEnter);
+      root.removeEventListener('dragover', this._nativeDragOver);
+      root.removeEventListener('drop', this._nativeDrop);
     }
-    if (this._docOver) document.removeEventListener('dragover', this._docOver, true);
-    if (this._docDrop) document.removeEventListener('drop', this._docDrop, true);
+    document.removeEventListener('dragover', this._docOver, true);
+    document.removeEventListener('drop', this._docDrop, true);
     document.removeEventListener('keydown', this.onGlobalKey);
     window.removeEventListener('focus', this.refreshClipFiles);
     document.removeEventListener('mousemove', this.onSplitMove);
     document.removeEventListener('mouseup', this.onSplitUp);
+    window.removeEventListener('resize', this.updateTabArrows);
+    if (this._tabResizeObs) this._tabResizeObs.disconnect();
+    this._tabResizeObs = null;
+    cancelAnimationFrame(this._tabScrollFrame);
+    this._tabScrollFrame = 0;
     if (this._pollTimer) clearInterval(this._pollTimer);
     this._pollTimer = null;
-    if (this._recalcTimer) clearTimeout(this._recalcTimer);
-    this._recalcTimer = null;
-    this._recalcPending = new Set();
-    if (this.offProgress) this.offProgress();
+    this.sessions.forEach((s) => this.releaseSession(s));
+    if (this._offProgress) this._offProgress();
     if (this._offSshState) this._offSshState();
     if (this._offDragReady) this._offDragReady();
-    if (this.connId && api.sftpClose) api.sftpClose(this.connId).catch(() => {});
+    if (this._offAddSession) this._offAddSession();
+    if (this._offWinConfirm) this._offWinConfirm();
   },
   methods: {
     ...selectionMethods,
     ...taskMethods,
     ...transferMethods,
     ...dragDropMethods,
+
+    sessionById(id) {
+      return this.sessions.find((s) => s.id === id) || null;
+    },
+    /** 公用队列里的行自带 connId，暂停/移除/展开子节点都要回到它所属的会话。 */
+    sessionOf(row) {
+      if (!row || !row.connId) return null;
+      return this.sessions.find((s) => s.connId === row.connId) || null;
+    },
     pushDlog(msg) {
       // debug only — no on-screen overlay
-      console.log('[sftp]', new Date().toLocaleTimeString(), this.buildTag, msg);
+      console.log('[sftp]', new Date().toLocaleTimeString(), msg);
+    },
+    statusText(s) {
+      const map = {
+        idle: t('conn.idle'),
+        connecting: t('conn.connecting'),
+        ready: t('conn.ready'),
+        error: t('conn.error'),
+      };
+      return map[s.status] || s.status;
     },
     onUnload() {
-      if (this.connId && api.sftpClose) api.sftpClose(this.connId).catch(() => {});
+      this.sessions.forEach((s) => {
+        if (s.connId && api.sftpClose) api.sftpClose(s.connId).catch(() => {});
+      });
     },
-    async boot() {
-      if (this._sftpDestroyed) return;
-      if (!api.sftpOpen) {
-        this.status = 'error';
-        return;
-      }
-      this.status = 'connecting';
+
+    /** 主进程（或页签右键「复制会话」）要求新增一个远端会话页签；同一资产可以开多个。 */
+    addSession(meta) {
+      if (!meta || !meta.assetId) return;
+      const seq = this.sessions.filter((x) => x.assetId === meta.assetId).length + 1;
+      const s = createSession(meta, `ss-${++this._seq}`, seq);
+      this.sessions.push(s);
+      this.activateTab(s.id);
+      this.bootSession(s);
+    },
+    /** 走主进程同一条打开入口，复制出的会话按当前资产配置连接。 */
+    copySession(s) {
+      if (!s || !api.sftpOpenWindow) return;
+      api.sftpOpenWindow({ assetId: s.assetId }).catch((e) => {
+        this.$message.error(e.message || String(e));
+      });
+    },
+    activateTab(id) {
+      if (this.activeId === id) return;
+      this.activeId = id;
+      this.closeCtx();
+      const s = this.sessionById(id);
+      if (s && s.connId) this.syncTasks(s);
+      this.$nextTick(() => this.scrollTabIntoView(id));
+    },
+    async bootLocal() {
+      if (!api.sftpLocalList) return;
       try {
         const local = unwrap(await api.sftpLocalList());
-        if (this._sftpDestroyed) return;
+        if (this._destroyed) return;
         this.localHome = local.home || local.path;
         await this.goLocal(local.path || this.localHome);
-        if (this._sftpDestroyed) return;
-        const r = unwrap(await api.sftpOpen({ assetId: this.assetId }));
-        // Destruction may precede sftpOpen's result, when connId is still unset.
-        if (this._sftpDestroyed) {
+        this.refreshClipFiles();
+      } catch (e) {
+        this.$message.error(e.message || String(e));
+      }
+    },
+    async bootSession(s) {
+      if (!s || !s.alive || !api.sftpOpen) return;
+      s.status = 'connecting';
+      s.error = '';
+      try {
+        const r = unwrap(await api.sftpOpen({ assetId: s.assetId }));
+        // 连接返回前页签可能已被关闭
+        if (!s.alive) {
           if (r.connId && api.sftpClose) api.sftpClose(r.connId).catch(() => {});
           return;
         }
-        this.connId = r.connId;
-        this.remoteHome = r.home || '/';
-        this.status = 'ready';
-        await this.goRemote(this.remoteHome);
-        if (this._sftpDestroyed) return;
-        await this.syncTasks();
-        this.refreshClipFiles();
+        s.connId = r.connId;
+        s.remoteHome = r.home || '/';
+        s.status = 'ready';
+        const start = s.initialPath || s.remoteHome;
+        s.initialPath = '';
+        await this.goRemote(s, start, start === s.remoteHome ? null : s.remoteHome);
+        if (!s.alive) return;
+        await this.syncTasks(s);
       } catch (e) {
-        if (this._sftpDestroyed) return;
-        this.status = 'error';
-        this.$message.error(e.message || String(e));
+        if (!s.alive) return;
+        s.status = 'error';
+        s.error = e.code === 'SFTP_DISABLED' ? t('sftp.disabled') : e.message || String(e);
+        this.$message.error(s.error);
       }
+    },
+    releaseSession(s) {
+      if (!s) return;
+      s.alive = false;
+      if (s.recalcTimer) clearTimeout(s.recalcTimer);
+      s.recalcTimer = null;
+      s.recalcPending.clear();
+      s.folderStates.clear();
+      s.rowByKey.clear();
+      s.rowByXferId.clear();
+      if (s.connId && api.sftpClose) api.sftpClose(s.connId).catch(() => {});
+      s.connId = null;
+    },
+    closeTab(s) {
+      const hasTasks = s.tasks.some((x) => x.status === 'running' || x.status === 'paused' || x.status === 'queued');
+      if (!s.connId && !hasTasks) {
+        this.closeSession(s);
+        return;
+      }
+      this.$confirm(t('sftp.tabCloseMsg', { name: s.label }), t('tab.closeConfirmTitle'), {
+        confirmButtonText: t('msg.confirm'),
+        cancelButtonText: t('msg.cancel'),
+        type: 'warning',
+      }).then(() => this.closeSession(s)).catch(() => {});
+    },
+    /** 关窗即销毁面板内全部会话，是否放行由这里的判定决定。 */
+    hasLiveSession() {
+      return this.sessions.some((s) => s.alive && (s.connId || s.status === 'connecting'));
+    },
+    confirmWindowClose() {
+      if (!this.hasLiveSession()) {
+        this.answerWindowClose(true);
+        return;
+      }
+      this.$confirm(
+        t('sftp.windowCloseMsg'),
+        t('tab.closeConfirmTitle'),
+        { confirmButtonText: t('msg.confirm'), cancelButtonText: t('msg.cancel'), type: 'warning' }
+      ).then(
+        () => this.answerWindowClose(true),
+        () => this.answerWindowClose(false)
+      );
+    },
+    /** 答复必须送达主进程，链路失败也不能把窗口卡在拦截状态。 */
+    answerWindowClose(confirmed) {
+      if (!api.sftpCloseAnswer) return;
+      api.sftpCloseAnswer({ confirmed }).catch((e) => {
+        if (api.logWrite) {
+          api.logWrite({
+            level: 'warn', source: 'sftp', message: 'panel close answer failed',
+            meta: { confirmed, message: e.message },
+          }).catch(() => {});
+        }
+      });
+    },
+
+    /* ---- 页签栏内拖动排序（不拆分为独立窗口） ---- *
+     * dragover 挂在 document 捕获阶段：面板根节点和本机/远端的拖放兜底监听会消费元素级事件。
+     * 落位在 dragend 应用而不是 drop——drop 要求整条链上的 dragover 都保留 preventDefault，任何一层
+     * 文件拖放逻辑抢先处理就不会到达，而 dragend 始终在源页签上触发。
+     */
+    isTabDrag(e) {
+      const dt = e && e.dataTransfer;
+      return !!(dt && Array.from(dt.types || []).indexOf(TAB_DRAG_TYPE) >= 0);
+    },
+    inTabBar(e) {
+      const bar = this.$refs.tabbar;
+      if (!bar || !bar.getBoundingClientRect) return false;
+      const rect = bar.getBoundingClientRect();
+      return (
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom
+      );
+    },
+    onSessionDragStart(e, s) {
+      if (!e.dataTransfer) return;
+      e.dataTransfer.effectAllowed = 'move';
+      try {
+        e.dataTransfer.setData(TAB_DRAG_TYPE, s.id);
+      } catch (_) {}
+      this.tabDragId = s.id;
+      this._tabDragging = true;
+      this._tabDragX = e.clientX;
+      this._tabOverBar = true;
+      document.addEventListener('dragover', this.onTabDragOverDoc, true);
+    },
+    onTabDragOverDoc(e) {
+      if (!this.tabDragId || !this.isTabDrag(e)) return;
+      this._tabDragX = e.clientX;
+      this._tabOverBar = this.inTabBar(e);
+      if (!this._tabOverBar) {
+        this.tabDropHint = '';
+        return;
+      }
+      e.preventDefault();
+      try {
+        e.dataTransfer.dropEffect = 'move';
+      } catch (_) {}
+      this.tabDropHint = this.tabDropTargetAt(e.clientX);
+      if (!this._tabScrollFrame) this._tabScrollFrame = requestAnimationFrame(this.scrollTabsForDrag);
+    },
+    tabEl(id) {
+      const bar = this.$refs.tabbar;
+      if (!bar) return null;
+      return Array.from(bar.querySelectorAll('.sftp-tab')).find((el) => el.dataset.tabId === id) || null;
+    },
+    /** 交出落点：拖拽页签插到它前面的页签 id；光标在目标页签右半区即插到它后面，越过栏尾为 END。 */
+    tabDropTargetAt(clientX) {
+      const others = this.sessions.filter((x) => x.id !== this.tabDragId);
+      for (let i = 0; i < others.length; i += 1) {
+        const el = this.tabEl(others[i].id);
+        if (!el) continue;
+        const rect = el.getBoundingClientRect();
+        if (clientX > rect.right) continue;
+        if (clientX < rect.left + rect.width / 2) return others[i].id;
+        return others[i + 1] ? others[i + 1].id : 'END';
+      }
+      return 'END';
+    },
+    isLastTab(s) {
+      return this.sessions.length > 0 && this.sessions[this.sessions.length - 1].id === s.id;
+    },
+    moveTabTo(id, before) {
+      const dragged = this.sessionById(id);
+      if (!dragged) return;
+      const next = this.sessions.filter((x) => x.id !== dragged.id);
+      const at = before === 'END' || !before ? next.length : next.findIndex((x) => x.id === before);
+      if (at < 0) return;
+      next.splice(at, 0, dragged);
+      this.sessions = next;
+    },
+    endSessionDrag(e) {
+      document.removeEventListener('dragover', this.onTabDragOverDoc, true);
+      if (this.tabDragId && e && this.inTabBar(e)) {
+        this.moveTabTo(this.tabDragId, this.tabDropTargetAt(e.clientX));
+      }
+      this.tabDragId = '';
+      this.tabDropHint = '';
+      this._tabDragging = false;
+      this._tabOverBar = false;
+      cancelAnimationFrame(this._tabScrollFrame);
+      this._tabScrollFrame = 0;
+      this._tabClickBlockedUntil = Date.now() + 150;
+    },
+    onTabClick(s) {
+      if (Date.now() < this._tabClickBlockedUntil) return;
+      this.activateTab(s.id);
+    },
+
+    /* ---- 页签栏溢出时的左右翻页与拖拽自动滚动 ---- */
+    observeTabBar() {
+      if (this._tabResizeObs) this._tabResizeObs.disconnect();
+      this._tabResizeObs = null;
+      const wrap = this.$refs.tabbar;
+      if (!wrap || !window.ResizeObserver) return;
+      this._tabResizeObs = new ResizeObserver(() => this.updateTabArrows());
+      this._tabResizeObs.observe(wrap);
+      if (wrap.firstElementChild) this._tabResizeObs.observe(wrap.firstElementChild);
+    },
+    updateTabArrows() {
+      const wrap = this.$refs.tabbar;
+      if (!wrap) return;
+      const max = wrap.scrollWidth - wrap.clientWidth;
+      this.tabOverflow = max > 1;
+      this.tabScrollLeft = wrap.scrollLeft > 0;
+      this.tabScrollRight = wrap.scrollLeft < max - 1;
+    },
+    scrollTabs(dir) {
+      const wrap = this.$refs.tabbar;
+      if (!wrap) return;
+      const max = wrap.scrollWidth - wrap.clientWidth;
+      const step = Math.max(120, Math.round(wrap.clientWidth * 0.6));
+      const target = Math.max(0, Math.min(max, wrap.scrollLeft + dir * step));
+      wrap.scrollTo({ left: target, behavior: 'smooth' });
+    },
+    scrollTabsForDrag() {
+      this._tabScrollFrame = 0;
+      const wrap = this.$refs.tabbar;
+      if (!wrap || !this.tabDragId || !this._tabOverBar) return;
+      const rect = wrap.getBoundingClientRect();
+      const dir = this._tabDragX < rect.left + 40 ? -1 : this._tabDragX > rect.right - 40 ? 1 : 0;
+      if (!dir) return;
+      const previous = wrap.scrollLeft;
+      wrap.scrollLeft += dir * 12;
+      if (wrap.scrollLeft === previous) return;
+      this.tabDropHint = this.tabDropTargetAt(this._tabDragX);
+      this._tabScrollFrame = requestAnimationFrame(this.scrollTabsForDrag);
+    },
+    scrollTabIntoView(id) {
+      const wrap = this.$refs.tabbar;
+      const el = wrap && this.tabEl(id);
+      if (!wrap || !el) return;
+      const wr = wrap.getBoundingClientRect();
+      const tr = el.getBoundingClientRect();
+      if (tr.left < wr.left) wrap.scrollLeft -= Math.ceil(wr.left - tr.left);
+      else if (tr.right > wr.right) wrap.scrollLeft += Math.ceil(tr.right - wr.right);
+      this.updateTabArrows();
+    },
+
+    /* ---- 页签右键菜单：与主标签栏同一套操作 ---- */
+    onTabContextmenu(e, s) {
+      const items = [
+        { label: t('tab.refresh'), icon: 'el-icon-refresh', act: 'refresh', id: s.id },
+        { label: t('tab.copySession'), icon: 'el-icon-document-copy', act: 'copy', id: s.id },
+        { sep: true },
+        { label: t('tab.closeCurrent'), icon: 'el-icon-close', act: 'closeCurrent', id: s.id },
+        { label: t('tab.closeOthers'), icon: 'el-icon-circle-close', act: 'closeOthers', id: s.id },
+        { label: t('tab.closeLeft'), icon: 'el-icon-back', act: 'closeLeft', id: s.id },
+        { label: t('tab.closeRight'), icon: 'el-icon-right', act: 'closeRight', id: s.id },
+        { label: t('tab.closeAll'), icon: 'el-icon-error', act: 'closeAll', id: s.id },
+      ];
+      this.$refs.tabCtxMenu.open(e, items);
+    },
+    onTabCtxSelect(item) {
+      if (!item) return;
+      const index = this.sessions.findIndex((x) => x.id === item.id);
+      const s = index >= 0 ? this.sessions[index] : null;
+      if (!s) return;
+      if (item.act === 'refresh') this.goRemote(s, s.remotePath);
+      else if (item.act === 'copy') this.copySession(s);
+      else if (item.act === 'closeCurrent') this.closeTab(s);
+      else if (item.act === 'closeOthers') this.closeTabsBulk(this.sessions.filter((x) => x.id !== s.id));
+      else if (item.act === 'closeLeft') this.closeTabsBulk(this.sessions.slice(0, index));
+      else if (item.act === 'closeRight') this.closeTabsBulk(this.sessions.slice(index + 1));
+      else if (item.act === 'closeAll') this.closeTabsBulk(this.sessions.slice());
+    },
+    closeTabsBulk(targets) {
+      const list = (targets || []).filter((x) => x && x.alive);
+      if (!list.length) return;
+      const active = list.filter(
+        (x) => x.connId || x.tasks.some((k) => k.status === 'running' || k.status === 'paused' || k.status === 'queued')
+      ).length;
+      const run = () => list.slice().forEach((x) => this.closeSession(x));
+      if (!active) {
+        run();
+        return;
+      }
+      this.$confirm(
+        t('tab.closeBulkConfirmMsg', { count: active }),
+        t('tab.closeConfirmTitle'),
+        { confirmButtonText: t('msg.confirm'), cancelButtonText: t('msg.cancel'), type: 'warning' }
+      ).then(run).catch(() => {});
+    },
+    /** 不做二次确认的关闭：批量操作已经确认过整个集合。 */
+    closeSession(s) {
+      const index = this.sessions.findIndex((x) => x.id === s.id);
+      if (index < 0) return;
+      const next = this.sessions[index + 1] || this.sessions[index - 1];
+      this.releaseSession(s);
+      this.sessions.splice(index, 1);
+      if (this.activeId === s.id) this.activateTab(next ? next.id : '');
     },
 
     startSplit(type) {
@@ -355,16 +795,16 @@ export default {
     onSplitMove(e) {
       const root = this.$refs.root;
       if (!root || !this._split) return;
-      const rect = root.getBoundingClientRect();
       if (this._split === 'h') {
+        const rect = root.getBoundingClientRect();
         const pct = ((e.clientY - rect.top) / rect.height) * 100;
         this.topPct = Math.min(78, Math.max(28, pct));
-      } else {
-        const panels = this.$refs.panels;
-        const prect = panels ? panels.getBoundingClientRect() : rect;
-        const pct = ((e.clientX - prect.left) / prect.width) * 100;
-        this.leftPct = Math.min(72, Math.max(28, pct));
+        return;
       }
+      const panels = this.$refs.panels;
+      const rect = panels ? panels.getBoundingClientRect() : root.getBoundingClientRect();
+      const pct = ((e.clientX - rect.left) / rect.width) * 100;
+      this.leftPct = Math.min(72, Math.max(28, pct));
     },
     onSplitUp() {
       this._split = null;
@@ -413,23 +853,29 @@ export default {
         this.localLoading = false;
       }
     },
-    async goRemote(p) {
-      if (!this.connId || this.remoteLoading) return;
+    /** fallback 只用于首个目录（来自 SSH 终端的 cwd）：进不去时静默回家目录，不弹错误。 */
+    async goRemote(s, p, fallback) {
+      if (!s || !s.alive || !s.connId || s.remoteLoading) return;
       const target = normalizeRemotePath(p) || '/';
-      this.remoteLoading = true;
+      s.remoteLoading = true;
+      let failed = null;
       try {
-        const r = unwrap(await api.sftpList(this.connId, target));
-        this.remotePath = normalizeRemotePath(r.path || target);
-        this.remotePathInput = this.remotePath;
+        const r = unwrap(await api.sftpList(s.connId, target));
+        if (!s.alive) return;
+        s.remotePath = normalizeRemotePath(r.path || target);
+        s.remotePathInput = s.remotePath;
         const items = (r.items || []).filter((x) => x.name !== '.' && x.name !== '..');
-        this.remoteItems = sortItems([PARENT_ROW, ...items], this.remoteSort);
-        this.remoteSel = [];
-        this.remoteAnchor = '';
+        s.remoteItems = sortItems([PARENT_ROW, ...items], s.remoteSort);
+        s.remoteSel = [];
+        s.remoteAnchor = '';
       } catch (e) {
-        this.$message.error(e.message);
+        failed = e;
       } finally {
-        this.remoteLoading = false;
+        if (s.alive) s.remoteLoading = false;
       }
+      if (!failed || !s.alive) return;
+      if (fallback) return this.goRemote(s, fallback);
+      this.$message.error(failed.message);
     },
     localUp() {
       if (this.localComputer) return;
@@ -437,8 +883,8 @@ export default {
       if (/^[A-Za-z]:[\\/]?$/.test(this.localPath)) return this.loadDrives();
       this.goLocal(parentLocal(this.localPath) || this.localHome);
     },
-    remoteUp() {
-      this.goRemote(parentRemote(this.remotePath));
+    remoteUp(s) {
+      this.goRemote(s, parentRemote(s.remotePath));
     },
     onSortChange(side, key) {
       const cur = side === 'local' ? this.localSort : this.remoteSort;
@@ -458,12 +904,12 @@ export default {
       if (f.isParent) return this.localUp();
       if (f.isDrive) return this.goLocal(f.path);
       if (f.isDir) return this.goLocal(joinLocal(this.localPath, f.name));
-      this.uploadPaths([joinLocal(this.localPath, f.name)]);
+      this.uploadPaths(this.s, [joinLocal(this.localPath, f.name)], this.remotePath);
     },
-    onRemoteDbl(f) {
-      if (f.isParent) return this.remoteUp();
-      if (f.isDir) return this.goRemote(joinRemote(this.remotePath, f.name));
-      this.downloadPaths([joinRemote(this.remotePath, f.name)]);
+    onRemoteDbl(s, f) {
+      if (f.isParent) return this.remoteUp(s);
+      if (f.isDir) return this.goRemote(s, joinRemote(s.remotePath, f.name));
+      this.downloadPaths(s, [joinRemote(s.remotePath, f.name)], this.localPath);
     },
 
     onBlankCtx(e, side) {
@@ -487,7 +933,7 @@ export default {
           has = false;
         }
       }
-      if (this._sftpDestroyed) return;
+      if (this._destroyed) return;
       this.clipHasFiles = has;
       const item = (this.ctx.items || []).find((x) => x.act === 'paste');
       if (item && this.ctx.visible) item.disabled = !has;
@@ -516,25 +962,27 @@ export default {
     async runCtx(it) {
       const { side, item } = this.ctx;
       this.closeCtx();
+      const s = this.s;
+      if (!s) return;
       const targets = this.selItems(side);
       const list = targets.length ? targets : item ? [item] : [];
       const localOf = (x) => joinLocal(this.localPath, x.name);
-      const remoteOf = (x) => joinRemote(this.remotePath, x.name);
+      const remoteOf = (x) => joinRemote(s.remotePath, x.name);
       try {
         if (it.act === 'upload-folder' && item && item.isDir) {
-          await this.transferFolderUpload(localOf(item), this.remotePath);
+          await this.transferFolderUpload(s, localOf(item), s.remotePath);
           return;
         }
         if (it.act === 'upload-selected' || it.act === 'upload-file') {
           for (const x of list.filter((y) => y.isDir)) {
-            await this.transferFolderUpload(localOf(x), this.remotePath);
+            await this.transferFolderUpload(s, localOf(x), s.remotePath);
           }
           const files = list.filter((y) => !y.isDir);
-          if (files.length) await this.uploadPaths(files.map(localOf), this.remotePath);
+          if (files.length) await this.uploadPaths(s, files.map(localOf), s.remotePath);
           return;
         }
         if (it.act === 'download-folder' && item && item.isDir) {
-          await this.transferFolderDownload(remoteOf(item), this.localPath);
+          await this.transferFolderDownload(s, remoteOf(item), this.localPath);
           return;
         }
         if (it.act === 'download-here' && list.length) {
@@ -542,13 +990,13 @@ export default {
           for (const x of list) {
             if (x.isDir) {
               await api.sftpLocalMkdir(dir, x.name);
-              await this.downloadRemoteDir(remoteOf(x), joinLocal(dir, x.name));
+              await this.downloadRemoteDir(s, remoteOf(x), joinLocal(dir, x.name));
             } else {
-              await this.startDownload(remoteOf(x), joinLocal(dir, x.name));
+              await this.startDownload(s, remoteOf(x), joinLocal(dir, x.name));
             }
           }
           if (list.some((x) => x.isDir)) this.$message.success(t('sftp.downloadDone'));
-          this.syncTasks();
+          this.syncTasks(s);
           setTimeout(() => this.goLocal(dir), 400);
           return;
         }
@@ -561,13 +1009,13 @@ export default {
           for (const x of list) {
             if (x.isDir) {
               await api.sftpLocalMkdir(dir, x.name);
-              await this.downloadRemoteDir(remoteOf(x), joinLocal(dir, x.name));
+              await this.downloadRemoteDir(s, remoteOf(x), joinLocal(dir, x.name));
             } else {
-              await this.startDownload(remoteOf(x), joinLocal(dir, x.name));
+              await this.startDownload(s, remoteOf(x), joinLocal(dir, x.name));
             }
           }
           if (list.some((x) => x.isDir)) this.$message.success(t('sftp.downloadDone'));
-          this.syncTasks();
+          this.syncTasks(s);
           return;
         }
         if (it.act === 'paste') {
@@ -586,14 +1034,14 @@ export default {
             unwrap(await api.sftpLocalMkdir(this.localPath, name));
             await this.goLocal(this.localPath);
           } else {
-            unwrap(await api.sftpMkdir(this.connId, joinRemote(this.remotePath, name)));
-            await this.goRemote(this.remotePath);
+            unwrap(await api.sftpMkdir(s.connId, joinRemote(s.remotePath, name)));
+            await this.goRemote(s, s.remotePath);
           }
           return;
         }
         if (it.act === 'refresh') {
           if (side === 'local') await this.goLocal(this.localPath);
-          else await this.goRemote(this.remotePath);
+          else await this.goRemote(s, s.remotePath);
           return;
         }
         if (it.act === 'select-all') {
@@ -612,8 +1060,8 @@ export default {
             unwrap(await api.sftpLocalRename(localOf(item), joinLocal(this.localPath, neu)));
             await this.goLocal(this.localPath);
           } else {
-            unwrap(await api.sftpRename(this.connId, remoteOf(item), joinRemote(this.remotePath, neu)));
-            await this.goRemote(this.remotePath);
+            unwrap(await api.sftpRename(s.connId, remoteOf(item), joinRemote(s.remotePath, neu)));
+            await this.goRemote(s, s.remotePath);
           }
           return;
         }
@@ -627,14 +1075,14 @@ export default {
           for (const x of list) {
             try {
               if (side === 'local') unwrap(await api.sftpLocalUnlink(localOf(x), x.isDir));
-              else unwrap(await api.sftpUnlink(this.connId, remoteOf(x), x.isDir));
+              else unwrap(await api.sftpUnlink(s.connId, remoteOf(x), x.isDir));
             } catch (e) {
               failed.push(`${x.name}: ${e.message || e}`);
             }
           }
           if (failed.length) this.$message.error(failed.join('\n'));
           if (side === 'local') await this.goLocal(this.localPath);
-          else await this.goRemote(this.remotePath);
+          else await this.goRemote(s, s.remotePath);
         }
       } catch (err) {
         if (err !== 'cancel' && err !== 'close') this.$message.error(err.message || String(err));
@@ -661,6 +1109,72 @@ export default {
   padding: 8px 8px 0 8px;
   box-sizing: border-box;
 }
+.sftp-right {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* 页签栏作为远端面板的头部：同色背景、方角相接，共用一条分隔线而不是叠成两条 */
+.sftp-tabbar-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+}
+.sftp-tabbar {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sftp-tab .c-name {
+  max-width: 180px;
+}
+.sftp-remote-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  position: relative;
+  margin-top: -1px;
+}
+.sftp-remote-slot {
+  flex: 1 1 auto;
+  min-width: 0;
+  position: relative;
+  display: flex;
+}
+.sftp-remote-slot .sftp-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.sftp-empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.sftp-session-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+}
+.sftp-session-error .err-text {
+  font-size: 12px;
+  color: #f56c6c;
+  max-width: 70%;
+  text-align: center;
+}
 .splitter {
   flex: 0 0 auto;
   background: transparent;
@@ -676,7 +1190,7 @@ export default {
 .splitter-h {
   height: 8px;
   cursor: row-resize;
-  margin: 2px 8px;
+  margin: 2px 0;
 }
 .splitter-v::after {
   content: '';
@@ -700,6 +1214,19 @@ export default {
 }
 .splitter:hover::after {
   background: var(--accent);
+}
+.conn-meta {
+  margin-left: 8px;
+  white-space: nowrap;
+}
+.conn-meta .conn-tag {
+  margin-left: 0;
+}
+.conn-host {
+  margin-left: 6px;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--text-3);
 }
 .conn-tag {
   margin-left: 8px;

@@ -480,6 +480,16 @@ export default {
       if (!results.every(Boolean)) return;
       this.testing = true;
       this.testingId = m.id;
+      const method = { protocol: m.id, port: row.port, advanced: row.advanced || {} };
+      if (m.id === 'sftp') {
+        // SFTP 会话复用 SSH 方式的认证与代理配置，探测也要按同一条合并配置发起；
+        // SSH 未启用时真实连接不会合并它，探测也不能合并，否则两边结论不一致
+        const sshRow = this.draftRow('ssh');
+        if (sshRow && sshRow.enabled) {
+          method.advanced = { ...(sshRow.advanced || {}), ...(row.advanced || {}) };
+          method.port = row.port || sshRow.port || 22;
+        }
+      }
       try {
         const r = unwrap(
           await api.sessionTest({
@@ -488,7 +498,7 @@ export default {
               user: this.form.user,
               pass: this.form.pass,
             },
-            method: { protocol: m.id, port: row.port, advanced: row.advanced || {} },
+            method,
           })
         );
         if (r && r.ok) {
@@ -508,6 +518,7 @@ export default {
             VNC_NO_AUTH: t('asset.testVncNoAuth'),
             VNC_REJECTED: t('asset.testVncRejected'),
             RDP_BAD_RESPONSE: t('asset.testRdpBad'),
+            SFTP_UNAVAILABLE: t('asset.testSftpUnavailable'),
           };
           const detail = r && (r.error || r.__error);
           const base = map[code];

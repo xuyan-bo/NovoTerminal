@@ -2,7 +2,7 @@ const fs = require('fs');
 const { RdpWindowsMstscAdapter } = require('./adapters/RdpWindowsMstscAdapter');
 const { RdpXfreerdpAdapter } = require('./adapters/RdpXfreerdpAdapter');
 const { RdpWfreerdpAdapter } = require('./adapters/RdpWfreerdpAdapter');
-const { tcpProbe, testSsh, testVnc, testRdp } = require('./testers');
+const { tcpProbe, testSsh, testSftp, testVnc, testRdp } = require('./testers');
 
 class SessionManager {
   constructor({ store, send, log }) {
@@ -98,6 +98,18 @@ class SessionManager {
 
     if (protocol === 'ssh') {
       return testSsh({
+        host,
+        port,
+        username: asset.user,
+        password: asset.pass,
+        advanced,
+        ...context,
+        log: this.log,
+      });
+    }
+    if (protocol === 'sftp') {
+      // advanced 由渲染层按「SSH 认证 + SFTP 传输参数」合并后传入，与 SftpManager 的会话配置同源
+      return testSftp({
         host,
         port,
         username: asset.user,

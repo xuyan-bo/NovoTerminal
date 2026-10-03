@@ -5,10 +5,15 @@ import { formatSize, parentLocal, parentRemote, isTaskFinished } from './utils';
 /** Folder totals are only worth recomputing a few times per second, not per progress event. */
 const RECALC_THROTTLE_MS = 400;
 
+/**
+ * Task rows live in their own session (`s.tasks`), because progress events keep arriving for
+ * background sessions while the user reads another tab. The queue table itself is shared, so the
+ * four table-facing entry points below resolve the owning session from the row's `connId`.
+ */
 export default {
   isTaskFinished,
   /** Rows are rendered lazily and updated in place, so they must be observable on their own. */
-  makeTaskRow(fields) {
+  makeTaskRow(s, fields) {
     return Vue.observable(
       Object.assign(
         {
@@ -19,17 +24,21 @@ export default {
           error: '',
           fileCount: 0,
           doneCount: 0,
+          // 公用队列里每一行要标明所属会话，并按提交时间倒序排列
+          connId: s ? s.connId : null,
+          sessionName: s ? s.label : '',
+          createdAt: Date.now(),
         },
         fields
       )
     );
   },
-  folderState(rootId) {
-    return this._folderStates.get(rootId) || null;
+  folderState(s, rootId) {
+    return (s && s.folderStates.get(rootId)) || null;
   },
   /** A folder task shows up in the queue before anything is enumerated. */
-  registerFolderRoot(root) {
-    this._folderStates.set(root.taskId, {
+  registerFolderRoot(s, root) {
+    s.folderStates.set(root.taskId, {
       root,
       rootId: root.taskId,
       done: false,
@@ -37,11 +46,11 @@ export default {
       paused: false,
       dirs: new Map(),
     });
-    this.dirWait(this.folderState(root.taskId), root);
-    this.tasks = [root, ...this.tasks];
+    this.dirWait(this.folderState(s, root.taskId), root);
+    s.tasks = [root, ...s.tasks];
   },
-  forgetFolderTree(rootId) {
-    const state = this._folderStates.get(rootId);
+  forgetFolderTree(s, rootId) {
+    const state = s.folderStates.get(rootId);
     if (!state) return;
     state.canceled = true;
     state.dirs.forEach((entry) => {
@@ -52,12 +61,12 @@ export default {
     });
     state.dirs.clear();
     const drop = (row) => {
-      this._rowByKey.delete(this.childKey(row));
-      if (row.xferId) this._rowByXferId.delete(row.xferId);
+      s.rowByKey.delete(this.childKey(row));
+      if (row.xferId) s.rowByXferId.delete(row.xferId);
       (row.children || []).forEach(drop);
     };
     drop(state.root);
-    this._folderStates.delete(rootId);
+    s.folderStates.delete(rootId);
   },
   /** Resolve point for a lazily rendered directory node. */
   dirWait(state, row) {
@@ -73,37 +82,42 @@ export default {
     }
     return entry;
   },
-  markDirScanned(rootId, row) {
-    const entry = this.dirWait(this.folderState(rootId), row);
+  markDirScanned(s, rootId, row) {
+    const entry = this.dirWait(this.folderState(s, rootId), row);
     if (entry && !entry.done) {
       entry.done = true;
       entry.resolve((row.children || []).slice());
     }
   },
   /** Progress events carry the main-process id, row keys stay stable. */
-  bindTransfer(row, xferId) {
+  bindTransfer(s, row, xferId) {
     if (!row || !xferId) return;
     row.xferId = xferId;
-    this._rowByXferId.set(xferId, row);
+    s.rowByXferId.set(xferId, row);
   },
-  finishFolderScan(root) {
-    const state = this.folderState(root && root.taskId);
+  finishFolderScan(s, root) {
+    const state = this.folderState(s, root && root.taskId);
     if (!state || state.canceled) return;
     state.done = true;
-    this.recalcTree(root);
-    this.syncTasks();
+    this.recalcTree(s, root);
+    this.syncTasks(s);
   },
   /** Element asks for a node's children only when the user expands it. */
   loadTreeChildren(row, treeNode, resolve) {
     const kids = (row && row.children) || [];
-    const state = this.folderState((row && row.rootId) || (row && row.taskId));
+    const s = this.sessionOf(row);
+    if (!s) {
+      resolve(kids.slice());
+      return;
+    }
+    const state = this.folderState(s, (row && row.rootId) || (row && row.taskId));
     const entry = state ? this.dirWait(state, row) : null;
     if (!entry || entry.done) {
       resolve(kids.slice());
       return;
     }
     entry.promise.then(() => {
-      if (this._sftpDestroyed) return;
+      if (!s.alive) return;
       resolve(((row && row.children) || []).slice());
     });
   },
@@ -124,12 +138,12 @@ export default {
    * Attach one directory's freshly listed entries under its folder row.
    * `pathOf` maps a listing entry to { sourcePath, targetPath, size }.
    */
-  addDiscoveredChildren(root, parentRow, entries, direction, pathOf) {
-    const state = this.folderState(root.taskId);
+  addDiscoveredChildren(s, root, parentRow, entries, direction, pathOf) {
+    const state = this.folderState(s, root.taskId);
     const rows = (entries || []).map((entry) => {
       const p = pathOf(entry) || {};
       const isDir = !!entry.isDir;
-      const row = this.makeTaskRow({
+      const row = this.makeTaskRow(s, {
         // Stable row key: the transfer id from the main process lands in xferId instead.
         taskId: `${root.taskId}:${isDir ? 'd' : 'c'}:${p.targetPath || entry.name}`,
         rootId: root.taskId,
@@ -149,23 +163,23 @@ export default {
         row.children = [];
         this.dirWait(state, row);
       }
-      this._rowByKey.set(this.childKey(row), row);
+      s.rowByKey.set(this.childKey(row), row);
       return row;
     });
     parentRow.children = rows;
     return rows;
   },
   /** Coalesce tree recomputation; a folder scan can produce thousands of updates per second. */
-  scheduleRecalc(root) {
+  scheduleRecalc(s, root) {
     if (!root) return;
-    this._recalcPending.add(root);
-    if (this._recalcTimer) return;
-    this._recalcTimer = setTimeout(() => {
-      this._recalcTimer = null;
-      if (this._sftpDestroyed) return;
-      const roots = Array.from(this._recalcPending);
-      this._recalcPending.clear();
-      roots.forEach((r) => this.recalcTree(r));
+    s.recalcPending.add(root);
+    if (s.recalcTimer) return;
+    s.recalcTimer = setTimeout(() => {
+      s.recalcTimer = null;
+      if (!s.alive) return;
+      const roots = Array.from(s.recalcPending);
+      s.recalcPending.clear();
+      roots.forEach((r) => this.recalcTree(s, r));
     }, RECALC_THROTTLE_MS);
   },
   recalcFolder(parent, scanDone, paused) {
@@ -206,8 +220,8 @@ export default {
     return parent;
   },
   /** Recalculate every folder node of a task tree, deepest first. */
-  recalcTree(root) {
-    const state = this.folderState(root && root.taskId);
+  recalcTree(s, root) {
+    const state = this.folderState(s, root && root.taskId);
     const scanDone = state ? state.done : true;
     const paused = !!(state && state.paused);
     const visit = (row, isRoot) => {
@@ -241,51 +255,58 @@ export default {
     return `${(row && row.sourcePath) || ''}|${(row && row.targetPath) || ''}`;
   },
   /** Progress events carry the main-process id; folder rows are keyed by their stable row id. */
-  findFolderRow(p) {
+  findFolderRow(s, p) {
     if (!p) return null;
-    const byXfer = p.taskId ? this._rowByXferId.get(p.taskId) : null;
+    const byXfer = p.taskId ? s.rowByXferId.get(p.taskId) : null;
     if (byXfer) return byXfer;
     const key = this.childKey(p);
-    return key === '|' ? null : this._rowByKey.get(key) || null;
+    return key === '|' ? null : s.rowByKey.get(key) || null;
   },
-  mergeTask(p) {
-    if (!p || !p.taskId) return;
-    const row = this.findFolderRow(p);
+  mergeTask(s, p) {
+    if (!s || !s.alive || !p || !p.taskId) return;
+    const row = this.findFolderRow(s, p);
     if (row) {
       // In-place update keeps the row identity the table cells already depend on.
       Object.assign(row, p, { taskId: row.taskId, isFolder: false, isDir: row.isDir, xferId: p.taskId });
-      this._rowByXferId.set(p.taskId, row);
-      const state = this.folderState(row.rootId);
-      this.scheduleRecalc(state ? state.root : row);
+      s.rowByXferId.set(p.taskId, row);
+      const state = this.folderState(s, row.rootId);
+      this.scheduleRecalc(s, state ? state.root : row);
       return;
     }
-    const i = this.tasks.findIndex((x) => x.taskId === p.taskId);
-    const prev = i >= 0 ? this.tasks[i] : null;
-    const merged = i >= 0 ? { ...this.tasks[i], ...p } : { ...p };
-    if (i >= 0) this.$set(this.tasks, i, merged);
-    else this.tasks.unshift(merged);
+    const i = s.tasks.findIndex((x) => x.taskId === p.taskId);
+    const prev = i >= 0 ? s.tasks[i] : null;
+    const merged =
+      i >= 0
+        ? { ...s.tasks[i], ...p }
+        : { ...p, connId: s.connId, sessionName: s.label, createdAt: Date.now() };
+    if (i >= 0) s.tasks.splice(i, 1, merged);
+    else s.tasks.unshift(merged);
     if (merged.status === 'error' && (!prev || prev.status !== 'error')) {
       this.$message.error(`${merged.name}: ${merged.error || this.$t('sftp.transferFailed')}`);
     }
     if (merged.status === 'done' && (!prev || prev.status !== 'done')) {
-      this.refreshAfterDone(merged);
-      this.tasks = this.tasks.filter((x) => !(x.taskId === merged.taskId && x.status === 'done'));
+      this.refreshAfterDone(s, merged);
+      s.tasks = s.tasks.filter((x) => !(x.taskId === merged.taskId && x.status === 'done'));
     }
   },
-  refreshAfterDone(task) {
+  refreshAfterDone(s, task) {
     if (!task) return;
     if (task.direction === 'upload') {
       const dir = parentRemote(task.targetPath);
-      if (dir === this.remotePath) this.goRemote(this.remotePath);
+      if (dir === s.remotePath) this.goRemote(s, s.remotePath);
     } else {
       const dir = parentLocal(task.targetPath);
-      if (dir === this.localPath) this.goLocal(this.localPath);
+      // The local panel is shared, so a background session must not navigate it out from under
+      // the user; the row itself already shows completion.
+      if (s === this.s && dir === this.localPath) this.goLocal(this.localPath);
     }
   },
-  async syncTasks() {
-    if (!api.sftpTasks) return;
+  async syncTasks(s) {
+    if (!s || !s.connId || !api.sftpTasks) return;
+    const connId = s.connId;
     try {
-      const list = unwrap(await api.sftpTasks());
+      const list = unwrap(await api.sftpTasks(connId));
+      if (!s.alive || s.connId !== connId) return;
       if (!Array.isArray(list)) return;
       const map = {};
       const keyMap = {};
@@ -295,23 +316,23 @@ export default {
         keyMap[this.childKey(x)] = x;
       });
       // Folder trees are scanned incrementally: patch known rows instead of rebuilding them.
-      this._folderStates.forEach((state) => {
+      s.folderStates.forEach((state) => {
         this.folderFiles(state.root).forEach((c) => {
           const m = (c.xferId && map[c.xferId]) || keyMap[this.childKey(c)];
           if (!m) return;
           Object.assign(c, m, { taskId: c.taskId, isDir: c.isDir, isFolder: false, xferId: m.taskId });
-          if (m.taskId) this._rowByXferId.set(m.taskId, c);
+          if (m.taskId) s.rowByXferId.set(m.taskId, c);
         });
-        this.scheduleRecalc(state.root);
+        this.scheduleRecalc(s, state.root);
       });
-      const childIds = new Set(this._rowByXferId.keys());
-      const childKeys = new Set(this._rowByKey.keys());
+      const childIds = new Set(s.rowByXferId.keys());
+      const childKeys = new Set(s.rowByKey.keys());
       const next = [];
       const dropped = [];
-      this.tasks.forEach((row) => {
+      s.tasks.forEach((row) => {
         if (!row) return;
         if (row.isFolder) {
-          const state = this.folderState(row.taskId);
+          const state = this.folderState(s, row.taskId);
           const keep = row.status !== 'done' || (state && !state.done);
           if (keep) next.push(row);
           else dropped.push(row);
@@ -321,10 +342,10 @@ export default {
         if (row.status === 'done') return;
         next.push(row);
       });
-      dropped.forEach((row) => this.forgetFolderTree(row.taskId));
+      dropped.forEach((row) => this.forgetFolderTree(s, row.taskId));
       const unchanged =
-        next.length === this.tasks.length && next.every((row, i) => row === this.tasks[i]);
-      if (!unchanged) this.tasks = next;
+        next.length === s.tasks.length && next.every((row, i) => row === s.tasks[i]);
+      if (!unchanged) s.tasks = next;
     } catch (_) {}
   },
   /** Pause the scan loop too, so queued files do not start while the folder is paused. */
@@ -339,10 +360,12 @@ export default {
   },
   async togglePause(task) {
     if (this.isTaskFinished(task)) return;
+    const s = this.sessionOf(task);
+    if (!s) return;
     const pause = task.status !== 'paused';
     try {
       if (task.isFolder) {
-        const state = this.folderState(task.taskId);
+        const state = this.folderState(s, task.taskId);
         if (state) state.paused = pause;
         const rows = this.folderFiles(task).filter((c) => c.xferId && !this.isTaskFinished(c));
         const ids = rows.map((c) => c.xferId);
@@ -355,37 +378,37 @@ export default {
           });
         }
         task.status = pause ? 'paused' : 'running';
-        this.recalcTree(task);
-        this.syncTasks();
+        this.recalcTree(s, task);
+        this.syncTasks(s);
         return;
       }
-      const state = task.rootId ? this.folderState(task.rootId) : null;
+      const state = task.rootId ? this.folderState(s, task.rootId) : null;
       if (!task.xferId && state) {
         // Not submitted yet: the only meaningful pause is the folder's scan gate
         state.paused = pause;
         task.status = pause ? 'paused' : 'queued';
-        this.recalcTree(state.root);
-        this.syncTasks();
+        this.recalcTree(s, state.root);
+        this.syncTasks(s);
         return;
       }
       const r = unwrap(await api.sftpPause(task.xferId || task.taskId, pause));
       if (!r || !r.ok) {
-        this.syncTasks();
+        this.syncTasks(s);
         return;
       }
-      this.mergeTask({ ...task, status: r.status || (pause ? 'paused' : 'running') });
-      this.syncTasks();
+      this.mergeTask(s, { ...task, status: r.status || (pause ? 'paused' : 'running') });
+      this.syncTasks(s);
     } catch (e) {
       this.$message.error(e.message);
     }
   },
-  async refreshListsAfterTaskRemove(task) {
+  async refreshListsAfterTaskRemove(s, task) {
     const dir = task && task.direction;
     const target = task && task.targetPath;
     if (dir === 'upload') {
-      const pdir = target ? parentRemote(target) : this.remotePath;
-      if (pdir === this.remotePath || (task && task.isFolder)) {
-        if (this.connId) await this.goRemote(this.remotePath);
+      const pdir = target ? parentRemote(target) : s.remotePath;
+      if (pdir === s.remotePath || (task && task.isFolder)) {
+        if (s.connId) await this.goRemote(s, s.remotePath);
       }
     } else if (dir === 'download') {
       const pdir = target ? parentLocal(target) : this.localPath;
@@ -394,14 +417,16 @@ export default {
       }
     } else {
       await this.goLocal(this.localPath);
-      if (this.connId) await this.goRemote(this.remotePath);
+      if (s.connId) await this.goRemote(s, s.remotePath);
     }
   },
   async removeTask(task) {
+    const s = this.sessionOf(task);
+    if (!s) return;
     try {
       const unfinished = (row) => row && (row.status === 'running' || row.status === 'paused');
       if (task.isFolder) {
-        const state = this.folderState(task.taskId);
+        const state = this.folderState(s, task.taskId);
         if (state) state.canceled = true;
         const ids = this.folderFiles(task)
           .filter((c) => c.xferId)
@@ -411,11 +436,11 @@ export default {
           if (api.sftpCancelBatch) unwrap(await api.sftpCancelBatch(ids));
           else for (const id of ids) { try { unwrap(await api.sftpCancel(id)); } catch (_) {} }
         }
-        this.tasks = this.tasks.filter((x) => x.taskId !== task.taskId);
+        s.tasks = s.tasks.filter((x) => x.taskId !== task.taskId);
         this.collapseFolder(task.taskId);
-        this.forgetFolderTree(task.taskId);
-        await this.refreshListsAfterTaskRemove(task);
-        this.syncTasks();
+        this.forgetFolderTree(s, task.taskId);
+        await this.refreshListsAfterTaskRemove(s, task);
+        this.syncTasks(s);
         return;
       }
       const wasUnfinished = unfinished(task);
@@ -423,13 +448,13 @@ export default {
       if (wasUnfinished && task.targetPath) {
         if (task.direction === 'download' && api.sftpLocalUnlink) {
           try { await api.sftpLocalUnlink(task.targetPath, false); } catch (_) {}
-        } else if (task.direction === 'upload' && this.connId && api.sftpUnlink) {
-          try { await api.sftpUnlink(this.connId, task.targetPath, false); } catch (_) {}
+        } else if (task.direction === 'upload' && s.connId && api.sftpUnlink) {
+          try { await api.sftpUnlink(s.connId, task.targetPath, false); } catch (_) {}
         }
       }
-      this.tasks = this.tasks.filter((x) => x.taskId !== task.taskId);
-      if (wasUnfinished) await this.refreshListsAfterTaskRemove(task);
-      this.syncTasks();
+      s.tasks = s.tasks.filter((x) => x.taskId !== task.taskId);
+      if (wasUnfinished) await this.refreshListsAfterTaskRemove(s, task);
+      this.syncTasks(s);
     } catch (e) {
       this.$message.error(e.message);
     }

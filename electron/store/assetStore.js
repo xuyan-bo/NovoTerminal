@@ -373,7 +373,7 @@ class AssetStore {
     const proto =
       (method && (method.proto || method.protocol)) ||
       String(mid).toUpperCase();
-    const defaultPort = mid === 'ssh' ? 22 : mid === 'vnc' ? 5900 : 3389;
+    const defaultPort = mid === 'ssh' || mid === 'sftp' ? 22 : mid === 'vnc' ? 5900 : 3389;
     const item = {
       id: asset.id,
       name: asset.name,

@@ -31,6 +31,10 @@ const XFER_MAX_FLIGHT = 16;
 const XFER_MIN_FLIGHT = 4;
 /** File-level cap implied by the budget: the smallest share still admits this many transfers. */
 const XFER_ACTIVE_LIMIT = Math.floor(XFER_REQUEST_BUDGET / XFER_MIN_FLIGHT);
+/** Upload/download block size when the asset leaves it unset. */
+const XFER_CHUNK_BYTES = 64 * 1024;
+/** Handshake + subsystem timeout when the asset leaves it unset. */
+const XFER_READY_TIMEOUT_MS = 20000;
 /** Terminal tasks are dropped this long after the renderer received their final event. */
 const TASK_PRUNE_MS = 5000;
 /** Minimum gap between two progress broadcasts of the same running task. */
@@ -39,6 +43,12 @@ const PROGRESS_INTERVAL_MS = 200;
 const DIR_CACHE_MAX = 20000;
 /** Concurrent partial-target cleanups while cancelling a folder subtree. */
 const CLEANUP_POOL = 16;
+
+function tunedInt(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
 
 /**
  * SFTP sessions + transfer tasks for the external SFTP window.
@@ -82,6 +92,7 @@ class SftpManager {
     task._lastSent = now;
     this.send('sftp:progress', {
       taskId: task.taskId,
+      connId: task.connId,
       name: task.name,
       size: task.size,
       transferred: task.transferred,
@@ -127,7 +138,7 @@ class SftpManager {
   _drainConn(connId) {
     const c = this.conns.get(connId);
     if (!c) return;
-    while (c.xferQueue.length && c.running.size < XFER_ACTIVE_LIMIT) {
+    while (c.xferQueue.length && c.running.size < c.tune.activeLimit) {
       const id = c.xferQueue.shift();
       const task = this.tasks.get(id);
       if (!task || task.paused || this._isFinished(task) || c.running.has(id)) continue;
@@ -183,16 +194,52 @@ class SftpManager {
     return /no such file|failure/i.test(String((err && err.message) || ''));
   }
 
+  /**
+   * SFTP 的端口与传输参数取资产自己的 sftp 行；认证、跳板机与主机密钥策略沿用同一资产的
+   * ssh 行，因此只有 SSH 配置的资产（从终端进入 SFTP）也能连接，此时用 SFTP 默认传输参数。
+   */
+  _sessionConfig(asset) {
+    const methods = asset.methods || {};
+    const sftp = methods.sftp && methods.sftp.enabled ? methods.sftp : null;
+    const ssh = methods.ssh && methods.ssh.enabled ? methods.ssh : null;
+    if (!sftp && !ssh) {
+      throw Object.assign(new Error('SFTP or SSH method not enabled'), { code: 'SFTP_DISABLED' });
+    }
+    const advanced = { ...((ssh && ssh.advanced) || {}), ...((sftp && sftp.advanced) || {}) };
+    const port = Number((sftp && sftp.port) || (ssh && ssh.port)) || 22;
+    return {
+      advanced,
+      port,
+      tune: {
+        activeLimit: tunedInt(advanced.concurrentTransfers, 1, XFER_ACTIVE_LIMIT, XFER_ACTIVE_LIMIT),
+        chunkBytes: tunedInt(advanced.chunkSize, 32, 1024, XFER_CHUNK_BYTES / 1024) * 1024,
+        readyTimeout: tunedInt(advanced.connectTimeout, 5, 300, XFER_READY_TIMEOUT_MS / 1000) * 1000,
+      },
+    };
+  }
+
+  /** 控制面板页签与窗口标题用的只读视图；端口解析与 openSession 共用同一实现。 */
+  sessionMeta(asset) {
+    const { port } = this._sessionConfig(asset);
+    return { assetId: asset.id, host: asset.host || '', port, name: asset.name || '' };
+  }
+
   async openSession({ assetId, ownerId, verifyHostKey, promptKeyboard }) {
     const hit = this.store.findAsset(assetId);
     if (!hit) throw Object.assign(new Error('asset not found'), { code: 'NOT_FOUND' });
     const asset = hit.asset;
-    const method = asset.methods && asset.methods.ssh;
-    if (!method || !method.enabled) throw Object.assign(new Error('SSH method not enabled'), { code: 'SSH_DISABLED' });
+    let config;
+    try {
+      config = this._sessionConfig(asset);
+    } catch (error) {
+      this.log && this.log.error('sftp', 'sftp config unavailable', { assetId, code: error.code });
+      throw error;
+    }
     const connId = `sftp-${Date.now()}-${(++this._seq).toString(36)}`;
     const connection = createSshConnection({
-      host: asset.host, port: Number(method.port) || 22, username: asset.user || '', password: asset.pass,
-      advanced: method.advanced, verifyHostKey, promptKeyboard, log: this.log,
+      host: asset.host, port: config.port, username: asset.user || '', password: asset.pass,
+      advanced: config.advanced, verifyHostKey, promptKeyboard, log: this.log,
+      readyTimeout: config.tune.readyTimeout,
     });
     const rec = {
       connId,
@@ -200,7 +247,8 @@ class SftpManager {
       ownerId,
       assetId,
       host: asset.host,
-      port: Number(method.port) || 22,
+      port: config.port,
+      tune: config.tune,
       closedError: null,
       dirs: new Set(), // remote directories this session already created
       xferQueue: [], // task ids waiting for a transfer slot
@@ -224,7 +272,7 @@ class SftpManager {
       rec.client = client;
       const home = await Promise.race([
         new Promise((resolve, reject) => {
-          timer = setTimeout(() => reject(Object.assign(new Error('SFTP initialization timed out'), { code: 'SFTP_TIMEOUT' })), 20000);
+          timer = setTimeout(() => reject(Object.assign(new Error('SFTP initialization timed out'), { code: 'SFTP_TIMEOUT' })), config.tune.readyTimeout);
           client.sftp((error, sftp) => {
             if (rec.closedError || !this.pending.has(connId)) {
               if (sftp) sftp.end();
@@ -596,7 +644,7 @@ class SftpManager {
     const sftp = c.sftp;
     let localFd = null;
     let handle = null;
-    const CHUNK = 64 * 1024;
+    const CHUNK = c.tune.chunkBytes;
     let queued = 0;
     let donePos = 0;
     let inFlight = 0;
@@ -769,7 +817,7 @@ class SftpManager {
       }
 
       const sftp = c.sftp;
-      const CHUNK = 64 * 1024;
+      const CHUNK = c.tune.chunkBytes;
       let queued = 0;
       let donePos = 0;
       let inFlight = 0;
@@ -1029,10 +1077,11 @@ class SftpManager {
     }
   }
 
-  /** Polled every second by each SFTP window, so only live tasks are reported; a queued task's
-   *  row already exists in the tree and gets its running transition through the progress event. */
-  listTasks() {
-    const live = [...this.tasks.values()].filter((task) => task.status !== 'queued');
+  /** Polled every second by each SFTP session, so only live tasks of that connection are
+   *  reported; a queued task's row already exists in the tree and gets its running transition
+   *  through the progress event. */
+  listTasks(connId) {
+    const live = [...this.tasks.values()].filter((task) => task.status !== 'queued' && task.connId === connId);
     return live.map((task) => ({
       taskId: task.taskId,
       name: task.name,

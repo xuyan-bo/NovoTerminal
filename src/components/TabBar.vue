@@ -50,6 +50,12 @@
             <i v-else-if="isGlyphIcon(t.icon)" class="tab-glyph" :class="t.icon" aria-hidden="true"></i>
             <svg-icon v-else class="tab-glyph" :name="t.icon" />
             <span>{{ tabTitle(t) }}</span>
+            <span
+              v-if="t.connState"
+              class="conn-dot"
+              :class="t.connState"
+              :title="$t('conn.' + t.connState)"
+            ></span>
             <i
               v-if="t.closable"
               class="x el-icon-close"
@@ -376,11 +382,15 @@ export default {
       else if (tr.right > wr.right) wrap.scrollLeft += Math.ceil(tr.right - wr.right);
       this.updateTabArrows();
     },
+    /** 页签点与关闭确认共用这一判定：连接中或已连接都算活动会话。 */
+    isLiveTab(tab) {
+      return tab.connState === 'connecting' || tab.connState === 'ready';
+    },
     closeTabById(id) {
       if (this.draggedTabId || Date.now() < this._tabClickBlockedUntil) return;
       const tab = store.tabs.find((t) => t.id === id);
       if (!tab) return;
-      if (tab.connected) {
+      if (this.isLiveTab(tab)) {
         this.$confirm(
           t('tab.closeConfirmMsg', { name: tab.title }),
           t('tab.closeConfirmTitle'),
@@ -450,7 +460,7 @@ export default {
     closeTabsBulk(targets) {
       const closable = targets.filter((tb) => tb.closable);
       if (!closable.length) return;
-      const connected = closable.filter((tb) => tb.connected).length;
+      const connected = closable.filter((tb) => this.isLiveTab(tb)).length;
       const run = () => closable.forEach((tb) => closeTab(tb.id));
       if (!connected) {
         run();

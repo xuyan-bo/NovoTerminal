@@ -185,6 +185,12 @@ export const api = hasBridge
       onSftpDragReady() {
         return () => {};
       },
+      onSftpConfirmClose() {
+        return () => {};
+      },
+      async sftpCloseAnswer() {
+        return { ok: false, code: 'NO_BRIDGE' };
+      },
       async sftpLocalList() {
         return { path: '', items: [], home: '' };
       },
