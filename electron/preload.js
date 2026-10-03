@@ -88,6 +88,20 @@ const api = {
     return () => ipcRenderer.removeListener('ssh:state', handler);
   },
 
+  // SSH server monitor (per-session stats pushed to the owning window)
+  monitorStart: (sessionId, intervalSec) => ipcRenderer.invoke('monitor:start', sessionId, intervalSec),
+  monitorStop: (sessionId) => ipcRenderer.invoke('monitor:stop', sessionId),
+  onMonitorSnapshot: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('monitor:snapshot', handler);
+    return () => ipcRenderer.removeListener('monitor:snapshot', handler);
+  },
+  onMonitorEnd: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('monitor:end', handler);
+    return () => ipcRenderer.removeListener('monitor:end', handler);
+  },
+
   // VNC sessions (noVNC via WebSocket proxy)
   vncConnect: (req) => ipcRenderer.invoke('vnc:connect', req),
   vncDisconnect: (sessionId) => ipcRenderer.invoke('vnc:disconnect', sessionId),

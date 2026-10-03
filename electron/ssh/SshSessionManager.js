@@ -81,6 +81,7 @@ class SshSessionManager {
       const client = await Promise.race([rec.connection.ready, closed]);
       if (rec.closedError) throw rec.closedError;
       if (this.sessions.get(sessionId) !== rec) throw canceled();
+      rec.client = client;
       if (rec.x11) rec.x11.attach(client);
       const write = (decoder, data) => {
         if (this.sessions.get(sessionId) !== rec || rec.closedError) return;
@@ -138,6 +139,13 @@ class SshSessionManager {
   owns(sessionId, ownerId) {
     const rec = this.sessions.get(sessionId);
     return !!rec && rec.ownerId === ownerId;
+  }
+
+  /** Handles the monitor needs to exec read-only commands on a live session. */
+  monitorTarget(sessionId) {
+    const rec = this.sessions.get(sessionId);
+    if (!rec || !rec.ready || !rec.client) return null;
+    return { client: rec.client, charset: rec.adv.charset, host: rec.host, port: rec.port, ownerId: rec.ownerId };
   }
 
   /** Hand an existing session to another window's webContents without touching the SSH connection. */

@@ -44,7 +44,40 @@
         </button>
       </el-tooltip>
     </div>
-    <div ref="termEl" class="ssh-term"></div>
+    <div class="ssh-body">
+      <div class="ssh-term-main">
+        <button
+          type="button"
+          class="monitor-toggle"
+          :class="{ active: monitorOpen }"
+          :title="$t('monitor.toggleTip')"
+          @click="toggleMonitor"
+        >
+          <svg-icon name="monitor-pulse" :size="15" />
+        </button>
+        <div ref="termEl" class="ssh-term"></div>
+      </div>
+      <div class="ssh-monitor-host" :class="{ open: monitorOpen, dragging: monitorDragging }" :style="monitorHostStyle">
+        <div
+          v-show="monitorOpen"
+          ref="monitorSplitter"
+          class="monitor-splitter"
+          @mousedown="onSplitStart"
+        >
+          <span class="grip"></span>
+        </div>
+        <ssh-monitor-panel
+          v-if="monitorEver"
+          ref="monitorPanel"
+          :state="monitorState"
+          :meta="monitorMeta"
+          :snapshot="monitorSnapshot"
+          :interval-sec="monitorIntervalSec"
+          @close="closeMonitor"
+          @interval-change="onMonitorInterval"
+        />
+      </div>
+    </div>
     <transition name="fs-hint">
       <div v-if="fsHint" class="fs-hint">
         <kbd>Esc</kbd><span>{{ $t('ssh.fullscreenExitHint') }}</span>
@@ -69,7 +102,10 @@ const REMOTE_RESIZE_DEBOUNCE_MS = 220;
 
 export default {
   name: 'TerminalView',
-  components: { SshThemeDialog },
+  components: {
+    SshThemeDialog,
+    SshMonitorPanel: () => import('./SshMonitorPanel.vue'),
+  },
   mixins: [createFullscreenMixin({
     fallbackClass: 'is-terminal-fullscreen',
     onResize() { this.scheduleFit(); },
@@ -94,9 +130,22 @@ export default {
       offData: null,
       offState: null,
       ro: null,
+      roTerm: null,
+      monitorOpen: false,
+      monitorEver: false,
+      monitorState: 'probing',
+      monitorMeta: null,
+      monitorSnapshot: null,
+      monitorWidth: 30,
+      monitorDragging: false,
+      monitorIntervalSec: null,
     };
   },
   computed: {
+    monitorHostStyle() {
+      const pct = this.monitorOpen ? this.monitorWidth : 0;
+      return { width: pct + '%', flexBasis: pct + '%' };
+    },
     shortLabel() {
       return this.methodId === 'ssh' ? 'SSH' : String(this.methodId || '').toUpperCase();
     },
@@ -124,6 +173,14 @@ export default {
       const tab = store.tabs.find((t) => t.id === this.sessionId);
       if (tab) tab.connected = connected;
       this.$emit('connection', connected);
+      if (val === 'ready') {
+        if (this.monitorOpen && this.monitorState !== 'live') this.startMonitor();
+      } else if (val === 'ended' || val === 'error') {
+        if (this.monitorOpen) {
+          this.stopMonitor();
+          this.monitorState = 'offline';
+        }
+      }
     },
     // Tab switched back → layout is visible again; refit only, do NOT reconnect
     active(v) {
@@ -147,6 +204,10 @@ export default {
     this._connectVersion = 0;
     this._handedOff = false;
     this._inputSubscriptions = [];
+    this._offMonitor = null;
+    this._offMonitorEnd = null;
+    this._splitMove = null;
+    this._splitUp = null;
   },
   mounted() {
     this._fitTimer = null;
@@ -169,6 +230,29 @@ export default {
     window.removeEventListener('resize', this.scheduleFit);
     if (this._fitTimer) clearTimeout(this._fitTimer);
     if (this._rsTimer) clearTimeout(this._rsTimer);
+    if (this._offMonitor) {
+      this._offMonitor();
+      this._offMonitor = null;
+    }
+    if (this._offMonitorEnd) {
+      this._offMonitorEnd();
+      this._offMonitorEnd = null;
+    }
+    if (this._splitMove) {
+      window.removeEventListener('mousemove', this._splitMove);
+      this._splitMove = null;
+    }
+    if (this._splitUp) {
+      window.removeEventListener('mouseup', this._splitUp);
+      this._splitUp = null;
+    }
+    document.body.style.userSelect = '';
+    if (this.monitorOpen && this.liveSessionId && api.monitorStop) {
+      try {
+        const r = api.monitorStop(this.liveSessionId);
+        if (r && typeof r.then === 'function') r.catch(() => {});
+      } catch (_) {}
+    }
     // A handover means another window is about to re-host this very connection.
     if (this.liveSessionId && takeSessionHandover(this.sessionId)) this.releaseHost();
     else this.disconnectNow(true);
@@ -245,6 +329,10 @@ export default {
         this.ro = new ResizeObserver(() => this.scheduleFit());
         const target = this.$refs.wrapEl || this.$refs.termEl;
         if (target) this.ro.observe(target);
+        // The monitor panel changes the terminal width without touching the wrap, so the
+        // terminal element itself needs its own observer.
+        this.roTerm = new ResizeObserver(() => this.scheduleFit());
+        if (this.$refs.termEl) this.roTerm.observe(this.$refs.termEl);
       }
     },
 
@@ -422,6 +510,12 @@ export default {
         } catch (_) {}
         this.ro = null;
       }
+      if (this.roTerm) {
+        try {
+          this.roTerm.disconnect();
+        } catch (_) {}
+        this.roTerm = null;
+      }
       const termEl = this.$refs.termEl;
       if (termEl && this._onTermCtx) {
         try {
@@ -509,6 +603,8 @@ export default {
         this._sentRows = rows;
         if (this.term && r.tail) r.tail.forEach((chunk) => this.term.write(chunk));
         this.status = r.ready ? 'ready' : 'connecting';
+        // The previous host may have left a monitor runner polling for its now-dead window.
+        if (!this.monitorOpen) this.stopMonitor();
         refresh().catch(() => {});
         if (this.active && this.term) this.term.focus();
       } catch (e) {
@@ -611,6 +707,115 @@ export default {
       } else {
         this.disconnectNow(false);
       }
+    },
+
+    toggleMonitor() {
+      if (this.monitorOpen) {
+        this.closeMonitor();
+        return;
+      }
+      this.monitorOpen = true;
+      this.monitorEver = true;
+      this.subscribeMonitor();
+      if (this.status === 'ready') this.startMonitor();
+      else this.monitorState = 'offline';
+    },
+
+    closeMonitor() {
+      this.monitorOpen = false;
+      this.stopMonitor();
+    },
+
+    async onMonitorInterval(sec) {
+      const value = Number(sec);
+      if (!Number.isInteger(value) || value < 1 || value > 60) return;
+      this.monitorIntervalSec = value;
+      const sid = this.liveSessionId;
+      if (!sid || this.status !== 'ready' || !this.monitorOpen || !api.monitorStart) return;
+      try {
+        const r = unwrap(await api.monitorStart(sid, value));
+        if (this._disposed || this.liveSessionId !== sid) return;
+        if (r && r.intervalSec) this.monitorIntervalSec = r.intervalSec;
+      } catch (_) {
+        /* the running monitor keeps its old cadence */
+      }
+    },
+
+    subscribeMonitor() {
+      if (this._offMonitor || !api.onMonitorSnapshot) return;
+      this._offMonitor = api.onMonitorSnapshot((ev) => {
+        if (this._disposed || !ev || ev.sessionId !== this.liveSessionId) return;
+        this.monitorSnapshot = ev.snapshot;
+        this.monitorState = 'live';
+      });
+      if (api.onMonitorEnd) {
+        this._offMonitorEnd = api.onMonitorEnd((ev) => {
+          if (this._disposed || !ev || ev.sessionId !== this.liveSessionId) return;
+          this.monitorState = 'error';
+        });
+      }
+    },
+
+    async startMonitor() {
+      const sid = this.liveSessionId;
+      if (!api.monitorStart || !sid) {
+        this.monitorState = 'unsupported';
+        return;
+      }
+      this.monitorState = 'probing';
+      if (this.$refs.monitorPanel) this.$refs.monitorPanel.resetHistory();
+      try {
+        const r = unwrap(await api.monitorStart(sid, this.monitorIntervalSec || undefined));
+        if (this._disposed || this.liveSessionId !== sid || !this.monitorOpen) return;
+        if (!r || !r.supported) {
+          this.monitorState = r && r.reason === 'not-ready' ? 'offline' : 'unsupported';
+          return;
+        }
+        if (r.intervalSec) this.monitorIntervalSec = r.intervalSec;
+        this.monitorMeta = r.meta || null;
+        this.monitorSnapshot = r.snapshot || null;
+        this.monitorState = r.snapshot ? 'live' : 'probing';
+      } catch (e) {
+        if (this._disposed || this.liveSessionId !== sid) return;
+        this.monitorState = 'error';
+      }
+    },
+
+    stopMonitor() {
+      const sid = this.liveSessionId;
+      if (sid && api.monitorStop) {
+        try {
+          const r = api.monitorStop(sid);
+          if (r && typeof r.then === 'function') r.catch(() => {});
+        } catch (_) {}
+      }
+    },
+
+    onSplitStart(e) {
+      e.preventDefault();
+      if (this._splitMove) return;
+      const onMove = (ev) => {
+        const wrap = this.$refs.wrapEl;
+        if (!wrap) return;
+        const rect = wrap.getBoundingClientRect();
+        const pct = ((rect.right - ev.clientX) / rect.width) * 100;
+        this.monitorWidth = Math.min(60, Math.max(18, pct));
+      };
+      const onUp = () => {
+        this.monitorDragging = false;
+        document.body.style.userSelect = '';
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        this._splitMove = null;
+        this._splitUp = null;
+        this.scheduleFit();
+      };
+      this.monitorDragging = true;
+      document.body.style.userSelect = 'none';
+      this._splitMove = onMove;
+      this._splitUp = onUp;
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
     },
 
     async openSftp() {
@@ -765,6 +970,81 @@ export default {
   padding: 4px 6px 6px;
   box-sizing: border-box;
   background: var(--ssh-bg, #000000);
+}
+.ssh-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.ssh-term-main {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.ssh-monitor-host {
+  flex: 0 0 0%;
+  width: 0;
+  display: flex;
+  overflow: hidden;
+  transition: flex-basis 0.28s ease, width 0.28s ease;
+}
+.ssh-monitor-host.dragging {
+  transition: none;
+}
+.monitor-splitter {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--bg-panel, #151b23);
+  border-right: 1px solid var(--border, #2a3544);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.monitor-splitter:hover .grip,
+.ssh-monitor-host.dragging .grip {
+  background: var(--accent, #409eff);
+}
+.monitor-splitter .grip {
+  width: 2px;
+  height: 26px;
+  border-radius: 1px;
+  background: var(--border, #2a3544);
+  transition: background 0.15s ease;
+}
+/* Semicircular monitor toggle: flat edge flush with the terminal's right side, bulges left */
+.monitor-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 10;
+  width: 24px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border, #2a3544);
+  border-right: none;
+  border-radius: 22px 0 0 22px;
+  background: rgba(21, 27, 35, 0.55);
+  backdrop-filter: blur(2px);
+  color: var(--accent, #409eff);
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.18s ease, background 0.18s ease;
+}
+.monitor-toggle:hover {
+  opacity: 1;
+  background: rgba(28, 36, 48, 0.9);
+}
+.monitor-toggle.active {
+  opacity: 1;
+  background: var(--bg-elevated, #1c2430);
+  color: var(--text, #e6edf3);
 }
 .ssh-term /deep/ .xterm {
   height: 100%;

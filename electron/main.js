@@ -8,6 +8,7 @@ const APP_BUILD = 'rd2-1647';
 const { AssetStore } = require('./store/assetStore');
 const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
+const { SshMonitorManager } = require('./ssh/SshMonitorManager');
 const { SSH_DEFAULTS } = require('./ssh/connection');
 const { createHostKeyVerifier } = require('./ssh/hostKeys');
 const { SshPrompts } = require('./ssh/SshPrompts');
@@ -84,6 +85,7 @@ let win = null;
 let store = null;
 let sessions = null;
 let sshSessions = null;
+let sshMonitor = null;
 let vncSessions = null;
 let rdpSessions = null;
 let sftpManager = null;
@@ -109,6 +111,7 @@ const sshTests = new Map();
 
 function closeSshOwner(ownerId) {
   if (sshSessions) sshSessions.closeOwner(ownerId);
+  if (sshMonitor) sshMonitor.stopOwner(ownerId);
   if (sftpManager) sftpManager.closeOwner(ownerId);
   const tests = sshTests.get(ownerId);
   if (tests) for (const connection of tests) connection.close();
@@ -183,6 +186,15 @@ function send(channel, payload) {
   BrowserWindow.getAllWindows().forEach((w) => {
     if (w && !w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send(channel, payload);
   });
+}
+
+/** Targeted send used by SSH events: only the window currently hosting the session needs them. */
+function sendToOwner(channel, payload, ownerId) {
+  const owner = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && !w.webContents.isDestroyed() && w.webContents.id === ownerId);
+  if (!owner) return;
+  try {
+    owner.webContents.send(channel, payload);
+  } catch (_) {}
 }
 
 /** Which window currently owns a session tab's view: its detached window, else the main window. */
@@ -633,6 +645,14 @@ function registerIpc() {
     return sshSessions.disconnect(sid);
   }, true);
   handle('ssh:list', (sender) => sshSessions.list().filter((s) => sshSessions.owns(s.sessionId, sender.id)), true);
+  handle('monitor:start', (sender, sessionId, intervalSec) => {
+    ownSsh(sender, sessionId);
+    return sshMonitor.start(sessionId, intervalSec);
+  }, true);
+  handle('monitor:stop', (sender, sessionId) => {
+    ownSsh(sender, sessionId);
+    return sshMonitor.stop(sessionId);
+  }, true);
 
   /**
    * Re-host an existing SSH session in the window that currently owns the tab, without
@@ -1158,14 +1178,9 @@ app.whenReady().then(() => {
     log: logger,
     // Owner-targeted events fire while that window is already being torn down: closeSshOwner runs
     // from its own destroyed event, so the session's end state has no renderer left to receive it.
-    send: (channel, payload, ownerId) => {
-      const owner = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && !w.webContents.isDestroyed() && w.webContents.id === ownerId);
-      if (!owner) return;
-      try {
-        owner.webContents.send(channel, payload);
-      } catch (_) {}
-    },
+    send: sendToOwner,
   });
+  sshMonitor = new SshMonitorManager({ ssh: sshSessions, send: sendToOwner, log: logger });
   vncSessions = new VncSessionManager({ send, log: logger });
   rdpSessions = new RdpSessionManager({ send, log: logger });
   sftpManager = new SftpManager({ send, store, log: logger });
@@ -1200,6 +1215,7 @@ app.on('before-quit', (e) => {
   if (vncSessions) vncSessions.destroyAll();
   if (rdpSessions) rdpSessions.destroyAll();
   if (sshSessions) sshSessions.destroyAll();
+  if (sshMonitor) sshMonitor.destroyAll();
   if (sftpManager) sftpManager.destroyAll();
   for (const tests of sshTests.values()) for (const connection of tests) connection.close();
   sshTests.clear();

@@ -142,6 +142,18 @@ export const api = hasBridge
       onSshState() {
         return () => {};
       },
+      async monitorStart() {
+        return { ok: true, supported: false, reason: 'no-bridge' };
+      },
+      async monitorStop() {
+        return { ok: true, existed: false };
+      },
+      onMonitorSnapshot() {
+        return () => {};
+      },
+      onMonitorEnd() {
+        return () => {};
+      },
       async rdpConnect() {
         throw Object.assign(new Error(t('msg.previewRdp')), { code: 'NO_BRIDGE' });
       },
