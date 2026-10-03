@@ -87,7 +87,7 @@
 
 <script>
 import CtxMenu from './CtxMenu.vue';
-import { store, closeTab, moveTab, refreshSessionTab, api, detachTab, setDockTarget } from '../store';
+import { store, closeTab, moveTab, refreshSessionTab, api, detachTab, setDockTarget, findAsset, enabledMethods, openSshSession } from '../store';
 import { t } from '../i18n';
 import { OS_SVG } from '../constants';
 import { getProtocol } from '../protocols';
@@ -392,14 +392,25 @@ export default {
         closeTab(id);
       }
     },
+    /** The asset's current SSH method, so a duplicated tab opens with today's settings, not the tab's stale copy. */
+    sshSessionTarget(tab) {
+      if (!tab) return null;
+      const hit = findAsset(tab.assetId);
+      if (!hit) return null;
+      const method = enabledMethods(hit.asset).find((m) => m.id === (tab.methodId || 'ssh'));
+      return method ? { asset: hit.asset, method } : null;
+    },
     onTabContextmenu(event, tab) {
       const protocol = getProtocol(tab.kind);
       const isSession = !!(protocol && protocol.component);
       const isHome = tab.id === 'home';
       const items = [];
       if (isSession) {
+        items.push({ label: t('tab.refresh'), icon: 'el-icon-refresh', action: 'refresh', tabId: tab.id });
+        if (tab.kind === 'ssh' && this.sshSessionTarget(tab)) {
+          items.push({ label: t('tab.copySession'), icon: 'el-icon-document-copy', action: 'copySession', tabId: tab.id });
+        }
         items.push(
-          { label: t('tab.refresh'), icon: 'el-icon-refresh', action: 'refresh', tabId: tab.id },
           { label: t('tab.detachToWindow'), icon: 'el-icon-rank', action: 'detach', tabId: tab.id },
           { sep: true }
         );
@@ -425,7 +436,10 @@ export default {
       const index = visible.findIndex((tb) => tb.id === item.tabId);
       if (index < 0) return;
       if (item.action === 'refresh') refreshSessionTab(item.tabId);
-      else if (item.action === 'detach') this.detachSessionTab(item.tabId);
+      else if (item.action === 'copySession') {
+        const target = this.sshSessionTarget(store.tabs.find((tb) => tb.id === item.tabId));
+        if (target) openSshSession(target.asset, target.method);
+      } else if (item.action === 'detach') this.detachSessionTab(item.tabId);
       else if (item.action === 'closeCurrent') this.closeTabById(item.tabId);
       else if (item.action === 'closeOthers') {
         this.closeTabsBulk(visible.filter((tb) => tb.id !== item.tabId));

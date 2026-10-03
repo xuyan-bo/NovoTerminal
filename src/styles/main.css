@@ -646,9 +646,9 @@ button {
 }
 
 .tab.active {
-  color: var(--text);
-  background: var(--bg-app);
-  border-color: var(--border);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 /* Dragging a detached session window back over this row merges it into the tab bar. */

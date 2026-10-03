@@ -297,6 +297,45 @@ export function openAssetDetail(asset) {
   });
 }
 
+/**
+ * SSH keeps one tab id per instance so the same asset can have several sessions; the other
+ * embedded protocols keep their historical stable id, which is what makes a repeat connect
+ * activate the existing tab instead of opening a second one. The instance number comes from the
+ * id so two tabs of the same asset can never render the same title.
+ */
+function sessionTabInstance(methodId, assetId) {
+  const base = `${methodId}-${assetId}-${methodId}`;
+  if (methodId !== 'ssh') return { id: base, seq: 1 };
+  let seq = 1;
+  let id = base;
+  while (store.tabs.some((tab) => tab.id === id)) {
+    seq += 1;
+    id = `${base}-${seq}`;
+  }
+  return { id, seq };
+}
+
+function buildSessionTab(asset, method, protocol) {
+  const assetName = asset.name || asset.host || asset.id;
+  const { id, seq } = sessionTabInstance(method.id, asset.id);
+  const label = `${protocol.label} · ${assetName}`;
+  return {
+    id,
+    title: seq > 1 ? `${label} (${seq})` : label,
+    closable: true,
+    icon: protocol.icon,
+    kind: method.id,
+    assetId: asset.id,
+    methodId: method.id,
+    host: asset.host || '',
+    port: method.port || protocol.defaultPort,
+    assetName,
+    connected: false,
+    detached: false,
+    liveSessionId: null,
+  };
+}
+
 export async function connectAsset(asset, method) {
   const protocol = getProtocol(method.id);
   if (!protocol) {
@@ -310,27 +349,20 @@ export async function connectAsset(asset, method) {
   const useEmbedded =
     !!protocol.component && (method.id !== 'rdp' || _rdpEngine === 'ironrdp');
   if (useEmbedded) {
-    const id = `${method.id}-${asset.id}-${method.id}`;
-    const assetName = asset.name || asset.host || asset.id;
-    openTab({
-      id,
-      title: `${protocol.label} · ${assetName}`,
-      closable: true,
-      icon: protocol.icon,
-      kind: method.id,
-      assetId: asset.id,
-      methodId: method.id,
-      host: asset.host || '',
-      port: method.port || protocol.defaultPort,
-      assetName,
-      connected: false,
-      detached: false,
-      liveSessionId: null,
-    });
+    // SSH opens a fresh session on every connect; the other embedded protocols keep a stable tab id,
+    // so openTab's dedupe just activates the one session they allow per asset.
+    openTab(buildSessionTab(asset, method, protocol));
     return;
   }
   unwrap(await api.sessionConnect({ assetId: asset.id, methodId: method.id }));
   refresh().catch(() => {});
+}
+
+/** Opens another SSH session tab for the asset; the sessions in other tabs are untouched. */
+export function openSshSession(asset, method) {
+  const protocol = getProtocol(method.id);
+  if (!protocol || !protocol.component) return;
+  openTab(buildSessionTab(asset, method, protocol));
 }
 
 export function connectionErrorMessage(error) {
