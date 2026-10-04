@@ -119,30 +119,46 @@ function parseArgs(raw) {
 }
 
 /**
- * 设置页的「测试连接」。优先打 /models（能顺带列出模型），
- * 网关不支持该端点时退化成一次 1 token 的补全，只要不报错就说明鉴权与模型名可用。
+ * 设置页的「测试连接」：只验证地址与 Key 可用，不把模型清单带回去（清单由「添加模型」单独拉）。
+ * 优先打 /models；网关不支持该端点时退化成一次 1 token 的补全，此时必须有模型名。
  */
 async function testConnection(opts) {
   const { baseUrl, apiKey, model, signal } = opts;
   const client = new OpenAI({ apiKey, baseURL: baseUrl, maxRetries: 0, timeout: TEST_TIMEOUT_MS });
   const started = Date.now();
+  let probeError = null;
   try {
-    const list = await client.models.list({ signal });
-    const ids = (list && list.data ? list.data : []).map((m) => m && m.id).filter(Boolean).slice(0, 200);
-    return { ok: true, ms: Date.now() - started, models: ids, via: 'models' };
+    await client.models.list({ signal });
+    return { ok: true, ms: Date.now() - started, via: 'models' };
   } catch (error) {
     const mapped = toAiError(error);
     if (mapped.code === 'AI_AUTH' || mapped.code === 'AI_CANCELED') throw mapped;
+    probeError = mapped;
   }
+  if (!model) throw probeError;
   try {
     await client.chat.completions.create(
-      { model: model || undefined, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 },
+      { model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 },
       { signal }
     );
-    return { ok: true, ms: Date.now() - started, models: null, via: 'completion' };
+    return { ok: true, ms: Date.now() - started, via: 'completion' };
   } catch (error) {
     throw toAiError(error);
   }
 }
 
-module.exports = { streamChat, testConnection };
+/** 「添加模型」用：拉 /models 的模型 id，最多 200 条。 */
+async function listModels(opts) {
+  const { baseUrl, apiKey, signal } = opts;
+  const client = new OpenAI({ apiKey, baseURL: baseUrl, maxRetries: 0, timeout: TEST_TIMEOUT_MS });
+  const started = Date.now();
+  try {
+    const list = await client.models.list({ signal });
+    const models = (list && list.data ? list.data : []).map((m) => m && m.id).filter(Boolean).slice(0, 200);
+    return { ms: Date.now() - started, models };
+  } catch (error) {
+    throw toAiError(error);
+  }
+}
+
+module.exports = { streamChat, testConnection, listModels };

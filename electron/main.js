@@ -9,9 +9,8 @@ const { AssetStore } = require('./store/assetStore');
 const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
 const { SshMonitorManager } = require('./ssh/SshMonitorManager');
-const { PtyRunner } = require('./ai/ptyRunner');
 const { AiManager } = require('./ai/aiManager');
-const { testConnection } = require('./ai/aiClient');
+const { testConnection, listModels } = require('./ai/aiClient');
 const { normalize: normalizeAi } = require('./ai/aiSettings');
 const { SSH_DEFAULTS } = require('./ssh/connection');
 const { createHostKeyVerifier } = require('./ssh/hostKeys');
@@ -91,7 +90,6 @@ let store = null;
 let sessions = null;
 let sshSessions = null;
 let sshMonitor = null;
-let aiPty = null;
 let aiAssistant = null;
 let vncSessions = null;
 let rdpSessions = null;
@@ -170,7 +168,6 @@ const sshTests = new Map();
 
 function closeSshOwner(ownerId) {
   if (aiAssistant) aiAssistant.stopOwner(ownerId);
-  if (aiPty) aiPty.stopOwner(ownerId);
   if (sshSessions) sshSessions.closeOwner(ownerId);
   if (sshMonitor) sshMonitor.stopOwner(ownerId);
   if (sftpManager) sftpManager.closeOwner(ownerId);
@@ -735,6 +732,11 @@ function registerIpc() {
     ownSsh(sender, req && req.sessionId);
     return aiAssistant.reset(req.sessionId);
   }, true);
+  /** 审批级别只改这条会话，不回写设置里的默认值。 */
+  handle('ai:permission', (sender, req) => {
+    ownSsh(sender, req && req.sessionId);
+    return aiAssistant.setPermission(req);
+  }, true);
   handle('ai:history', (sender, req) => {
     ownSsh(sender, req && req.sessionId);
     return aiAssistant.history(req.sessionId);
@@ -744,17 +746,34 @@ function registerIpc() {
     ownSsh(sender, req && req.sessionId);
     return aiAssistant.screenReply(req);
   }, true);
-  handle('ai:test', async (req) => {
+  /** 测试连接与拉取模型清单共用同一份入参校验，凭据只在进程内使用。 */
+  function aiProbe(req) {
     const baseUrl = typeof (req && req.baseUrl) === 'string' ? req.baseUrl.trim().replace(/\/+$/, '') : '';
     if (!/^https?:\/\//i.test(baseUrl)) throw Object.assign(new Error('Invalid base URL'), { code: 'AI_URL' });
     const apiKey = typeof (req && req.apiKey) === 'string' ? req.apiKey.slice(0, 400) : '';
     if (!apiKey) throw Object.assign(new Error('Missing API key'), { code: 'AI_NO_KEY' });
+    const model = typeof (req && req.model) === 'string' ? req.model.slice(0, 120) : '';
+    return { baseUrl, apiKey, model };
+  }
+  handle('ai:test', async (req) => {
+    const probe = aiProbe(req);
     try {
-      const r = await testConnection({ baseUrl, apiKey, model: typeof req.model === 'string' ? req.model.slice(0, 120) : '' });
-      logger.info('ai', 'ai service test ok', { baseUrl, via: r.via, ms: r.ms, models: r.models ? r.models.length : 0 });
+      const r = await testConnection(probe);
+      logger.info('ai', 'ai service test ok', { baseUrl: probe.baseUrl, via: r.via, ms: r.ms });
       return r;
     } catch (e) {
-      logger.warn('ai', 'ai service test failed', { baseUrl, code: e.code || 'AI_REQUEST', message: e.message });
+      logger.warn('ai', 'ai service test failed', { baseUrl: probe.baseUrl, code: e.code || 'AI_REQUEST', message: e.message });
+      throw e;
+    }
+  });
+  handle('ai:models', async (req) => {
+    const probe = aiProbe(req);
+    try {
+      const r = await listModels(probe);
+      logger.info('ai', 'ai model list fetched', { baseUrl: probe.baseUrl, ms: r.ms, models: r.models.length });
+      return r;
+    } catch (e) {
+      logger.warn('ai', 'ai model list failed', { baseUrl: probe.baseUrl, code: e.code || 'AI_REQUEST', message: e.message });
       throw e;
     }
   });
@@ -1347,12 +1366,10 @@ app.whenReady().then(() => {
     send: sendToOwner,
     onEnded: (sessionId) => {
       if (aiAssistant) aiAssistant.stopSession(sessionId, 'session-ended');
-      if (aiPty) aiPty.stop(sessionId);
     },
   });
   sshMonitor = new SshMonitorManager({ ssh: sshSessions, send: sendToOwner, log: logger });
-  aiPty = new PtyRunner({ ssh: sshSessions, log: logger });
-  aiAssistant = new AiManager({ ssh: sshSessions, pty: aiPty, store, send: sendToOwner, log: logger });
+  aiAssistant = new AiManager({ ssh: sshSessions, store, send: sendToOwner, log: logger });
   vncSessions = new VncSessionManager({ send, log: logger });
   rdpSessions = new RdpSessionManager({ send, log: logger });
   sftpManager = new SftpManager({ send, store, log: logger });
@@ -1389,7 +1406,6 @@ app.on('before-quit', (e) => {
   if (sshSessions) sshSessions.destroyAll();
   if (sshMonitor) sshMonitor.destroyAll();
   if (aiAssistant) aiAssistant.destroyAll();
-  if (aiPty) aiPty.destroyAll();
   if (sftpManager) sftpManager.destroyAll();
   for (const tests of sshTests.values()) for (const connection of tests) connection.close();
   sshTests.clear();

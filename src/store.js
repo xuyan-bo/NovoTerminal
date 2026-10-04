@@ -382,15 +382,4 @@ export function connectionErrorMessage(error) {
   return error.message || t('err.connect');
 }
 
-/**
- * AI 设置按字段保存：调用方只递变化的部分，这里以 store 里的当前快照为基线合并，
- * 避免面板与设置页同时改配置时互相覆盖。类型与取值范围由主进程收敛。
- */
-export async function saveAiSettings(patch) {
-  if (!api.updateSettings) throw Object.assign(new Error(t('msg.needElectron')), { code: 'NO_BRIDGE' });
-  const current = (store.snapshot.settings && store.snapshot.settings.ai) || {};
-  unwrap(await api.updateSettings({ ai: { ...current, ...patch } }));
-  await refresh();
-}
-
 export { api, unwrap };

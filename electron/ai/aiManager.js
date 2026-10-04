@@ -8,7 +8,7 @@
 
 const crypto = require('crypto');
 const { streamChat } = require('./aiClient');
-const { normalize, resolveModel } = require('./aiSettings');
+const { normalize, resolveModel, PERMISSIONS } = require('./aiSettings');
 const { createTools } = require('./aiTools');
 
 const HISTORY_LIMIT = 24;
@@ -21,13 +21,14 @@ function aiError(code, message) {
 }
 
 class AiManager {
-  constructor({ ssh, pty, store, send, log }) {
+  constructor({ ssh, store, send, log }) {
     this.ssh = ssh;
-    this.pty = pty;
     this.store = store;
     this.send = send || (() => {});
     this.log = log;
     this.conversations = new Map(); // sessionId -> conversation
+    /** 会话内的偏好覆盖（审批级别、模型）；没有覆盖的项跟随设置里的默认值，随会话一起销毁。 */
+    this.overrides = new Map(); // sessionId -> { permission?, modelRef? }
     this.pendingScreens = new Map(); // requestId -> { resolve, timer }
   }
 
@@ -50,12 +51,11 @@ class AiManager {
     this.send('ai:event', { ...payload, sessionId }, target ? target.ownerId : undefined);
   }
 
-  /** 用户点「停止」：中断模型请求，并打断正在等待结束的终端命令。 */
+  /** 用户点「停止」：中断模型请求，并丢掉还在等待的审批。 */
   cancel(sessionId) {
     const conv = this.conversations.get(sessionId);
     if (!conv || !conv.running) return { ok: true, running: false };
     if (conv.abort) conv.abort.abort();
-    this.pty.interrupt(sessionId);
     this._rejectApprovals(conv, 'canceled');
     return { ok: true, running: true };
   }
@@ -70,9 +70,43 @@ class AiManager {
     return { ok: true };
   }
 
+  /** 审批级别只影响这一条会话，设置里的默认值不动。 */
+  setPermission(req) {
+    const sessionId = req && req.sessionId;
+    const value = req && req.permission;
+    if (!PERMISSIONS.includes(value)) throw aiError('AI_REQUEST', 'invalid permission');
+    this._override(sessionId).permission = value;
+    this.log && this.log.info('ai', 'ai permission changed', { sessionId, permission: value });
+    return { ok: true };
+  }
+
+  _override(sessionId) {
+    let ov = this.overrides.get(sessionId);
+    if (!ov) {
+      ov = {};
+      this.overrides.set(sessionId, ov);
+    }
+    return ov;
+  }
+
+  /** 面板递来的「服务/模型」引用：只接受两个非空字符串，长度假设与 aiSettings 的 normalize 一致。 */
+  _normalizeRef(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const serviceId = typeof raw.serviceId === 'string' ? raw.serviceId.trim().slice(0, 64) : '';
+    const modelId = typeof raw.modelId === 'string' ? raw.modelId.trim().slice(0, 120) : '';
+    return serviceId && modelId ? { serviceId, modelId } : null;
+  }
+
   history(sessionId) {
     const conv = this.conversations.get(sessionId);
-    return { ok: true, running: !!(conv && conv.running), messages: conv ? conv.messages.filter((m) => m.role !== 'system' && m.role !== 'tool') : [] };
+    const ov = this.overrides.get(sessionId) || {};
+    return {
+      ok: true,
+      running: !!(conv && conv.running),
+      permissionOverride: ov.permission || '',
+      modelOverride: ov.modelRef || null,
+      messages: conv ? conv.messages.filter((m) => m.role !== 'system' && m.role !== 'tool') : [],
+    };
   }
 
   approve(payload) {
@@ -81,7 +115,7 @@ class AiManager {
     if (!pending) return { ok: false, reason: 'stale' };
     clearTimeout(pending.timer);
     conv.approvals.delete(payload.requestId);
-    const decision = ['allow', 'deny', 'hidden'].includes(payload.decision) ? payload.decision : 'deny';
+    const decision = payload && payload.decision === 'allow' ? 'allow' : 'deny';
     pending.resolve(decision);
     return { ok: true, decision };
   }
@@ -143,8 +177,8 @@ class AiManager {
     }[settings.permission];
     const lines = [
       en
-        ? 'You are OmniDesk\'s assistant embedded in an SSH terminal. You can run commands on this host through the user\'s own session.'
-        : '你是 OmniDesk 内嵌在 SSH 终端里的助手，可以通过用户当前的会话在这台主机上执行命令。',
+        ? 'You are OmniDesk\'s assistant embedded in an SSH terminal. You run commands on this host through a private exec channel, so the user\'s screen stays untouched, but you still inherit its working directory.'
+        : '你是 OmniDesk 内嵌在 SSH 终端里的助手，通过独立命令通道在这台主机上执行，命令不会打进用户的终端屏幕，但会沿用终端当前目录。',
       (en ? 'Host: ' : '主机：') + target.host + ':' + target.port
         + (platform ? ' · ' + (en ? 'OS' : '系统') + ' ' + platform : ''),
       (en ? 'Working directory: ' : '当前目录：') + (cwd || (en ? 'unknown' : '未知')),
@@ -199,6 +233,8 @@ class AiManager {
     }
     const settings = this.settings();
     if (!settings.enabled) throw aiError('AI_DISABLED', 'AI 助手已在设置中关闭');
+    const override = this.overrides.get(sessionId) || {};
+    if (override.permission) settings.permission = override.permission;
     const target = this.ssh.execTarget(sessionId);
     if (!target) throw aiError('AI_SESSION_GONE', 'SSH 会话未连接');
     const text = typeof req.text === 'string' ? req.text.trim().slice(0, 8000) : '';
@@ -206,7 +242,12 @@ class AiManager {
 
     const conv = this._conversation(sessionId);
     if (conv.running) throw aiError('AI_BUSY', '上一轮还没结束');
-    const model = resolveModel((this.store.getSettings() || {}).ai, req.modelRef || settings.defaultRef);
+    const ref = this._normalizeRef(req.modelRef);
+    if (ref) {
+      override.modelRef = ref;
+      this.overrides.set(sessionId, override);
+    }
+    const model = resolveModel((this.store.getSettings() || {}).ai, override.modelRef || settings.defaultRef);
     const screen = settings.readScreen ? String(req.screen || '').split(/\r?\n/).slice(-120).join('\n').slice(0, 8000) : '';
     const lang = this.store.getSettings().lang;
     const abort = new AbortController();
@@ -218,8 +259,6 @@ class AiManager {
       settings, target, cwd: typeof req.cwd === 'string' ? req.cwd.slice(0, 400) : '', screen, platform: target.cache && target.cache.platformInfo ? target.cache.platformInfo.platform : '', lang,
     };
     const tools = createTools({
-      ssh: this.ssh,
-      pty: this.pty,
       sessionId,
       target,
       cwd: ctx.cwd,
@@ -331,6 +370,7 @@ class AiManager {
 
   /** 会话断开或宿主窗口销毁：中止在跑的请求，丢掉审批等待。 */
   stopSession(sessionId, reason) {
+    this.overrides.delete(sessionId);
     const conv = this.conversations.get(sessionId);
     if (!conv) return;
     if (conv.abort) conv.abort.abort();
@@ -339,7 +379,8 @@ class AiManager {
   }
 
   stopOwner(ownerId) {
-    for (const sessionId of [...this.conversations.keys()]) {
+    const ids = new Set([...this.conversations.keys(), ...this.overrides.keys()]);
+    for (const sessionId of ids) {
       const target = this.ssh.execTarget(sessionId);
       if (!target || target.ownerId === ownerId) this.stopSession(sessionId, 'owner-closed');
     }
@@ -347,6 +388,7 @@ class AiManager {
 
   destroyAll() {
     for (const sessionId of [...this.conversations.keys()]) this.stopSession(sessionId, 'shutdown');
+    this.overrides.clear();
     for (const pending of this.pendingScreens.values()) clearTimeout(pending.timer);
     this.pendingScreens.clear();
   }

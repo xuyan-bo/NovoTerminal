@@ -26,25 +26,9 @@ class SshSessionManager {
 
   /** 输出流的唯一出口：先过一遍会话上的临时过滤器（AI 用它截命令结束标记），再落 tail 与转发。 */
   _emitOutput(rec, sessionId, text) {
-    let out = text;
-    if (rec.outputFilter) {
-      try {
-        out = rec.outputFilter(text);
-      } catch (_) {
-        out = text;
-      }
-    }
-    if (!out) return;
-    this._pushTail(rec, out);
-    this.send('ssh:data:' + sessionId, out, rec.ownerId);
-  }
-
-  /** 传 null 取消过滤。过滤器只属于当前挂载它的调用方，会话销毁时随 rec 一起消失。 */
-  setOutputFilter(sessionId, filter) {
-    const rec = this.sessions.get(sessionId);
-    if (!rec) return false;
-    rec.outputFilter = typeof filter === 'function' ? filter : null;
-    return true;
+    if (!text) return;
+    this._pushTail(rec, text);
+    this.send('ssh:data:' + sessionId, text, rec.ownerId);
   }
 
   _emit(sessionId, type, payload = {}) {
@@ -71,7 +55,7 @@ class SshSessionManager {
       cols: dimension(req.cols, 120), rows: dimension(req.rows, 32), adv,
       connection: null, stream: null, x11: null, ready: false, shellTimer: null, closedError: null,
       stdout: iconv.getDecoder(adv.charset), stderr: iconv.getDecoder(adv.charset),
-      tail: { chunks: [], chars: 0 }, outputFilter: null,
+      tail: { chunks: [], chars: 0 },
     };
     this.sessions.set(sessionId, rec);
     let rejectClosed;

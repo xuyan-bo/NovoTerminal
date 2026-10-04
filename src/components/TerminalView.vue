@@ -95,6 +95,7 @@
               v-if="aiEver"
               ref="aiPanel"
               :session-id="liveSessionId || ''"
+              :connected="status === 'ready'"
               :host-text="title"
               :cwd="oscCwd"
               :read-screen="readScreenText"
@@ -1138,6 +1139,10 @@ export default {
 }
 .ssh-monitor-host.dragging {
   transition: none;
+}
+/* 展开后按比例可能窄到装不下 AI 输入条，兜最小宽度让终端侧让步而不是裁掉按钮 */
+.ssh-monitor-host.open {
+  min-width: 322px;
 }
 .monitor-splitter {
   flex: 0 0 6px;

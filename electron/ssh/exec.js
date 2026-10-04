@@ -11,6 +11,14 @@ function exec(client, command, charset, timeoutMs, timeoutCode) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let channel;
+    let stdout = '';
+    let stderr = '';
+    let decoder;
+    try {
+      decoder = iconv.getDecoder(charset || 'UTF-8');
+    } catch (_) {
+      decoder = iconv.getDecoder('UTF-8');
+    }
     const finish = (fn, arg) => {
       if (settled) return;
       settled = true;
@@ -20,7 +28,8 @@ function exec(client, command, charset, timeoutMs, timeoutCode) {
     const timer = setTimeout(() => {
       try { if (channel) channel.close(); } catch (_) {}
       try { if (channel) channel.destroy(); } catch (_) {}
-      finish(reject, execError(timeoutCode || DEFAULT_TIMEOUT_CODE, 'remote command timed out'));
+      // 超时也带上已收到的输出：调用方要靠它判断命令跑到哪一步
+      finish(reject, Object.assign(execError(timeoutCode || DEFAULT_TIMEOUT_CODE, 'remote command timed out'), { stdout, stderr }));
     }, timeoutMs);
     try {
       client.exec(command, (err, chan) => {
@@ -30,14 +39,6 @@ function exec(client, command, charset, timeoutMs, timeoutCode) {
           return;
         }
         channel = chan;
-        let stdout = '';
-        let stderr = '';
-        let decoder;
-        try {
-          decoder = iconv.getDecoder(charset || 'UTF-8');
-        } catch (_) {
-          decoder = iconv.getDecoder('UTF-8');
-        }
         chan.on('data', (data) => { stdout += decoder.write(Buffer.from(data)); });
         if (chan.stderr) chan.stderr.on('data', (data) => { stderr += decoder.write(Buffer.from(data)); });
         chan.on('close', () => {

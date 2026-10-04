@@ -8,9 +8,8 @@ const AI_DEFAULTS = Object.freeze({
   enabled: true,
   permission: 'auto',
   readScreen: true,
-  ptyControl: true,
-  commandTimeoutSec: 15,
-  maxTurns: 8,
+  commandTimeoutSec: 60,
+  maxTurns: 20,
   maxTokens: 2048,
   temperature: 0.2,
   services: [],
@@ -54,9 +53,8 @@ function normalize(raw) {
     enabled: bool(src.enabled, AI_DEFAULTS.enabled),
     permission,
     readScreen: bool(src.readScreen, AI_DEFAULTS.readScreen),
-    ptyControl: bool(src.ptyControl, AI_DEFAULTS.ptyControl),
-    commandTimeoutSec: int(src.commandTimeoutSec, 3, 300, AI_DEFAULTS.commandTimeoutSec),
-    maxTurns: int(src.maxTurns, 1, 20, AI_DEFAULTS.maxTurns),
+    commandTimeoutSec: int(src.commandTimeoutSec, 5, 600, AI_DEFAULTS.commandTimeoutSec),
+    maxTurns: int(src.maxTurns, 1, 40, AI_DEFAULTS.maxTurns),
     maxTokens: int(src.maxTokens, 256, 32768, AI_DEFAULTS.maxTokens),
     temperature: clamp01(src.temperature, AI_DEFAULTS.temperature),
     services,
@@ -103,4 +101,4 @@ function resolveModel(settings, ref) {
   };
 }
 
-module.exports = { AI_DEFAULTS, normalize, resolveModel };
+module.exports = { AI_DEFAULTS, PERMISSIONS, normalize, resolveModel };

@@ -221,27 +221,13 @@ const DEFINITIONS = [
   {
     type: 'function',
     function: {
-      name: 'run_in_terminal',
-      description: '在用户当前可见的 SSH 终端里执行一条命令，等待命令结束并返回其输出。会占用用户的键盘，因此同一时间只跑一条。',
+      name: 'run_command',
+      description: '在这台主机上执行一条命令并返回输出。命令走独立的 exec 通道，不会出现在用户终端屏幕上，也不继承交互 shell 的环境变量；当前目录由客户端注入，一般无需自己 cd。',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: '要执行的完整命令行，不要包含交互式程序的常驻运行；需要后台运行请自行加 nohup ... &' },
           rationale: { type: 'string', description: '一句话说明这条命令要做什么，会展示给用户确认' },
-        },
-        required: ['command'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'run_hidden',
-      description: '在同一台主机上另开一条独立命令通道执行，不影响用户屏幕。缺点是不继承终端当前目录与交互状态，输出里没有彩色提示。',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: { type: 'string' },
           cwd: { type: 'string', description: '可选：执行前先进入的目录' },
         },
         required: ['command'],
@@ -259,35 +245,20 @@ const DEFINITIONS = [
 ];
 
 /**
- * @param {object} ctx { pty, sessionId, target, cwd, settings, requestApproval, readScreen, log }
+ * @param {object} ctx { sessionId, target, cwd, settings, requestApproval, readScreen, log }
  */
 function createTools(ctx) {
-  const { pty, sessionId, target, cwd, settings, requestApproval, readScreen, log } = ctx;
+  const { sessionId, target, cwd, settings, requestApproval, readScreen, log } = ctx;
 
-  async function runTerminal(command, opts = {}) {
-    const readOnly = isReadOnly(command);
-    if (!settings.ptyControl) return runHidden(command, opts);
-    if (!readOnly && settings.permission !== 'full') {
-      const decision = await requestApproval({ name: 'run_in_terminal', command, readOnly, reason: opts.rationale || '' });
-      if (decision === 'deny') return { channel: 'terminal', denied: true, text: '用户拒绝执行这条命令。不要重试同一条命令，改用只读方式获取信息或直接说明无法完成。' };
-      if (decision === 'hidden') return runHidden(command, opts);
-    }
-    const started = Date.now();
-    const result = await pty.run(sessionId, command, { timeoutMs: settings.commandTimeoutSec * 1000 });
-    const meta = { host: target.host, port: target.port, ms: Date.now() - started, exitCode: result.exitCode, timedOut: result.timedOut };
-    log && log.info('ai', 'ai terminal command finished', { ...meta, command: command.slice(0, 200) });
-    const head = '退出码：' + (result.exitCode == null ? '未知' : result.exitCode)
-      + (result.timedOut ? '（超过 ' + settings.commandTimeoutSec + ' 秒未结束，已发送 Ctrl+C 中断）' : '');
-    return { channel: 'terminal', exitCode: result.exitCode, timedOut: result.timedOut, text: head + '\n' + clip(result.stdout) };
-  }
-
-  async function runHidden(command, opts = {}) {
+  async function runCommand(command, opts = {}) {
     const readOnly = isReadOnly(command);
     if (!readOnly && settings.permission !== 'full') {
-      const decision = await requestApproval({ name: 'run_hidden', command, readOnly, reason: opts.rationale || '' });
-      if (decision === 'deny') return { channel: 'hidden', denied: true, text: '用户拒绝执行这条命令。' };
+      const decision = await requestApproval({ name: 'run_command', command, readOnly, reason: opts.rationale || '' });
+      if (decision === 'deny') {
+        return { channel: 'exec', denied: true, text: '用户拒绝执行这条命令。不要重试同一条命令，改用只读方式获取信息或直接说明无法完成。' };
+      }
     }
-    // 独立通道不继承交互 shell 的目录，所以默认落到渲染端报上来的终端 cwd；
+    // exec 通道不继承交互 shell 的目录，所以默认落到渲染端报上来的终端 cwd；
     // 正则已排除单引号与反斜杠，这里再用单引号包住以兼容带空格的路径。
     const dir = typeof opts.cwd === 'string' && /^[\w./~ -]+$/.test(opts.cwd.trim()) ? opts.cwd.trim() : cwd;
     const line = dir ? "cd '" + dir + "' && " + command : command;
@@ -296,22 +267,22 @@ function createTools(ctx) {
     try {
       out = await exec(target.client, line, target.charset, settings.commandTimeoutSec * 1000, 'AI_EXEC_TIMEOUT');
     } catch (error) {
-      log && log.warn('ai', 'ai hidden exec failed', { host: target.host, message: error.message, code: error.code });
-      return { channel: 'hidden', text: '命令执行失败：' + error.message };
+      log && log.warn('ai', 'ai exec command failed', { sessionId, host: target.host, message: error.message, code: error.code });
+      const partial = String(error.stdout || '') + (error.stderr ? '\n[stderr]\n' + error.stderr : '');
+      return { channel: 'exec', text: '命令执行失败：' + error.message + (partial.trim() ? '\n已取得的输出：\n' + clip(partial) : '') };
     }
-    log && log.info('ai', 'ai hidden exec finished', { host: target.host, ms: Date.now() - started, command: command.slice(0, 200) });
-    return { channel: 'hidden', text: clip(out.stdout) + (out.stderr ? '\n[stderr]\n' + clip(out.stderr, 2000) : '') };
+    log && log.info('ai', 'ai exec command finished', { sessionId, host: target.host, ms: Date.now() - started, command: command.slice(0, 200) });
+    return { channel: 'exec', text: clip(out.stdout) + (out.stderr ? '\n[stderr]\n' + clip(out.stderr, 2000) : '') };
   }
 
   async function invoke(call) {
     const args = call.args || {};
-    if (call.name === 'run_in_terminal') {
+    if (call.name === 'run_command') {
       if (typeof args.command !== 'string' || !args.command.trim()) throw aiToolError('AI_ARGS', 'command required');
-      return runTerminal(args.command.trim(), { rationale: typeof args.rationale === 'string' ? args.rationale.slice(0, 200) : '' });
-    }
-    if (call.name === 'run_hidden') {
-      if (typeof args.command !== 'string' || !args.command.trim()) throw aiToolError('AI_ARGS', 'command required');
-      return runHidden(args.command.trim(), { cwd: args.cwd });
+      return runCommand(args.command.trim(), {
+        cwd: args.cwd,
+        rationale: typeof args.rationale === 'string' ? args.rationale.slice(0, 200) : '',
+      });
     }
     if (call.name === 'read_terminal_screen') {
       const screen = await readScreen();

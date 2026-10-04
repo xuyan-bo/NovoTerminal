@@ -4,7 +4,7 @@
       <svg-icon name="ai" :size="14" class="head-logo" />
       <span class="panel-title">{{ $t('ai.title') }}</span>
       <span class="panel-host mono">{{ hostText }}</span>
-      <button type="button" class="panel-ghost" :title="$t('ai.reset')" @click="reset">
+      <button v-if="available" type="button" class="panel-ghost" :title="$t('ai.reset')" @click="reset">
         <i class="el-icon-refresh-left"></i>
       </button>
       <button type="button" class="panel-close" :title="$t('ai.closeTip')" @click="$emit('close')">
@@ -12,14 +12,19 @@
       </button>
     </div>
 
-    <div v-if="error" class="ai-error">
+    <div v-if="!available" class="ai-offline">
+      <i class="el-icon-warning-outline"></i>
+      <p>{{ $t('ai.offline') }}</p>
+    </div>
+
+    <div v-if="available && error" class="ai-error">
       <i class="el-icon-warning-outline"></i>
       <span class="ai-error-text">{{ errorText }}</span>
       <a v-if="errorNeedsSettings" class="ai-error-link" @click="openSettings">{{ $t('ai.openSettings') }}</a>
       <button type="button" class="panel-close" @click="error = null"><i class="el-icon-close"></i></button>
     </div>
 
-    <div ref="logEl" class="ai-log">
+    <div v-if="available" ref="logEl" class="ai-log">
       <div v-if="!items.length" class="ai-empty">
         <p>{{ $t('ai.empty') }}</p>
         <p v-if="!hasService" class="ai-empty-warn">
@@ -70,7 +75,7 @@
       </div>
     </div>
 
-    <div class="ai-input">
+    <div v-if="available" class="ai-input">
       <div v-if="pendingApproval" class="ai-ask">
         <div class="ai-ask-head">
           <i class="el-icon-warning-outline"></i>
@@ -81,23 +86,22 @@
         <div v-if="pendingApproval.reason" class="ai-ask-reason">{{ pendingApproval.reason }}</div>
         <div class="ai-ask-btns">
           <el-button size="mini" type="primary" @click="decide(pendingApproval, 'allow')">{{ $t('ai.approveAllow') }}</el-button>
-          <el-button
-            v-if="!pendingApproval.readOnly && pendingApproval.name === 'run_in_terminal'"
-            size="mini"
-            @click="decide(pendingApproval, 'hidden')"
-          >{{ $t('ai.approveHidden') }}</el-button>
           <el-button size="mini" @click="decide(pendingApproval, 'deny')">{{ $t('ai.approveDeny') }}</el-button>
         </div>
       </div>
-      <div v-else-if="running && terminalBusy" class="ai-run-hint">
-        <i class="el-icon-video-play"></i> {{ $t('ai.running') }}
-      </div>
       <div class="ai-box" :class="{ 'is-focus': boxFocused }">
+        <div
+          class="ai-box-grip"
+          :class="{ dragging: boxDragging }"
+          :title="$t('ai.resizeTip')"
+          @mousedown.prevent="startBoxResize"
+        ><i></i></div>
         <textarea
           ref="boxEl"
           v-model="input"
           class="ai-box-input"
           rows="4"
+          :style="boxInputStyle"
           :placeholder="$t('ai.placeholder')"
           @focus="boxFocused = true"
           @blur="boxFocused = false"
@@ -149,7 +153,7 @@
 </template>
 
 <script>
-import { api, unwrap, store, saveAiSettings } from '../store';
+import { api, unwrap, store } from '../store';
 import { t } from '../i18n';
 import { AI_PERMISSIONS } from '../constants';
 import AiMarkdown from './AiMarkdown.vue';
@@ -157,6 +161,7 @@ import AiMarkdown from './AiMarkdown.vue';
 let seq = 0;
 const nextKey = () => 'i' + (seq += 1);
 const LINE_LIMIT = 120;
+const BOX_MIN_H = 88;
 
 export default {
   name: 'AiAssistantPanel',
@@ -164,6 +169,8 @@ export default {
   props: {
     /** 当前存活的 SSH 会话 ID；重连后会变，届时重新拉历史。 */
     sessionId: { type: String, default: '' },
+    /** 只有握手完成（status==='ready'）才允许提问，connecting 时 exec 通道还不存在。 */
+    connected: { type: Boolean, default: false },
     hostText: { type: String, default: '' },
     cwd: { type: String, default: '' },
     /** 终端屏幕文本由宿主组件提供——xterm 实例的所有权在 TerminalView。 */
@@ -174,10 +181,15 @@ export default {
       items: [],
       input: '',
       running: false,
-      terminalBusy: false,
       error: null,
       boxFocused: false,
+      boxHeight: 0,
+      boxDragging: false,
       savingPermission: false,
+      /** 本会话的审批级别覆盖；为空表示跟随设置里的默认值。 */
+      sessionPermission: '',
+      /** 本会话选用的模型；同样只在会话内生效，随下一次请求递给主进程。 */
+      sessionModel: null,
       modelKey: '',
       permissions: AI_PERMISSIONS,
       /** 执行过程分组的展开状态；没被点过的组走「跑的时候展开、跑完收起」。 */
@@ -185,6 +197,9 @@ export default {
     };
   },
   computed: {
+    available() {
+      return !!(this.connected && this.sessionId);
+    },
     /** 连续的工具/审批条目并成一组，用户关心的是结论，过程默认折起来。 */
     view() {
       const out = [];
@@ -203,12 +218,15 @@ export default {
     pendingApproval() {
       return this.items.find((i) => i.kind === 'approval' && !i.decided) || null;
     },
+    boxInputStyle() {
+      return this.boxHeight ? { height: this.boxHeight + 'px' } : {};
+    },
     ai() {
       const settings = store.snapshot.settings || {};
       return settings.ai || {};
     },
     permission() {
-      return this.ai.permission || 'auto';
+      return this.sessionPermission || this.ai.permission || 'auto';
     },
     permissionIcon() {
       const hit = AI_PERMISSIONS.find((p) => p.id === this.permission);
@@ -222,7 +240,7 @@ export default {
       return (this.ai.services || [])
         .filter((s) => s.models && s.models.length)
         .map((s) => ({
-          label: s.name,
+          label: s.name || s.baseUrl,
           options: s.models.map((m) => ({ key: s.id + '::' + m.id, label: m.alias || m.id })),
         }));
     },
@@ -242,10 +260,10 @@ export default {
   },
   watch: {
     sessionId() {
-      this.items = [];
-      this.stepsState = {};
-      this.error = null;
-      this.loadHistory();
+      this.clearConversation();
+    },
+    connected() {
+      this.clearConversation();
     },
     /** 宿主半圆要显示「正在跑」的提示点。 */
     running(val) {
@@ -265,15 +283,17 @@ export default {
   created() {
     this._offEvent = null;
     this._disposed = false;
-    this.pickDefaultModel();
+    this._boxMove = null;
+    this._boxUp = null;
     this.subscribe();
-    this.loadHistory();
+    this.clearConversation();
   },
   mounted() {
     this.scrollToEnd();
   },
   beforeDestroy() {
     this._disposed = true;
+    if (this._boxUp) this._boxUp();
     if (this._offEvent) {
       this._offEvent();
       this._offEvent = null;
@@ -291,18 +311,40 @@ export default {
     pickDefaultModel() {
       const groups = this.modelGroups;
       if (!groups.length) { this.modelKey = ''; return; }
-      const ref = this.ai.defaultRef;
-      const wanted = ref && ref.serviceId ? ref.serviceId + '::' + ref.modelId : '';
+      const key = (ref) => (ref && ref.serviceId ? ref.serviceId + '::' + ref.modelId : '');
       const flat = groups.reduce((all, g) => all.concat(g.options), []);
-      const hit = flat.find((o) => o.key === wanted) || flat[0];
+      const wanted = key(this.sessionModel) || key(this.ai.defaultRef);
+      // 会话选过的模型可能已在设置里被删掉，这时回落到默认模型而不是清单第一项
+      const hit = flat.find((o) => o.key === wanted) || flat.find((o) => o.key === key(this.ai.defaultRef)) || flat[0];
       this.modelKey = hit.key;
     },
 
+    /** 会话断开或换成另一条会话：旧对话不属于当前主机，直接清空，连上后再拉历史。 */
+    clearConversation() {
+      this.items = [];
+      this.stepsState = {};
+      this.error = null;
+      this.sessionPermission = '';
+      this.sessionModel = null;
+      this.pickDefaultModel();
+      if (!this.available) {
+        this.running = false;
+        return;
+      }
+      this.loadHistory();
+    },
+
     async loadHistory() {
-      if (!this.sessionId || !api.aiHistory) return;
+      if (!this.available || !api.aiHistory) return;
       try {
         const r = unwrap(await api.aiHistory({ sessionId: this.sessionId }));
-        if (this._disposed || !r || !r.messages) return;
+        if (this._disposed || !r) return;
+        this.sessionPermission = r.permissionOverride || '';
+        if (r.modelOverride) {
+          this.sessionModel = r.modelOverride;
+          this.pickDefaultModel();
+        }
+        if (!r.messages) return;
         this.items = r.messages
           .map((m) => ({
             key: nextKey(),
@@ -318,7 +360,6 @@ export default {
     onEvent(ev) {
       if (ev.type === 'state') {
         this.running = !!ev.running;
-        if (!ev.running) this.terminalBusy = false;
         return;
       }
       if (ev.type === 'delta') {
@@ -332,6 +373,7 @@ export default {
         return;
       }
       if (ev.type === 'tool') {
+        this.closeTyping();
         const existing = this.items.find((i) => i.kind === 'tool' && i.callId === ev.callId);
         if (existing) {
           this.$set(existing, 'state', ev.state);
@@ -340,19 +382,17 @@ export default {
           this.$set(existing, 'ms', ev.ms);
           this.$set(existing, 'channel', ev.channel || existing.channel);
           this.$set(existing, 'denied', !!ev.denied);
-          if (ev.state === 'running') this.terminalBusy = ev.channel === 'terminal';
         } else {
           this.items.push({
             key: nextKey(), kind: 'tool', callId: ev.callId, name: ev.name, command: ev.command || '',
-            channel: ev.channel || 'terminal', state: ev.state, auto: !!ev.auto, folded: false, output: '',
+            channel: ev.channel || 'exec', state: ev.state, auto: !!ev.auto, folded: false, output: '',
           });
         }
-        const last = this.items[this.items.length - 1];
-        if (last && last.kind === 'ai') this.$set(last, 'typing', false);
         this.scrollToEnd();
         return;
       }
       if (ev.type === 'approval') {
+        this.closeTyping();
         this.items.push({
           key: nextKey(), kind: 'approval', requestId: ev.requestId, name: ev.name, command: ev.command || '',
           reason: ev.reason || '', readOnly: !!ev.readOnly, decided: '',
@@ -371,11 +411,16 @@ export default {
       }
       if (ev.type === 'done') {
         this.running = false;
-        this.terminalBusy = false;
-        const last = this.items[this.items.length - 1];
-        if (last && last.kind === 'ai') this.$set(last, 'typing', false);
+        this.closeTyping();
         this.error = ev.error && ev.error.code !== 'AI_CANCELED' ? ev.error : null;
         return;
+      }
+    },
+
+    /** 同时只有一条流式正文在打字；工具卡片或审批插进来后必须收尾，否则光标会一直闪。 */
+    closeTyping() {
+      for (const it of this.items) {
+        if (it.kind === 'ai' && it.typing) this.$set(it, 'typing', false);
       }
     },
 
@@ -388,7 +433,7 @@ export default {
 
     async send() {
       const text = this.input.trim();
-      if (!text || this.running || !this.sessionId) return;
+      if (!text || this.running || !this.available) return;
       if (!api.aiSend) { this.error = { code: 'NO_BRIDGE', message: t('msg.needElectron') }; return; }
       this.input = '';
       this.items.push({ key: nextKey(), kind: 'user', text });
@@ -431,9 +476,20 @@ export default {
 
     async setPermission(id) {
       if (id === this.permission || this.savingPermission) return;
+      if (id === 'full') {
+        try {
+          await this.$confirm(t('ai.fullWarn'), t('ai.fullTitle'), {
+            confirmButtonText: t('ai.fullOk'),
+            cancelButtonText: t('msg.cancel'),
+            type: 'warning',
+          });
+        } catch (_) { return; }
+      }
+      if (!api.aiSetPermission) { this.error = { code: 'NO_BRIDGE', message: t('msg.needElectron') }; return; }
       this.savingPermission = true;
       try {
-        await saveAiSettings({ permission: id });
+        unwrap(await api.aiSetPermission({ sessionId: this.sessionId, permission: id }));
+        this.sessionPermission = id;
       } catch (e) {
         this.error = { code: e.code || 'AI_REQUEST', message: e.message };
       } finally {
@@ -441,10 +497,12 @@ export default {
       }
     },
 
+    /** 选模型只改本会话：随每次请求把 modelRef 递给主进程，不写设置的默认模型。 */
     setModel(key) {
-      this.modelKey = key;
       const [serviceId, modelId] = String(key).split('::');
-      saveAiSettings({ defaultRef: { serviceId, modelId } }).catch(() => {});
+      if (!serviceId || !modelId) return;
+      this.modelKey = key;
+      this.sessionModel = { serviceId, modelId };
     },
 
     openSettings() {
@@ -456,6 +514,27 @@ export default {
         e.preventDefault();
         this.send();
       }
+    },
+    /** 输入区贴在面板底部，所以拖动手柄放在顶边：向上拖变高，向下拖变矮。 */
+    startBoxResize(e) {
+      const el = this.$refs.boxEl;
+      if (!el) return;
+      const startY = e.clientY;
+      const startH = el.getBoundingClientRect().height;
+      const max = Math.max(BOX_MIN_H, Math.floor(window.innerHeight * 0.46));
+      this.boxDragging = true;
+      this._boxMove = (ev) => {
+        this.boxHeight = Math.min(max, Math.max(BOX_MIN_H, startH + (startY - ev.clientY)));
+      };
+      this._boxUp = () => {
+        this.boxDragging = false;
+        document.removeEventListener('mousemove', this._boxMove);
+        document.removeEventListener('mouseup', this._boxUp);
+        this._boxMove = null;
+        this._boxUp = null;
+      };
+      document.addEventListener('mousemove', this._boxMove);
+      document.addEventListener('mouseup', this._boxUp);
     },
 
     toolStatText(item) {
@@ -559,6 +638,21 @@ export default {
   gap: 10px;
 }
 .ai-empty { color: var(--text-3); font-size: 12px; line-height: 1.7; padding: 6px 4px; }
+.ai-offline {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 18px;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.7;
+  text-align: center;
+}
+.ai-offline i { font-size: 22px; }
 .ai-empty-warn { margin-top: 8px; color: var(--warning); }
 .ai-item { font-size: 12.5px; }
 .msg-user {
@@ -667,7 +761,6 @@ export default {
 .ai-ask-reason { margin-top: 5px; font-size: 11px; color: var(--text-2); line-height: 1.6; }
 .ai-ask-btns { display: flex; gap: 7px; margin-top: 8px; flex-wrap: wrap; }
 .ai-input { flex: 0 0 auto; border-top: 1px solid var(--border); background: var(--bg-panel); padding: 7px 9px 9px; }
-.ai-run-hint { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--warning); margin-bottom: 6px; }
 .ai-box {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -676,13 +769,32 @@ export default {
   transition: border-color 0.15s ease;
 }
 .ai-box.is-focus { border-color: var(--accent); }
+.ai-box-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 10px;
+  background: none;
+  cursor: ns-resize;
+  user-select: none;
+}
+.ai-box-grip i {
+  width: 26px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background 0.15s ease;
+}
+.ai-box-grip:hover i,
+.ai-box-grip.dragging i {
+  background: var(--accent);
+}
 .ai-box-input {
   display: block;
   width: 100%;
   min-height: 88px;
   max-height: 46vh;
-  /* 用户可以纵向拖拽放大缩小输入区 */
-  resize: vertical;
+  resize: none;
   overflow-y: auto;
   padding: 10px 11px;
   font-size: 12.5px;

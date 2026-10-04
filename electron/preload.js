@@ -107,9 +107,11 @@ const api = {
   aiApprove: (req) => ipcRenderer.invoke('ai:approve', req),
   aiCancel: (req) => ipcRenderer.invoke('ai:cancel', req),
   aiReset: (req) => ipcRenderer.invoke('ai:reset', req),
+  aiSetPermission: (req) => ipcRenderer.invoke('ai:permission', req),
   aiHistory: (req) => ipcRenderer.invoke('ai:history', req),
   aiScreenReply: (req) => ipcRenderer.invoke('ai:screen-reply', req),
   aiTest: (req) => ipcRenderer.invoke('ai:test', req),
+  aiModels: (req) => ipcRenderer.invoke('ai:models', req),
   onAiEvent: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('ai:event', handler);

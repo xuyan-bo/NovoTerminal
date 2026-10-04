@@ -168,13 +168,19 @@ export const api = hasBridge
       async aiReset() {
         return { ok: true };
       },
+      async aiSetPermission() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
       async aiHistory() {
-        return { ok: true, running: false, messages: [] };
+        return { ok: true, running: false, permissionOverride: '', modelOverride: null, messages: [] };
       },
       async aiScreenReply() {
         return { ok: false };
       },
       async aiTest() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async aiModels() {
         return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       onAiEvent() {
