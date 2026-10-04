@@ -7,9 +7,11 @@ const { createX11Forwarder } = require('./x11');
 const SSH_TAIL_LIMIT = 512 * 1024;
 
 class SshSessionManager {
-  constructor({ send, log }) {
+  constructor({ send, log, onEnded }) {
     this.send = send || (() => {});
     this.log = log;
+    /** 会话彻底结束（含远端自行退出）时的回调，让挂在输出流上的调用方（AI）先行撤收。 */
+    this.onEnded = onEnded || (() => {});
     this.sessions = new Map();
   }
 
@@ -20,6 +22,29 @@ class SshSessionManager {
     while (tail.chars > SSH_TAIL_LIMIT && tail.chunks.length > 1) {
       tail.chars -= tail.chunks.shift().length;
     }
+  }
+
+  /** 输出流的唯一出口：先过一遍会话上的临时过滤器（AI 用它截命令结束标记），再落 tail 与转发。 */
+  _emitOutput(rec, sessionId, text) {
+    let out = text;
+    if (rec.outputFilter) {
+      try {
+        out = rec.outputFilter(text);
+      } catch (_) {
+        out = text;
+      }
+    }
+    if (!out) return;
+    this._pushTail(rec, out);
+    this.send('ssh:data:' + sessionId, out, rec.ownerId);
+  }
+
+  /** 传 null 取消过滤。过滤器只属于当前挂载它的调用方，会话销毁时随 rec 一起消失。 */
+  setOutputFilter(sessionId, filter) {
+    const rec = this.sessions.get(sessionId);
+    if (!rec) return false;
+    rec.outputFilter = typeof filter === 'function' ? filter : null;
+    return true;
   }
 
   _emit(sessionId, type, payload = {}) {
@@ -46,7 +71,7 @@ class SshSessionManager {
       cols: dimension(req.cols, 120), rows: dimension(req.rows, 32), adv,
       connection: null, stream: null, x11: null, ready: false, shellTimer: null, closedError: null,
       stdout: iconv.getDecoder(adv.charset), stderr: iconv.getDecoder(adv.charset),
-      tail: { chunks: [], chars: 0 },
+      tail: { chunks: [], chars: 0 }, outputFilter: null,
     };
     this.sessions.set(sessionId, rec);
     let rejectClosed;
@@ -86,10 +111,7 @@ class SshSessionManager {
       const write = (decoder, data) => {
         if (this.sessions.get(sessionId) !== rec || rec.closedError) return;
         const text = decoder.write(Buffer.from(data));
-        if (text) {
-          this._pushTail(rec, text);
-          this.send('ssh:data:' + sessionId, text, rec.ownerId);
-        }
+        if (text) this._emitOutput(rec, sessionId, text);
       };
       await Promise.race([
         new Promise((resolve, reject) => {
@@ -108,10 +130,7 @@ class SshSessionManager {
               if (this.sessions.get(sessionId) !== rec) return;
               for (const decoder of [rec.stdout, rec.stderr]) {
                 const text = decoder.end();
-                if (text) {
-                  this._pushTail(rec, text);
-                  this.send('ssh:data:' + sessionId, text, rec.ownerId);
-                }
+                if (text) this._emitOutput(rec, sessionId, text);
               }
               onClosed(null);
             });
@@ -204,6 +223,9 @@ class SshSessionManager {
     const rec = this.sessions.get(sessionId);
     if (!rec) return;
     this.sessions.delete(sessionId);
+    try {
+      this.onEnded(sessionId);
+    } catch (_) { /* 撤收失败不能反过来拖住连接清理 */ }
     clearTimeout(rec.shellTimer);
     rec.closedError = rec.closedError || Object.assign(new Error('SSH connection canceled'), { code: 'SSH_CANCELED' });
     rec.rejectClosed(rec.closedError);

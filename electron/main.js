@@ -9,6 +9,10 @@ const { AssetStore } = require('./store/assetStore');
 const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
 const { SshMonitorManager } = require('./ssh/SshMonitorManager');
+const { PtyRunner } = require('./ai/ptyRunner');
+const { AiManager } = require('./ai/aiManager');
+const { testConnection } = require('./ai/aiClient');
+const { normalize: normalizeAi } = require('./ai/aiSettings');
 const { SSH_DEFAULTS } = require('./ssh/connection');
 const { createHostKeyVerifier } = require('./ssh/hostKeys');
 const { SshPrompts } = require('./ssh/SshPrompts');
@@ -87,6 +91,8 @@ let store = null;
 let sessions = null;
 let sshSessions = null;
 let sshMonitor = null;
+let aiPty = null;
+let aiAssistant = null;
 let vncSessions = null;
 let rdpSessions = null;
 let sftpManager = null;
@@ -163,6 +169,8 @@ const sshOwners = new Set();
 const sshTests = new Map();
 
 function closeSshOwner(ownerId) {
+  if (aiAssistant) aiAssistant.stopOwner(ownerId);
+  if (aiPty) aiPty.stopOwner(ownerId);
   if (sshSessions) sshSessions.closeOwner(ownerId);
   if (sshMonitor) sshMonitor.stopOwner(ownerId);
   if (sftpManager) sftpManager.closeOwner(ownerId);
@@ -532,7 +540,10 @@ function registerIpc() {
   handle('store:remove-recent', (p) => unwrap(store.removeRecent(p && p.id, p && p.method)));
   handle('store:settings', () => store.getSettings());
   handle('store:update-settings', (patch) => {
-    const s = unwrap(store.updateSettings(patch));
+    const clean = patch && typeof patch === 'object' ? { ...patch } : {};
+    // AI 配置由主进程收敛类型与取值范围，渲染端递来的对象不直接落盘
+    if ('ai' in clean) clean.ai = normalizeAi(clean.ai);
+    const s = unwrap(store.updateSettings(clean));
     applyZoom();
     rebuildTrayMenu();
     return s;
@@ -706,6 +717,47 @@ function registerIpc() {
     ownSsh(sender, sessionId);
     return sshMonitor.stop(sessionId);
   }, true);
+
+  // ---- AI 助手：一切动作都以「是否拥有这条 SSH 会话」为权限边界 ----
+  handle('ai:send', (sender, req) => {
+    ownSsh(sender, req && req.sessionId);
+    return aiAssistant.turn(req);
+  }, true);
+  handle('ai:approve', (sender, req) => {
+    ownSsh(sender, req && req.sessionId);
+    return aiAssistant.approve(req);
+  }, true);
+  handle('ai:cancel', (sender, req) => {
+    ownSsh(sender, req && req.sessionId);
+    return aiAssistant.cancel(req.sessionId);
+  }, true);
+  handle('ai:reset', (sender, req) => {
+    ownSsh(sender, req && req.sessionId);
+    return aiAssistant.reset(req.sessionId);
+  }, true);
+  handle('ai:history', (sender, req) => {
+    ownSsh(sender, req && req.sessionId);
+    return aiAssistant.history(req.sessionId);
+  }, true);
+  /** 模型中途要读屏幕时主进程会发 screen-request，渲染端取到 buffer 文本后回到这里。 */
+  handle('ai:screen-reply', (sender, req) => {
+    ownSsh(sender, req && req.sessionId);
+    return aiAssistant.screenReply(req);
+  }, true);
+  handle('ai:test', async (req) => {
+    const baseUrl = typeof (req && req.baseUrl) === 'string' ? req.baseUrl.trim().replace(/\/+$/, '') : '';
+    if (!/^https?:\/\//i.test(baseUrl)) throw Object.assign(new Error('Invalid base URL'), { code: 'AI_URL' });
+    const apiKey = typeof (req && req.apiKey) === 'string' ? req.apiKey.slice(0, 400) : '';
+    if (!apiKey) throw Object.assign(new Error('Missing API key'), { code: 'AI_NO_KEY' });
+    try {
+      const r = await testConnection({ baseUrl, apiKey, model: typeof req.model === 'string' ? req.model.slice(0, 120) : '' });
+      logger.info('ai', 'ai service test ok', { baseUrl, via: r.via, ms: r.ms, models: r.models ? r.models.length : 0 });
+      return r;
+    } catch (e) {
+      logger.warn('ai', 'ai service test failed', { baseUrl, code: e.code || 'AI_REQUEST', message: e.message });
+      throw e;
+    }
+  });
 
   /**
    * Re-host an existing SSH session in the window that currently owns the tab, without
@@ -1293,8 +1345,14 @@ app.whenReady().then(() => {
     // Owner-targeted events fire while that window is already being torn down: closeSshOwner runs
     // from its own destroyed event, so the session's end state has no renderer left to receive it.
     send: sendToOwner,
+    onEnded: (sessionId) => {
+      if (aiAssistant) aiAssistant.stopSession(sessionId, 'session-ended');
+      if (aiPty) aiPty.stop(sessionId);
+    },
   });
   sshMonitor = new SshMonitorManager({ ssh: sshSessions, send: sendToOwner, log: logger });
+  aiPty = new PtyRunner({ ssh: sshSessions, log: logger });
+  aiAssistant = new AiManager({ ssh: sshSessions, pty: aiPty, store, send: sendToOwner, log: logger });
   vncSessions = new VncSessionManager({ send, log: logger });
   rdpSessions = new RdpSessionManager({ send, log: logger });
   sftpManager = new SftpManager({ send, store, log: logger });
@@ -1330,6 +1388,8 @@ app.on('before-quit', (e) => {
   if (rdpSessions) rdpSessions.destroyAll();
   if (sshSessions) sshSessions.destroyAll();
   if (sshMonitor) sshMonitor.destroyAll();
+  if (aiAssistant) aiAssistant.destroyAll();
+  if (aiPty) aiPty.destroyAll();
   if (sftpManager) sftpManager.destroyAll();
   for (const tests of sshTests.values()) for (const connection of tests) connection.close();
   sshTests.clear();

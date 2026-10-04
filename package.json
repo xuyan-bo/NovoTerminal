@@ -28,6 +28,7 @@
     "element-ui": "^2.15.14",
     "iconv-lite": "0.6.3",
     "ironrdp-wasm": "^1.1.0",
+    "openai": "^4.98.0",
     "ssh2": "^1.17.0",
     "vue": "^2.7.16",
     "ws": "^8.21.3"
@@ -37,6 +38,7 @@
     "cross-env": "^7.0.3",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
+    "marked": "^18.0.14",
     "vite": "^5.4.11"
   },
   "build": {

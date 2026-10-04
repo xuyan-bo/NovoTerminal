@@ -1,0 +1,148 @@
+/**
+ * OpenAI 标准接口的流式客户端。只负责「一次请求 + 把 tool_calls 的分片拼回来」，
+ * 不做任何业务判断——回合循环与审批在 aiManager。
+ *
+ * 错误一律抛成带 code 的 Error，消息保持英文技术描述供日志使用；
+ * 面向用户的文案由渲染端按 code 翻译，避免主进程硬编码中文。
+ */
+
+const { OpenAI } = require('openai');
+
+const REQUEST_TIMEOUT_MS = 90000;
+const TEST_TIMEOUT_MS = 12000;
+const MAX_TEXT_CHUNK = 4096;
+
+function aiError(code, message, status) {
+  return Object.assign(new Error(message), { code, status });
+}
+
+function clientFor(baseUrl, apiKey) {
+  return new OpenAI({
+    apiKey,
+    baseURL: baseUrl,
+    maxRetries: 0,
+    timeout: REQUEST_TIMEOUT_MS,
+  });
+}
+
+/** SDK 的异常类型不带我们自己的 code，这里按状态码归一，401/404/429 是最常见的三类。 */
+function toAiError(error) {
+  if (error && error.name === 'AbortError') return aiError('AI_CANCELED', 'request aborted');
+  const status = Number(error && error.status);
+  const message = String((error && error.message) || error || 'unknown error').slice(0, 300);
+  if (status === 401 || status === 403) return aiError('AI_AUTH', message, status);
+  if (status === 404 || status === 400 || status === 422) return aiError('AI_MODEL', message, status);
+  if (status === 429) return aiError('AI_RATE', message, status);
+  if (status >= 500) return aiError('AI_SERVER', message, status);
+  if (error && error.name === 'APIConnectionTimeoutError') return aiError('AI_TIMEOUT', message);
+  if (error && error.name === 'APIConnectionError') return aiError('AI_NETWORK', message);
+  return aiError('AI_REQUEST', message, status || undefined);
+}
+
+function textOf(delta) {
+  const content = delta && delta.content;
+  if (typeof content === 'string') return content;
+  // 少数兼容网关把 content 发成 [{type:'text',text}] 数组
+  if (Array.isArray(content)) {
+    return content.map((p) => (p && typeof p.text === 'string' ? p.text : '')).join('');
+  }
+  return '';
+}
+
+/**
+ * 发一轮对话并流式回调文本增量，返回聚合后的完整文本与工具调用列表。
+ * tool_calls 在流里是按 index 分片到达的（arguments 是 JSON 字符串碎片），必须自己累加。
+ */
+async function streamChat(opts) {
+  const { baseUrl, apiKey, model, messages, tools, maxTokens, temperature, signal, onText } = opts;
+  const body = {
+    model,
+    messages,
+    temperature,
+    max_tokens: maxTokens,
+    stream: true,
+  };
+  if (Array.isArray(tools) && tools.length) body.tools = tools;
+  let stream;
+  try {
+    stream = await clientFor(baseUrl, apiKey).chat.completions.create(body, { signal });
+  } catch (error) {
+    throw toAiError(error);
+  }
+  const calls = new Map();
+  let text = '';
+  let finishReason = '';
+  let usage = null;
+  try {
+    for await (const part of stream) {
+      if (signal && signal.aborted) break;
+      if (part.usage) usage = part.usage;
+      const choice = part.choices && part.choices[0];
+      if (!choice) continue;
+      if (choice.finish_reason) finishReason = choice.finish_reason;
+      const delta = choice.delta || {};
+      const piece = textOf(delta);
+      if (piece) {
+        text += piece;
+        if (onText) onText(piece.slice(0, MAX_TEXT_CHUNK));
+      }
+      for (const tc of delta.tool_calls || []) {
+        const key = tc.index == null ? calls.size : tc.index;
+        if (!calls.has(key)) calls.set(key, { id: '', name: '', args: '' });
+        const acc = calls.get(key);
+        if (tc.id) acc.id = tc.id;
+        if (tc.function && tc.function.name) acc.name += tc.function.name;
+        if (tc.function && typeof tc.function.arguments === 'string') acc.args += tc.function.arguments;
+      }
+    }
+  } catch (error) {
+    throw toAiError(error);
+  }
+  const toolCalls = [...calls.values()].filter((c) => c.name).map((c) => ({
+    id: c.id || 'call-' + Math.random().toString(36).slice(2, 10),
+    name: c.name,
+    args: parseArgs(c.args),
+  }));
+  return { text, toolCalls, finishReason, usage };
+}
+
+/** 网关偶尔吐出不合法 JSON 的参数串；解析失败要保留原文，让模型下一轮自己纠正。 */
+function parseArgs(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' ? parsed : { input: text };
+  } catch (_) {
+    return { __unparsed: text.slice(0, 2000) };
+  }
+}
+
+/**
+ * 设置页的「测试连接」。优先打 /models（能顺带列出模型），
+ * 网关不支持该端点时退化成一次 1 token 的补全，只要不报错就说明鉴权与模型名可用。
+ */
+async function testConnection(opts) {
+  const { baseUrl, apiKey, model, signal } = opts;
+  const client = new OpenAI({ apiKey, baseURL: baseUrl, maxRetries: 0, timeout: TEST_TIMEOUT_MS });
+  const started = Date.now();
+  try {
+    const list = await client.models.list({ signal });
+    const ids = (list && list.data ? list.data : []).map((m) => m && m.id).filter(Boolean).slice(0, 200);
+    return { ok: true, ms: Date.now() - started, models: ids, via: 'models' };
+  } catch (error) {
+    const mapped = toAiError(error);
+    if (mapped.code === 'AI_AUTH' || mapped.code === 'AI_CANCELED') throw mapped;
+  }
+  try {
+    await client.chat.completions.create(
+      { model: model || undefined, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 },
+      { signal }
+    );
+    return { ok: true, ms: Date.now() - started, models: null, via: 'completion' };
+  } catch (error) {
+    throw toAiError(error);
+  }
+}
+
+module.exports = { streamChat, testConnection };

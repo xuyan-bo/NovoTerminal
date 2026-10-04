@@ -102,6 +102,20 @@ const api = {
     return () => ipcRenderer.removeListener('monitor:end', handler);
   },
 
+  // AI assistant (always bound to one SSH terminal session)
+  aiSend: (req) => ipcRenderer.invoke('ai:send', req),
+  aiApprove: (req) => ipcRenderer.invoke('ai:approve', req),
+  aiCancel: (req) => ipcRenderer.invoke('ai:cancel', req),
+  aiReset: (req) => ipcRenderer.invoke('ai:reset', req),
+  aiHistory: (req) => ipcRenderer.invoke('ai:history', req),
+  aiScreenReply: (req) => ipcRenderer.invoke('ai:screen-reply', req),
+  aiTest: (req) => ipcRenderer.invoke('ai:test', req),
+  onAiEvent: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('ai:event', handler);
+    return () => ipcRenderer.removeListener('ai:event', handler);
+  },
+
   // VNC sessions (noVNC via WebSocket proxy)
   vncConnect: (req) => ipcRenderer.invoke('vnc:connect', req),
   vncDisconnect: (sessionId) => ipcRenderer.invoke('vnc:disconnect', sessionId),

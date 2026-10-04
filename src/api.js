@@ -1,5 +1,6 @@
 /** Renderer API wrapper with local mock fallback when preload missing. */
 import { t } from './i18n';
+import { AI_DEFAULTS } from './constants';
 
 const hasBridge = typeof window !== 'undefined' && !!window.omniDesk;
 
@@ -24,6 +25,7 @@ function mockSettings() {
     zoom: 100,
     font: 'default',
     closeAction: 'ask',
+    ai: { ...AI_DEFAULTS, services: [], defaultRef: null },
   };
 }
 
@@ -152,6 +154,30 @@ export const api = hasBridge
         return () => {};
       },
       onMonitorEnd() {
+        return () => {};
+      },
+      async aiSend() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async aiApprove() {
+        return { ok: false, reason: 'stale' };
+      },
+      async aiCancel() {
+        return { ok: true, running: false };
+      },
+      async aiReset() {
+        return { ok: true };
+      },
+      async aiHistory() {
+        return { ok: true, running: false, messages: [] };
+      },
+      async aiScreenReply() {
+        return { ok: false };
+      },
+      async aiTest() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      onAiEvent() {
         return () => {};
       },
       async rdpConnect() {

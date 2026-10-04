@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { app, safeStorage } = require('electron');
+const { AI_DEFAULTS } = require('../ai/aiSettings');
 
 const UNGROUPED_ID = 'g-ungrouped';
 const UNGROUPED_NAME = '未分组';
@@ -32,6 +33,8 @@ function defaultData() {
       zoom: 100,
       font: 'default',
       closeAction: 'ask', // 'ask' = 每次询问, 'minimize' = 直接最小化, 'quit' = 直接退出
+      // AI 助手配置：结构与取值范围由 electron/ai/aiSettings.js 收敛，这里只给持久化默认值
+      ai: { ...AI_DEFAULTS, services: [], defaultRef: null },
     },
   };
 }

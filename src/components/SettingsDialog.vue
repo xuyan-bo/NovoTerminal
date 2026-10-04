@@ -16,7 +16,8 @@
           :class="{ on: activeMenu === sec.id }"
           @click="activeMenu = sec.id"
         >
-          <i :class="sec.icon"></i>
+          <svg-icon v-if="sec.svg" :name="sec.svg" :size="13" />
+          <i v-else :class="sec.icon"></i>
           <span>{{ $t('settings.' + sec.id) }}</span>
         </button>
       </div>
@@ -104,6 +105,117 @@
           </el-form-item>
         </div>
 
+        <div v-show="activeMenu === 'ai'" class="set-section">
+          <el-form-item>
+            <template slot="label">
+              {{ $t('settings.ai.enabled') }}
+              <el-tooltip :content="$t('settings.ai.enabledTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+            </template>
+            <el-switch v-model="ai.enabled" />
+          </el-form-item>
+
+          <el-form-item>
+            <template slot="label">
+              {{ $t('settings.ai.services') }}
+              <el-tooltip :content="$t('settings.ai.servicesTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+            </template>
+            <div class="svc-list">
+              <div v-for="(svc, i) in ai.services" :key="svc.id" class="svc-card" :class="{ def: isDefaultService(svc) }">
+                <div class="svc-top">
+                  <el-input v-model="svc.name" size="mini" class="svc-name" :placeholder="$t('settings.ai.serviceName')" />
+                  <span v-if="isDefaultService(svc)" class="svc-tag">{{ $t('settings.ai.defaultService') }}</span>
+                  <span v-else-if="svc.test" class="svc-tag" :class="svc.test.ok ? 'ok' : 'bad'">{{ svc.test.text }}</span>
+                  <span class="svc-ops">
+                    <el-button size="mini" type="text" :disabled="isDefaultService(svc)" @click="setDefaultService(svc)">
+                      {{ $t('settings.ai.setDefault') }}
+                    </el-button>
+                    <el-button size="mini" type="text" :loading="!!svc.testing" @click="testService(svc)">
+                      {{ $t('settings.ai.test') }}
+                    </el-button>
+                    <el-button size="mini" type="text" class="svc-del" @click="removeService(i)">{{ $t('settings.ai.deleteService') }}</el-button>
+                  </span>
+                </div>
+                <div class="svc-grid">
+                  <label class="svc-field">
+                    <span>{{ $t('settings.ai.baseUrl') }}</span>
+                    <el-input v-model="svc.baseUrl" size="mini" class="mono" placeholder="https://api.example.com/v1" />
+                  </label>
+                  <label class="svc-field">
+                    <span>{{ $t('settings.ai.apiKey') }}</span>
+                    <el-input v-model="svc.apiKey" size="mini" class="mono" show-password autocomplete="off" />
+                  </label>
+                </div>
+                <div class="svc-models">
+                  <div class="svc-models-head">
+                    {{ $t('settings.ai.models') }}
+                    <el-tooltip :content="$t('settings.ai.modelsEmpty')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+                  </div>
+                  <div v-for="(m, j) in svc.models" :key="svc.id + '-' + m.id" class="model-row">
+                    <span class="model-id mono">{{ m.id }}</span>
+                    <span class="model-alias">{{ m.alias || m.id }}</span>
+                    <el-button
+                      v-if="!isDefaultModel(svc, m)"
+                      size="mini"
+                      type="text"
+                      @click="setDefaultModel(svc, m)"
+                    >{{ $t('settings.ai.setDefaultModel') }}</el-button>
+                    <span v-else class="svc-tag">{{ $t('settings.ai.defaultService') }}</span>
+                    <el-button size="mini" type="text" class="svc-del" @click="svc.models.splice(j, 1)">{{ $t('settings.ai.deleteModel') }}</el-button>
+                  </div>
+                  <div v-if="!svc.models.length" class="model-empty">{{ $t('settings.ai.modelsEmpty') }}</div>
+                  <div class="model-add">
+                    <el-input v-model="draft[svc.id].id" size="mini" class="mono" :placeholder="$t('settings.ai.modelId')" @keyup.enter.native="addModel(svc)" />
+                    <el-input v-model="draft[svc.id].alias" size="mini" :placeholder="$t('settings.ai.modelAlias')" @keyup.enter.native="addModel(svc)" />
+                    <el-button size="mini" @click="addModel(svc)">{{ $t('settings.ai.addModel') }}</el-button>
+                  </div>
+                </div>
+              </div>
+              <el-button size="mini" icon="el-icon-plus" @click="addService">{{ $t('settings.ai.addService') }}</el-button>
+            </div>
+          </el-form-item>
+
+          <el-form-item>
+            <template slot="label">
+              {{ $t('settings.ai.permission') }}
+              <el-tooltip :content="$t('settings.ai.permissionTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+            </template>
+            <el-radio-group v-model="ai.permission">
+              <el-radio v-for="p in permissions" :key="p.id" :label="p.id">
+                {{ $t('ai.perm.' + p.id) }}
+                <el-tooltip :content="$t('ai.permDesc.' + p.id)" placement="top"><i class="el-icon-info"></i></el-tooltip>
+              </el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item>
+            <template slot="label">
+              {{ $t('settings.ai.readScreen') }}
+              <el-tooltip :content="$t('settings.ai.readScreenTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+            </template>
+            <el-switch v-model="ai.readScreen" />
+          </el-form-item>
+          <el-form-item>
+            <template slot="label">
+              {{ $t('settings.ai.ptyControl') }}
+              <el-tooltip :content="$t('settings.ai.ptyControlTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+            </template>
+            <el-switch v-model="ai.ptyControl" />
+          </el-form-item>
+          <el-form-item>
+            <template slot="label">
+              {{ $t('settings.ai.timeout') }}
+              <el-tooltip :content="$t('settings.ai.timeoutTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+            </template>
+            <el-input-number v-model="ai.commandTimeoutSec" size="mini" :min="AI_LIMITS.commandTimeoutSec[0]" :max="AI_LIMITS.commandTimeoutSec[1]" />
+          </el-form-item>
+          <el-form-item>
+            <template slot="label">
+              {{ $t('settings.ai.turns') }}
+              <el-tooltip :content="$t('settings.ai.turnsTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+            </template>
+            <el-input-number v-model="ai.maxTurns" size="mini" :min="AI_LIMITS.maxTurns[0]" :max="AI_LIMITS.maxTurns[1]" />
+          </el-form-item>
+        </div>
+
         <div v-show="activeMenu === 'about'" class="set-section">
           <div class="about-box">
             <img class="logo-mark" src="../assets/logo.svg" alt="OmniDesk" width="36" height="36" />
@@ -138,10 +250,15 @@
 <script>
 import { store, api, unwrap, refresh } from '../store';
 import { applyTheme, applyFont, setLocale, t } from '../i18n';
-import { UI_FONTS } from '../constants';
+import { UI_FONTS, AI_PERMISSIONS, AI_DEFAULTS, AI_LIMITS } from '../constants';
 import locale from 'element-ui/lib/locale';
 import zhLocale from 'element-ui/lib/locale/lang/zh-CN';
 import enLocale from 'element-ui/lib/locale/lang/en';
+
+/** 服务与模型的临时字段（测试状态、新增草稿）不进持久化对象。 */
+function cleanService(svc) {
+  return { id: svc.id, name: String(svc.name || '').trim(), baseUrl: String(svc.baseUrl || '').trim(), apiKey: String(svc.apiKey || ''), models: (svc.models || []).map((m) => ({ id: m.id, alias: m.alias || m.id })) };
+}
 
 export default {
   name: 'SettingsDialog',
@@ -150,9 +267,14 @@ export default {
       saving: false,
       browsing: false,
       activeMenu: 'general',
+      permissions: AI_PERMISSIONS,
+      AI_LIMITS,
+      draft: {},
+      ai: { ...AI_DEFAULTS, services: [], defaultRef: null },
       sections: [
         { id: 'general', icon: 'el-icon-setting' },
         { id: 'data', icon: 'el-icon-folder' },
+        { id: 'ai', icon: '', svg: 'ai' },
         { id: 'about', icon: 'el-icon-info' },
       ],
       themes: [{ id: 'dark' }, { id: 'light' }, { id: 'system' }],
@@ -220,6 +342,15 @@ export default {
         font: s.font || 'default',
         closeAction: s.closeAction || 'ask',
       };
+      const ai = s.ai || {};
+      this.ai = {
+        ...AI_DEFAULTS,
+        ...ai,
+        permission: AI_PERMISSIONS.some((p) => p.id === ai.permission) ? ai.permission : AI_DEFAULTS.permission,
+        services: (Array.isArray(ai.services) ? ai.services : []).map(cleanService),
+        defaultRef: ai.defaultRef ? { ...ai.defaultRef } : null,
+      };
+      this.ensureDrafts();
       applyTheme(this.form.theme);
       applyFont(this.form.font);
       setLocale(this.form.lang);
@@ -261,6 +392,97 @@ export default {
         this.browsing = false;
       }
     },
+    /* ---- AI 服务与模型：与终端面板共用同一份 settings.ai ---- */
+    ensureDrafts() {
+      for (const svc of this.ai.services) {
+        if (!this.draft[svc.id]) this.$set(this.draft, svc.id, { id: '', alias: '' });
+      }
+    },
+    isDefaultService(svc) {
+      return !!(this.ai.defaultRef && this.ai.defaultRef.serviceId === svc.id);
+    },
+    isDefaultModel(svc, model) {
+      const ref = this.ai.defaultRef;
+      return !!(ref && ref.serviceId === svc.id && ref.modelId === model.id);
+    },
+    setDefaultService(svc) {
+      const first = svc.models && svc.models[0];
+      if (!first) {
+        this.$message.warning(t('settings.ai.needModelFirst'));
+        return;
+      }
+      this.ai.defaultRef = { serviceId: svc.id, modelId: first.id };
+    },
+    setDefaultModel(svc, model) {
+      this.ai.defaultRef = { serviceId: svc.id, modelId: model.id };
+    },
+    addService() {
+      const id = 'svc-' + crypto.randomUUID();
+      this.ai.services = [...this.ai.services, { id, name: t('settings.ai.newService'), baseUrl: '', apiKey: '', models: [] }];
+      this.$set(this.draft, id, { id: '', alias: '' });
+    },
+    removeService(i) {
+      const [gone] = this.ai.services.splice(i, 1);
+      if (gone) {
+        this.$delete(this.draft, gone.id);
+        if (this.ai.defaultRef && this.ai.defaultRef.serviceId === gone.id) this.ai.defaultRef = null;
+      }
+    },
+    addModel(svc) {
+      const box = this.draft[svc.id] || { id: '', alias: '' };
+      const id = String(box.id || '').trim();
+      if (!id) return;
+      if (svc.models.some((m) => m.id === id)) {
+        this.$message.warning(t('settings.ai.modelExists'));
+        return;
+      }
+      svc.models.push({ id, alias: String(box.alias || '').trim() });
+      this.$set(this.draft, svc.id, { id: '', alias: '' });
+      if (!this.ai.defaultRef) this.ai.defaultRef = { serviceId: svc.id, modelId: id };
+    },
+    async testService(svc) {
+      if (!api.aiTest) {
+        this.$message.warning(t('msg.needElectron'));
+        return;
+      }
+      if (!String(svc.baseUrl || '').trim() || !String(svc.apiKey || '').trim()) {
+        this.$set(svc, 'test', { ok: false, text: t('settings.ai.testIncomplete') });
+        return;
+      }
+      this.$set(svc, 'testing', true);
+      this.$set(svc, 'test', null);
+      try {
+        const r = unwrap(await api.aiTest({ baseUrl: svc.baseUrl, apiKey: svc.apiKey, model: svc.models[0] ? svc.models[0].id : '' }));
+        const extra = r.models && r.models.length ? t('settings.ai.testModels', { n: r.models.length }) : '';
+        this.$set(svc, 'test', { ok: true, text: t('settings.ai.testOk', { ms: r.ms }) + extra });
+        // 拉到模型清单而服务里还空着，就填前 20 个进去，省得手抄
+        if (r.models && r.models.length && !svc.models.length) {
+          this.$set(svc, 'models', r.models.slice(0, 20).map((id) => ({ id, alias: id })));
+        }
+      } catch (e) {
+        const key = 'err.' + (e.code || '');
+        const mapped = e.code ? t(key) : '';
+        this.$set(svc, 'test', { ok: false, text: (mapped && mapped !== key ? mapped : e.message) || t('settings.ai.testFail') });
+      } finally {
+        this.$set(svc, 'testing', false);
+      }
+    },
+    aiPayload() {
+      const temp = Number(this.ai.temperature);
+      return {
+        enabled: !!this.ai.enabled,
+        permission: this.ai.permission,
+        readScreen: !!this.ai.readScreen,
+        ptyControl: !!this.ai.ptyControl,
+        commandTimeoutSec: Number(this.ai.commandTimeoutSec) || AI_DEFAULTS.commandTimeoutSec,
+        maxTurns: Number(this.ai.maxTurns) || AI_DEFAULTS.maxTurns,
+        maxTokens: Number(this.ai.maxTokens) || AI_DEFAULTS.maxTokens,
+        temperature: Number.isFinite(temp) ? temp : AI_DEFAULTS.temperature,
+        services: this.ai.services.map(cleanService),
+        defaultRef: this.ai.defaultRef || null,
+      };
+    },
+
     async exportJson() {
       try {
         // OS identity is enforced in main (store:export); surface friendly errors here
@@ -320,6 +542,7 @@ export default {
               zoom: this.form.zoom,
               font: this.form.font,
               closeAction: this.form.closeAction,
+              ai: this.aiPayload(),
             })
           );
           await refresh();
@@ -411,6 +634,33 @@ export default {
   align-items: center;
   gap: 12px;
 }
+.mono { font-family: Consolas, "Courier New", monospace; }
+.svc-list { display: flex; flex-direction: column; gap: 10px; }
+.svc-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.svc-card.def { border-color: var(--accent); }
+.svc-top { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.svc-name { max-width: 150px; flex: none; }
+.svc-tag { font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.svc-tag.ok { background: rgba(103, 194, 58, 0.16); color: var(--success); }
+.svc-tag.bad { background: rgba(245, 108, 108, 0.16); color: var(--danger); }
+.svc-ops { margin-left: auto; display: flex; align-items: center; }
+.svc-ops .el-button + .el-button { margin-left: 8px; }
+.svc-del { color: var(--text-3); }
+.svc-del:hover { color: var(--danger); }
+.svc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.svc-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.svc-field > span { font-size: 11px; color: var(--text-3); }
+.svc-models { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.svc-models-head { font-size: 11px; color: var(--text-3); margin-bottom: 2px; }
+.model-row { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 2px 0; }
+.model-id { color: var(--text); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-alias { color: var(--text-2); font-size: 11.5px; }
+.model-empty { font-size: 11.5px; color: var(--text-3); padding: 2px 0 4px; }
+.model-add { display: flex; gap: 6px; margin-top: 6px; }
+.model-add .el-input { flex: 1; }
+.el-radio-group .el-radio { display: block; margin-right: 0; line-height: 1.9; }
+.el-radio-group .el-radio i.el-icon-info { color: var(--text-3); cursor: help; }
+.el-radio-group .el-radio i.el-icon-info:hover { color: var(--accent); }
 .zoom-row .el-slider {
   flex: 1;
   margin-top: -6px;

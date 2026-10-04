@@ -55,27 +55,54 @@
         >
           <svg-icon name="monitor-pulse" :size="15" />
         </button>
+        <button
+          v-if="aiEnabled"
+          type="button"
+          class="monitor-toggle ai-toggle"
+          :class="{ active: aiOpen, busy: aiRunning }"
+          :title="$t('ai.toggleTip')"
+          @click="toggleAi"
+        >
+          <svg-icon name="ai" :size="15" />
+        </button>
         <div ref="termEl" class="ssh-term"></div>
       </div>
-      <div class="ssh-monitor-host" :class="{ open: monitorOpen, dragging: monitorDragging }" :style="monitorHostStyle">
+      <div class="ssh-monitor-host" :class="{ open: sideOpen, dragging: monitorDragging || sideDragging }" :style="monitorHostStyle">
         <div
-          v-show="monitorOpen"
+          v-show="sideOpen"
           ref="monitorSplitter"
           class="monitor-splitter"
           @mousedown="onSplitStart"
         >
           <span class="grip"></span>
         </div>
-        <ssh-monitor-panel
-          v-if="monitorEver"
-          ref="monitorPanel"
-          :state="monitorState"
-          :meta="monitorMeta"
-          :snapshot="monitorSnapshot"
-          :interval-sec="monitorIntervalSec"
-          @close="closeMonitor"
-          @interval-change="onMonitorInterval"
-        />
+        <div class="ssh-side-col">
+          <div v-show="monitorOpen" class="ssh-side-pane" :style="monitorPaneStyle">
+            <ssh-monitor-panel
+              v-if="monitorEver"
+              ref="monitorPanel"
+              :state="monitorState"
+              :meta="monitorMeta"
+              :snapshot="monitorSnapshot"
+              :interval-sec="monitorIntervalSec"
+              @close="closeMonitor"
+              @interval-change="onMonitorInterval"
+            />
+          </div>
+          <div v-if="monitorOpen && aiOpen" class="side-hsplit" @mousedown="onSideSplitStart"><i></i></div>
+          <div v-show="aiOpen" class="ssh-side-pane" :style="aiPaneStyle">
+            <ai-assistant-panel
+              v-if="aiEver"
+              ref="aiPanel"
+              :session-id="liveSessionId || ''"
+              :host-text="title"
+              :cwd="oscCwd"
+              :read-screen="readScreenText"
+              @close="closeAi"
+              @running-change="aiRunning = $event"
+            />
+          </div>
+        </div>
       </div>
     </div>
     <transition name="fs-hint">
@@ -107,6 +134,7 @@ export default {
   components: {
     SshThemeDialog,
     SshMonitorPanel: () => import('./SshMonitorPanel.vue'),
+    AiAssistantPanel: () => import('./AiAssistantPanel.vue'),
   },
   mixins: [createFullscreenMixin({
     fallbackClass: 'is-terminal-fullscreen',
@@ -141,12 +169,35 @@ export default {
       monitorWidth: 30,
       monitorDragging: false,
       monitorIntervalSec: null,
+      oscCwd: '',
+      aiOpen: false,
+      aiEver: false,
+      /** 面板在跑回合时半圆亮提示点；回合归属主进程，收起面板也不会停。 */
+      aiRunning: false,
+      /** 两个面板同时打开时的高度分配（监控占比 %），拖拽中间横条调整。 */
+      sideSplit: 52,
+      sideDragging: false,
     };
   },
   computed: {
+    /** 设置里关掉助手就收起半圆按钮；未定义按开启处理，避免旧配置没有 ai 段时按钮消失。 */
+    aiEnabled() {
+      const ai = (store.snapshot.settings || {}).ai;
+      return !ai || ai.enabled !== false;
+    },
+    /** 监控与 AI 共用右侧这一列，任一打开就占宽，避免把终端挤两次。 */
+    sideOpen() {
+      return this.monitorOpen || this.aiOpen;
+    },
     monitorHostStyle() {
-      const pct = this.monitorOpen ? this.monitorWidth : 0;
+      const pct = this.sideOpen ? this.monitorWidth : 0;
       return { width: pct + '%', flexBasis: pct + '%' };
+    },
+    monitorPaneStyle() {
+      return this.monitorOpen && this.aiOpen ? { flex: '0 0 ' + this.sideSplit + '%' } : {};
+    },
+    aiPaneStyle() {
+      return this.monitorOpen && this.aiOpen ? { flex: '1 1 0%' } : {};
     },
     shortLabel() {
       return this.methodId === 'ssh' ? 'SSH' : String(this.methodId || '').toUpperCase();
@@ -210,8 +261,9 @@ export default {
     this._offMonitorEnd = null;
     this._splitMove = null;
     this._splitUp = null;
+    this._sideMove = null;
+    this._sideUp = null;
     this._offOsc7 = null;
-    this._oscCwd = null;
   },
   mounted() {
     this._fitTimer = null;
@@ -249,6 +301,14 @@ export default {
     if (this._splitUp) {
       window.removeEventListener('mouseup', this._splitUp);
       this._splitUp = null;
+    }
+    if (this._sideMove) {
+      window.removeEventListener('mousemove', this._sideMove);
+      this._sideMove = null;
+    }
+    if (this._sideUp) {
+      window.removeEventListener('mouseup', this._sideUp);
+      this._sideUp = null;
     }
     document.body.style.userSelect = '';
     if (this.monitorOpen && this.liveSessionId && api.monitorStop) {
@@ -535,7 +595,7 @@ export default {
         } catch (_) {}
         this._offOsc7 = null;
       }
-      this._oscCwd = null;
+      this.oscCwd = '';
       if (this.term) {
         try {
           this.term.dispose();
@@ -739,6 +799,58 @@ export default {
       this.stopMonitor();
     },
 
+    toggleAi() {
+      this.aiOpen = !this.aiOpen;
+      // 面板一旦创建就常驻：回合在主进程里继续跑，收起只藏起来，重开时接上同一份历史
+      this.aiEver = true;
+      if (this.aiOpen) this.scheduleFit();
+    },
+
+    closeAi() {
+      this.aiOpen = false;
+      this.scheduleFit();
+    },
+
+    /** 交给 AI 面板取屏幕文本：xterm 的 buffer 已是去掉转义序列的纯文本，比剥 tail 的 ANSI 干净。 */
+    readScreenText() {
+      const term = this.term;
+      if (!term) return '';
+      const buf = term.buffer.active;
+      const lines = [];
+      for (let i = 0; i < buf.length; i += 1) {
+        const line = buf.getLine(i);
+        if (line) lines.push(line.translateToString(true));
+      }
+      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+      return lines.join('\n');
+    },
+
+    onSideSplitStart(e) {
+      e.preventDefault();
+      if (this._sideMove) return;
+      const onMove = (ev) => {
+        const col = this.$refs.wrapEl && this.$refs.wrapEl.querySelector('.ssh-side-col');
+        if (!col) return;
+        const rect = col.getBoundingClientRect();
+        const pct = ((ev.clientY - rect.top) / rect.height) * 100;
+        this.sideSplit = Math.min(76, Math.max(24, pct));
+      };
+      const onUp = () => {
+        this.sideDragging = false;
+        document.body.style.userSelect = '';
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        this._sideMove = null;
+        this._sideUp = null;
+      };
+      this.sideDragging = true;
+      document.body.style.userSelect = 'none';
+      this._sideMove = onMove;
+      this._sideUp = onUp;
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    },
+
     async onMonitorInterval(sec) {
       const value = Number(sec);
       if (!Number.isInteger(value) || value < 1 || value > 60) return;
@@ -845,7 +957,7 @@ export default {
       } catch (_) {
         return false;
       }
-      if (p && p.charAt(0) === '/' && p.length <= 4096) this._oscCwd = p;
+      if (p && p.charAt(0) === '/' && p.length <= 4096) this.oscCwd = p;
       return true;
     },
 
@@ -856,7 +968,7 @@ export default {
       }
       const req = { assetId: this.assetId };
       // 终端当前目录：shell 自己报过就用它，否则把会话 ID 交给主进程去反查
-      if (this._oscCwd) req.remotePath = this._oscCwd;
+      if (this.oscCwd) req.remotePath = this.oscCwd;
       else if (this.status === 'ready' && this.liveSessionId) req.sshSessionId = this.liveSessionId;
       try {
         unwrap(await api.sftpOpenWindow(req));
@@ -871,7 +983,7 @@ export default {
       const sid = this.liveSessionId;
       this.liveSessionId = null;
       // 重连后旧目录已无意义，交给下次 OSC 7 或主进程探测重新确定
-      this._oscCwd = null;
+      this.oscCwd = '';
       if (this.offData) {
         this.offData();
         this.offData = null;
@@ -1078,6 +1190,58 @@ export default {
   opacity: 1;
   background: var(--bg-elevated, #1c2430);
   color: var(--text, #e6edf3);
+}
+/* AI 半圆沿用监控半圆的尺寸与悬停语义，只是贴在它下面 */
+.ai-toggle {
+  top: 52px;
+}
+.ai-toggle.busy::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--warning, #e6a23c);
+  border: 1px solid var(--bg-app, #0f1419);
+  animation: ai-dot-pulse 1s ease-in-out infinite;
+}
+@keyframes ai-dot-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.ssh-side-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ssh-side-pane {
+  flex: 1 1 0%;
+  min-height: 0;
+  display: flex;
+}
+.side-hsplit {
+  flex: 0 0 5px;
+  cursor: row-resize;
+  background: var(--bg-panel, #151b23);
+  border-top: 1px solid var(--border, #2a3544);
+  border-bottom: 1px solid var(--border, #2a3544);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.side-hsplit i {
+  width: 26px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border, #2a3544);
+  transition: background 0.15s ease;
+}
+.side-hsplit:hover i {
+  background: var(--accent, #409eff);
 }
 .ssh-term /deep/ .xterm {
   height: 100%;

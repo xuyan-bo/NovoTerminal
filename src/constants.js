@@ -408,6 +408,36 @@ export function sshThemeToXterm(colors) {
   };
 }
 
+/**
+ * AI 助手目录：权限三档的 id 必须与 electron/ai/aiSettings.js 的 PERMISSIONS 一致，
+ * 文案由 i18n 的 ai.perm.<id> / ai.permDesc.<id> 承载。
+ */
+export const AI_PERMISSIONS = [
+  { id: 'ask', icon: 'el-icon-question' },
+  { id: 'auto', icon: 'el-icon-check' },
+  { id: 'full', icon: 'el-icon-warning' },
+];
+
+export const AI_DEFAULTS = {
+  enabled: true,
+  permission: 'auto',
+  readScreen: true,
+  ptyControl: true,
+  commandTimeoutSec: 15,
+  maxTurns: 8,
+  maxTokens: 2048,
+  temperature: 0.2,
+  services: [],
+  defaultRef: null,
+};
+
+export const AI_LIMITS = {
+  commandTimeoutSec: [3, 300],
+  maxTurns: [1, 20],
+  maxTokens: [256, 32768],
+  temperature: [0, 1],
+};
+
 /** Element async-validator: required with i18n at validate time */
 export function requiredRule(t, key, trigger = 'blur') {
   return {
