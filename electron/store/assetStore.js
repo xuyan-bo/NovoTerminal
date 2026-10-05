@@ -185,6 +185,11 @@ class AssetStore {
     return JSON.parse(JSON.stringify(this.data));
   }
 
+  /** 高级设置里的数据存储目录：附件类数据（AI 会话记录）都以此为根。 */
+  dataDir() {
+    return path.dirname(this.file);
+  }
+
   getGroups() {
     return this.snapshot().groups;
   }

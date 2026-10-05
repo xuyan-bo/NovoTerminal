@@ -10,6 +10,7 @@ const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
 const { SshMonitorManager } = require('./ssh/SshMonitorManager');
 const { AiManager } = require('./ai/aiManager');
+const { AiSessionStore } = require('./ai/sessionStore');
 const { testConnection, listModels } = require('./ai/aiClient');
 const { normalize: normalizeAi } = require('./ai/aiSettings');
 const { SSH_DEFAULTS } = require('./ssh/connection');
@@ -728,9 +729,27 @@ function registerIpc() {
     ownSsh(sender, req && req.sessionId);
     return aiAssistant.cancel(req.sessionId);
   }, true);
-  handle('ai:reset', (sender, req) => {
+  /** 新建会话：把当前对话归档成一条会话记录，再开一条空的。 */
+  handle('ai:session-archive', (sender, req) => {
     ownSsh(sender, req && req.sessionId);
-    return aiAssistant.reset(req.sessionId);
+    return aiAssistant.archiveSession(req);
+  }, true);
+  /** 历史列表、载入、重命名、删除都以「这条 SSH 会话属于哪个资产」为边界，渲染端拿不到别人的目录。 */
+  handle('ai:sessions', (sender, req) => {
+    ownSsh(sender, req && req.sessionId);
+    return aiAssistant.listSessions(req);
+  }, true);
+  handle('ai:session-open', (sender, req) => {
+    ownSsh(sender, req && req.sessionId);
+    return aiAssistant.openSession(req);
+  }, true);
+  handle('ai:session-rename', (sender, req) => {
+    ownSsh(sender, req && req.sessionId);
+    return aiAssistant.renameSession(req);
+  }, true);
+  handle('ai:session-delete', (sender, req) => {
+    ownSsh(sender, req && req.sessionId);
+    return aiAssistant.removeSession(req);
   }, true);
   /** 审批级别只改这条会话，不回写设置里的默认值。 */
   handle('ai:permission', (sender, req) => {
@@ -1369,7 +1388,13 @@ app.whenReady().then(() => {
     },
   });
   sshMonitor = new SshMonitorManager({ ssh: sshSessions, send: sendToOwner, log: logger });
-  aiAssistant = new AiManager({ ssh: sshSessions, store, send: sendToOwner, log: logger });
+  aiAssistant = new AiManager({
+    ssh: sshSessions,
+    store,
+    sessions: new AiSessionStore({ store, log: logger }),
+    send: sendToOwner,
+    log: logger,
+  });
   vncSessions = new VncSessionManager({ send, log: logger });
   rdpSessions = new RdpSessionManager({ send, log: logger });
   sftpManager = new SftpManager({ send, store, log: logger });

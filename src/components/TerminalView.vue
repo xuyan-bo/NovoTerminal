@@ -64,6 +64,7 @@
           @click="toggleAi"
         >
           <svg-icon name="ai" :size="15" />
+          <span v-if="aiUnread" class="ai-unread">{{ aiUnread > 9 ? '9+' : aiUnread }}</span>
         </button>
         <div ref="termEl" class="ssh-term"></div>
       </div>
@@ -99,7 +100,9 @@
               :host-text="title"
               :cwd="oscCwd"
               :read-screen="readScreenText"
+              :open="aiOpen"
               @close="closeAi"
+              @need-input="onAiNeedInput"
               @running-change="aiRunning = $event"
             />
           </div>
@@ -175,6 +178,8 @@ export default {
       aiEver: false,
       /** 面板在跑回合时半圆亮提示点；回合归属主进程，收起面板也不会停。 */
       aiRunning: false,
+      /** 面板收起时到达的审批/反问数，角标亮一下随后随自动展开清零。 */
+      aiUnread: 0,
       /** 两个面板同时打开时的高度分配（监控占比 %），拖拽中间横条调整。 */
       sideSplit: 52,
       sideDragging: false,
@@ -257,6 +262,7 @@ export default {
     this._disposed = false;
     this._connectVersion = 0;
     this._handedOff = false;
+    this._aiUnreadTimer = null;
     this._inputSubscriptions = [];
     this._offMonitor = null;
     this._offMonitorEnd = null;
@@ -287,6 +293,7 @@ export default {
     window.removeEventListener('resize', this.scheduleFit);
     if (this._fitTimer) clearTimeout(this._fitTimer);
     if (this._rsTimer) clearTimeout(this._rsTimer);
+    if (this._aiUnreadTimer) clearTimeout(this._aiUnreadTimer);
     if (this._offMonitor) {
       this._offMonitor();
       this._offMonitor = null;
@@ -804,12 +811,29 @@ export default {
       this.aiOpen = !this.aiOpen;
       // 面板一旦创建就常驻：回合在主进程里继续跑，收起只藏起来，重开时接上同一份历史
       this.aiEver = true;
+      this.aiUnread = 0;
       if (this.aiOpen) this.scheduleFit();
     },
 
     closeAi() {
       this.aiOpen = false;
+      this.aiUnread = 0;
       this.scheduleFit();
+    },
+
+    /** 审批/反问到达但面板收着：先亮角标，片刻后自动展开，让用户看见「有事发生」再看到问题。 */
+    onAiNeedInput() {
+      if (this.aiOpen) return;
+      this.aiUnread += 1;
+      if (this._aiUnreadTimer) return;
+      this._aiUnreadTimer = setTimeout(() => {
+        this._aiUnreadTimer = null;
+        this.aiUnread = 0;
+        if (this._disposed || this.aiOpen) return;
+        this.aiOpen = true;
+        this.aiEver = true;
+        this.scheduleFit();
+      }, 1200);
     },
 
     /** 交给 AI 面板取屏幕文本：xterm 的 buffer 已是去掉转义序列的纯文本，比剥 tail 的 ANSI 干净。 */
@@ -1216,6 +1240,22 @@ export default {
   50% {
     opacity: 0.35;
   }
+}
+/* 未读角标收在按钮左下角内部，避开右上角进行中的提示点，也不会被侧栏裁掉 */
+.ai-unread {
+  position: absolute;
+  bottom: 2px;
+  left: 2px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--danger, #f56c6c);
+  color: #fff;
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+  pointer-events: none;
 }
 .ssh-side-col {
   flex: 1;

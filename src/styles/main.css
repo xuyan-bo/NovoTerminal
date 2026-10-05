@@ -16,6 +16,8 @@
   --win: #3b82f6;
   --mac: #909399;
   --linux: #34d399;
+  --think: #b48af0;
+  --think-soft: rgba(180, 138, 240, 0.12);
 }
 
 html.theme-light,
@@ -32,6 +34,8 @@ html.theme-light .app-root,
   --text-2: #606266;
   --text-3: #909399;
   --accent-soft: rgba(64, 158, 255, 0.12);
+  --think: #7b5aa6;
+  --think-soft: rgba(123, 90, 166, 0.1);
 }
 
 html.theme-light,
@@ -166,7 +170,8 @@ button {
 .home-scroll::-webkit-scrollbar,
 .file-list::-webkit-scrollbar,
 .ai-log::-webkit-scrollbar,
-.tool-out::-webkit-scrollbar {
+.cmd-out::-webkit-scrollbar,
+.think-text::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
@@ -175,7 +180,8 @@ button {
 .home-scroll::-webkit-scrollbar-thumb,
 .file-list::-webkit-scrollbar-thumb,
 .ai-log::-webkit-scrollbar-thumb,
-.tool-out::-webkit-scrollbar-thumb {
+.cmd-out::-webkit-scrollbar-thumb,
+.think-text::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 3px;
 }
@@ -184,7 +190,8 @@ button {
 .home-scroll::-webkit-scrollbar-thumb:hover,
 .file-list::-webkit-scrollbar-thumb:hover,
 .ai-log::-webkit-scrollbar-thumb:hover,
-.tool-out::-webkit-scrollbar-thumb:hover {
+.cmd-out::-webkit-scrollbar-thumb:hover,
+.think-text::-webkit-scrollbar-thumb:hover {
   background: var(--text-3);
 }
 .view::-webkit-scrollbar-track,
@@ -195,8 +202,10 @@ button {
 .file-list::-webkit-scrollbar-corner,
 .ai-log::-webkit-scrollbar-track,
 .ai-log::-webkit-scrollbar-corner,
-.tool-out::-webkit-scrollbar-track,
-.tool-out::-webkit-scrollbar-corner {
+.cmd-out::-webkit-scrollbar-track,
+.cmd-out::-webkit-scrollbar-corner,
+.think-text::-webkit-scrollbar-track,
+.think-text::-webkit-scrollbar-corner {
   background: transparent;
 }
 

@@ -422,8 +422,8 @@ export const AI_DEFAULTS = {
   enabled: true,
   permission: 'auto',
   readScreen: true,
-  commandTimeoutSec: 60,
-  maxTurns: 20,
+  commandTimeoutSec: 300,
+  maxTurns: 30,
   maxTokens: 2048,
   temperature: 0.2,
   services: [],
@@ -431,8 +431,8 @@ export const AI_DEFAULTS = {
 };
 
 export const AI_LIMITS = {
-  commandTimeoutSec: [5, 600],
-  maxTurns: [1, 40],
+  commandTimeoutSec: [10, 1800],
+  maxTurns: [3, 60],
   maxTokens: [256, 32768],
   temperature: [0, 1],
 };

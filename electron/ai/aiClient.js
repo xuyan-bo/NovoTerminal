@@ -11,6 +11,7 @@ const { OpenAI } = require('openai');
 const REQUEST_TIMEOUT_MS = 90000;
 const TEST_TIMEOUT_MS = 12000;
 const MAX_TEXT_CHUNK = 4096;
+const MAX_REASON_CHUNK = 4096;
 
 function aiError(code, message, status) {
   return Object.assign(new Error(message), { code, status });
@@ -49,25 +50,51 @@ function textOf(delta) {
   return '';
 }
 
+/** 思考增量：DeepSeek-R1 用 reasoning_content，o1 类网关用 reasoning，两者都归到同一条流里。 */
+function reasonOf(delta) {
+  const raw = (delta && (delta.reasoning_content || delta.reasoning)) || '';
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw)) return raw.map((p) => (typeof p === 'string' ? p : (p && p.text) || '')).join('');
+  if (raw && typeof raw.text === 'string') return raw.text;
+  return '';
+}
+
 /**
  * 发一轮对话并流式回调文本增量，返回聚合后的完整文本与工具调用列表。
  * tool_calls 在流里是按 index 分片到达的（arguments 是 JSON 字符串碎片），必须自己累加。
  */
 async function streamChat(opts) {
-  const { baseUrl, apiKey, model, messages, tools, maxTokens, temperature, signal, onText } = opts;
-  const body = {
-    model,
-    messages,
-    temperature,
-    max_tokens: maxTokens,
-    stream: true,
+  const { baseUrl, apiKey, model, messages, tools, maxTokens, temperature, signal, onText, onReason, log } = opts;
+  const body = () => {
+    const b = {
+      model,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+      // 不声明就要不到流式末帧的 usage，用量行会一直是空
+      stream_options: { include_usage: true },
+    };
+    if (Array.isArray(tools) && tools.length) b.tools = tools;
+    return b;
   };
-  if (Array.isArray(tools) && tools.length) body.tools = tools;
+  const client = clientFor(baseUrl, apiKey);
   let stream;
   try {
-    stream = await clientFor(baseUrl, apiKey).chat.completions.create(body, { signal });
+    stream = await client.chat.completions.create(body(), { signal });
   } catch (error) {
-    throw toAiError(error);
+    // 老网关（vLLM 0.4 之前、部分自建代理）遇到 stream_options 直接 400：丢掉该字段重试一次，
+    // 只是拿不到 usage，不能让整条对话因此失败。
+    const status = Number(error && error.status);
+    if (status !== 400 && status !== 422) throw toAiError(error);
+    log && log.warn('ai', 'ai stream_options rejected, retrying without usage', { model, status });
+    const retry = body();
+    delete retry.stream_options;
+    try {
+      stream = await client.chat.completions.create(retry, { signal });
+    } catch (again) {
+      throw toAiError(again);
+    }
   }
   const calls = new Map();
   let text = '';
@@ -86,6 +113,8 @@ async function streamChat(opts) {
         text += piece;
         if (onText) onText(piece.slice(0, MAX_TEXT_CHUNK));
       }
+      const thought = reasonOf(delta);
+      if (thought && onReason) onReason(thought.slice(0, MAX_REASON_CHUNK));
       for (const tc of delta.tool_calls || []) {
         const key = tc.index == null ? calls.size : tc.index;
         if (!calls.has(key)) calls.set(key, { id: '', name: '', args: '' });

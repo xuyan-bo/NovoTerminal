@@ -165,14 +165,11 @@ export const api = hasBridge
       async aiCancel() {
         return { ok: true, running: false };
       },
-      async aiReset() {
-        return { ok: true };
-      },
       async aiSetPermission() {
         return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       async aiHistory() {
-        return { ok: true, running: false, permissionOverride: '', modelOverride: null, messages: [] };
+        return { ok: true, running: false, permissionOverride: '', modelOverride: null, title: '', recordId: '', record: [] };
       },
       async aiScreenReply() {
         return { ok: false };
