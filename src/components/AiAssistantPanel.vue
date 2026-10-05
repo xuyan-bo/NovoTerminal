@@ -62,6 +62,9 @@
                 <div v-if="n.nk === 'say'" class="say">
                   <ai-markdown :text="n.text" /><span v-if="n.typing" class="msg-ai-cursor"></span>
                 </div>
+                <div v-else-if="n.nk === 'zip'" class="zip-line mono">
+                  <i class="el-icon-scissors"></i>{{ $t('ai.zipLine', { moved: n.moved, from: fmtTok(n.from), to: fmtTok(n.to) }) }}
+                </div>
                 <template v-else>
                   <button type="button" class="act-head" @click="toggleNode(n)">
                     <i class="a-ico" :class="nodeIcon(n)"></i>
@@ -253,6 +256,28 @@
               <el-option v-for="m in g.options" :key="m.key" :label="m.label" :value="m.key" />
             </el-option-group>
           </el-select>
+          <el-tooltip v-if="ctx.window" placement="top">
+            <div slot="content" class="ctx-pop">
+              <div class="ctx-line is-head"><span>{{ $t('ai.ctxTip') }}</span><b class="mono">{{ ctx.pct }}%</b></div>
+              <div class="ctx-line"><span>{{ $t('ai.ctxWindow') }}</span><b class="mono">{{ fmtTok(ctx.window) }}</b></div>
+              <div class="ctx-line"><span>{{ $t('ai.ctxUsed') }}</span><b class="mono">{{ fmtTok(ctx.used) }}</b></div>
+              <template v-if="ctx.parts">
+                <div class="ctx-line is-sub"><span>{{ $t('ai.ctxTools') }}</span><b class="mono">{{ fmtTok(ctx.parts.tools) }}</b></div>
+                <div class="ctx-line is-sub"><span>{{ $t('ai.ctxPrompt') }}</span><b class="mono">{{ fmtTok(ctx.parts.system) }}</b></div>
+                <div class="ctx-line is-sub"><span>{{ $t('ai.ctxHistory') }}</span><b class="mono">{{ fmtTok(ctx.parts.messages) }}</b></div>
+              </template>
+              <div class="ctx-line"><span>{{ $t('ai.ctxLeft') }}</span><b class="mono">{{ fmtTok(ctxLeft) }}</b></div>
+            </div>
+            <el-progress
+              class="ctx-ring"
+              type="circle"
+              :width="24"
+              :stroke-width="4"
+              :percentage="ctx.pct"
+              :color="ctxColor"
+              :show-text="false"
+            />
+          </el-tooltip>
           <button
             type="button"
             class="send-btn"
@@ -296,19 +321,22 @@ function newTurn(turnId) {
 }
 
 /**
- * 回合收尾：末段正文是答复，必须搬到回合外面（回合折叠后照样要能看见）。
+ * 回合收尾：正文是答复，必须整段搬到回合外面（回合折叠后照样要能看见）。
+ * 被命令或审批打断过就会留下多段 say，只搬最后一段等于把前半截答案永久藏进回合里。
  * 搬完空下来的回合整行去掉，只剩提问与答复，不留空回合。
  */
 function settleTurn(turn) {
-  // 尾巴上可能还挂着网关补发的思考，答复要往前找最后一个 say
-  let at = turn.nodes.length - 1;
-  while (at >= 0 && turn.nodes[at].nk === 'think') at -= 1;
-  const say = at >= 0 && turn.nodes[at].nk === 'say' ? turn.nodes.splice(at, 1)[0] : null;
+  const answer = turn.nodes
+    .filter((n) => n.nk === 'say')
+    .map((n) => n.text)
+    .filter((s) => String(s || '').trim())
+    .join('\n\n');
+  turn.nodes = turn.nodes.filter((n) => n.nk !== 'say');
   turn.running = false;
   turn.live = '';
-  if (!turn.nodes.length) return { dropped: true, answer: say ? say.text : '' };
+  if (!turn.nodes.length) return { dropped: true, answer };
   turn.open = false;
-  return { dropped: false, answer: say ? say.text : '' };
+  return { dropped: false, answer };
 }
 
 /** 落盘记录 → 面板行：与实时事件走同一套「逻辑回合 + 末段答复」规则。 */
@@ -353,6 +381,8 @@ function rowsFromRecord(record) {
         key: nextKey(), nk: 'choice', requestId: '', question: e.question, options: e.options || [],
         picked: e.choice || '', state: e.state === 'skipped' ? 'skipped' : 'picked', askedAt: 0, open: false,
       });
+    } else if (e.role === 'compress') {
+      useTurn().nodes.push({ key: nextKey(), nk: 'zip', moved: e.moved, from: e.from, to: e.to });
     }
   }
   const out = [];
@@ -402,6 +432,8 @@ export default {
       /** 本会话选用的模型；同样只在会话内生效，随下一次请求递给主进程。 */
       sessionModel: null,
       modelKey: '',
+      /** 圆环水位：窗口跟着本会话当前模型，用量是主进程真正要发给模型的那份估算。 */
+      ctx: { window: 0, used: 0, pct: 0, parts: null },
       permissions: AI_PERMISSIONS,
       /** 历史会话弹框：列表来自磁盘上的会话记录，当前会话未归档时以「live」虚拟行插在最前。 */
       historyOpen: false,
@@ -503,6 +535,14 @@ export default {
     errorNeedsSettings() {
       return ['AI_NO_SERVICE', 'AI_NO_MODEL', 'AI_NO_KEY', 'AI_AUTH', 'AI_URL'].includes(this.error && this.error.code);
     },
+    /** 圆环配色分两档：60% 起变黄提醒，85%（主进程触发压缩的水位）变红。 */
+    ctxColor() {
+      if (this.ctx.pct >= 85) return '#f56c6c';
+      return this.ctx.pct >= 60 ? '#e6a23c' : '#409eff';
+    },
+    ctxLeft() {
+      return Math.max(0, (this.ctx.window || 0) - (this.ctx.used || 0));
+    },
   },
   watch: {
     sessionId() {
@@ -578,6 +618,7 @@ export default {
       this.items = [];
       this.error = null;
       this.follow = true;
+      this.ctx = { window: 0, used: 0, pct: 0, parts: null };
       this.sessionPermission = '';
       this.sessionModel = null;
       this.sessionTitle = '';
@@ -594,6 +635,7 @@ export default {
     async loadHistory() {
       if (!this.available || !api.aiHistory) return;
       try {
+        // 这里不传 modelRef：下拉此时还停在设置默认模型上，主进程按会话覆盖值回退才是这条会话真正的窗口
         const r = unwrap(await api.aiHistory({ sessionId: this.sessionId }));
         if (this._disposed || !r) return;
         this.sessionPermission = r.permissionOverride || '';
@@ -604,6 +646,7 @@ export default {
         this.sessionTitle = r.title || '';
         this.recordId = r.recordId || '';
         this.items = rowsFromRecord(r.record);
+        this.ctx = r.context || { window: 0, used: 0, pct: 0, parts: null };
         // 上一轮还在跑（例如会话换了宿主）：记录里那条是已归档的片段，新事件另起一个进行中的回合
         this.running = !!r.running;
         if (this.running) this.startTurn('');
@@ -667,12 +710,24 @@ export default {
         this.running = !!ev.running;
         return;
       }
+      if (ev.type === 'context') {
+        this.ctx = { window: ev.window, used: ev.used, pct: ev.pct, parts: ev.parts || null };
+        return;
+      }
+      if (ev.type === 'compress') {
+        const turn = this.turnOf(ev);
+        this.endThink(turn);
+        this.closeSay(turn);
+        turn.nodes.push({ key: nextKey(), nk: 'zip', moved: ev.moved, from: ev.from, to: ev.to });
+        this.stick();
+        return;
+      }
       if (ev.type === 'delta') {
         const turn = this.turnOf(ev);
         this.endThink(turn);
         turn.live = '';
-        // 同一段正文要一直并在一行里追加：中间插进来的思考不能把答复切成两行，
-        // 否则收尾时只剩后半截被搬出回合。命令/审批会用 closeSay 收掉真正的段落边界。
+        // 同一段正文要一直并在一行里追加：中间插进来的思考不能把答复切成两行。
+        // 命令/审批用 closeSay 收掉真正的段落边界，跨边界的几段在收尾时拼成一条答复搬出回合。
         const say = turn.nodes.filter((n) => n.nk === 'say' && n.typing).pop();
         if (say) say.text += ev.text || '';
         else turn.nodes.push({ key: nextKey(), nk: 'say', text: ev.text || '', typing: true });
@@ -831,8 +886,8 @@ export default {
       return fmtS(ms) + (turn.label ? ' · ' + turn.label : '');
     },
     headCount(turn) {
-      // 中间正文不算「步」，否则一段长答复会被数成几十步
-      const steps = turn.nodes.filter((n) => n.nk !== 'say');
+      // 中间正文不算「步」，否则一段长答复会被数成几十步；压缩行同理，它不是模型的动作
+      const steps = turn.nodes.filter((n) => n.nk !== 'say' && n.nk !== 'zip');
       const parts = [];
       if (steps.length) parts.push(this.$t('ai.turnSteps', { n: steps.length }));
       const cmds = steps.filter((n) => n.nk === 'cmd').length;
@@ -846,6 +901,18 @@ export default {
     },
     elapsed(from) {
       return from ? fmtS(this.tickNow - from) : '';
+    },
+    fmtTok(n) {
+      return fmtK(n);
+    },
+
+    /** 换模型后窗口立刻变，即使还没提问：向主进程重取一次水位，它才知道新模型的预算。 */
+    async refreshContext() {
+      if (!this.available || !api.aiHistory) return;
+      try {
+        const r = unwrap(await api.aiHistory({ sessionId: this.sessionId, modelRef: this.modelRef }));
+        if (!this._disposed && r) this.ctx = r.context || { window: 0, used: 0, pct: 0, parts: null };
+      } catch (_) { /* 拿不到水位不影响提问 */ }
     },
 
     actClass(node) {
@@ -955,6 +1022,8 @@ export default {
       this.sessionTitle = '';
       this.recordId = '';
       this.editingId = '';
+      this.ctx = { window: 0, used: 0, pct: 0, parts: null };
+      this.refreshContext();
     },
 
     async openHistory() {
@@ -1048,6 +1117,7 @@ export default {
       this.follow = true;
       this.sessionTitle = rec.title || '';
       this.recordId = rec.id;
+      this.refreshContext();
       this.scrollToEnd();
     },
 
@@ -1154,6 +1224,7 @@ export default {
       if (!serviceId || !modelId) return;
       this.modelKey = key;
       this.sessionModel = { serviceId, modelId };
+      this.refreshContext();
     },
 
     openSettings() {
@@ -1400,6 +1471,15 @@ export default {
   background: var(--think); vertical-align: -1px; animation: ai-blink 1s steps(1) infinite;
 }
 .say { color: var(--text); line-height: 1.7; padding: 2px 0; }
+.zip-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.zip-line i { font-size: 12px; color: var(--accent); }
 .step-note { font-size: 10.5px; color: var(--text-3); line-height: 1.6; }
 .step-note.is-center { text-align: center; }
 .turn-live {
@@ -1505,7 +1585,7 @@ export default {
 .bar-caret { font-size: 9px; opacity: 0.7; }
 .bar-btn.perm-auto { color: var(--warning); }
 .bar-btn.perm-full { color: var(--danger); }
-.model-select { width: 122px; flex: none; }
+.model-select { width: 178px; flex: 0 1 auto; min-width: 96px; }
 .model-select /deep/ .el-input__inner {
   height: 26px;
   line-height: 26px;
@@ -1516,6 +1596,11 @@ export default {
   padding-left: 8px;
 }
 .model-select /deep/ .el-input__icon { line-height: 26px; font-size: 11px; }
+.ctx-ring { flex: none; }
+.ctx-pop { min-width: 176px; }
+.ctx-line { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; font-size: 11.5px; line-height: 1.9; }
+.ctx-line.is-head { font-weight: 600; margin-bottom: 2px; }
+.ctx-line.is-sub { padding-left: 10px; font-size: 11px; opacity: 0.72; }
 .send-btn {
   width: 28px;
   height: 28px;

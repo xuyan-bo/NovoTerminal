@@ -3,7 +3,9 @@
  *
  * 目录结构：<数据存储路径>/ai-sessions/<资产 ID>--<协议>/<会话 ID>.json，
  * 一个会话一个文件，所以「A 资产的 SSH」这类归属天然隔离，删资产也不会牵连别处。
- * 只写展示用的记录（用户提问、思考、正文、命令、审批/选择、整轮统计），不写 system 提示词与审批等待中的凭据。
+ * version 1 只有展示记录（用户提问、思考、正文、命令、审批/选择、压缩行、整轮统计）；
+ * version 2 另存 context——当时真正发给模型的那份序列与水位快照，加载会话才能原样接上。
+ * 两个版本都不写 system 提示词与审批等待中的凭据。
  */
 
 const fs = require('fs');
@@ -15,6 +17,9 @@ const PROTOCOL_KEY = /^[a-z0-9-]{1,16}$/;
 const SESSION_KEY = /^ais-[a-zA-Z0-9-]{1,64}$/;
 const OUTPUT_CHARS = 4000;
 const TEXT_CHARS = 8000;
+const CONTEXT_CONTENT_CHARS = 12000;
+const CONTEXT_ARGS_CHARS = 4000;
+const CONTEXT_CALLS = 8;
 
 function str(v, max) {
   return typeof v === 'string' ? v.slice(0, max) : '';
@@ -98,8 +103,9 @@ class AiSessionStore {
   write(record) {
     const file = this.fileOf(record.assetId, record.protocol, record.id);
     const prev = this._readFile(file);
+    const context = record.context && Array.isArray(record.context.messages) ? normalizeContext(record.context) : null;
     const rec = {
-      version: 1,
+      version: context ? 2 : 1,
       id: record.id,
       assetId: record.assetId,
       assetName: str(record.assetName, 120),
@@ -110,6 +116,7 @@ class AiSessionStore {
       createdAt: prev ? prev.createdAt : record.createdAt || Date.now(),
       updatedAt: Date.now(),
       messages: (record.messages || []).map(normalizeMessage).filter(Boolean),
+      context,
     };
     fs.mkdirSync(path.dirname(file), { recursive: true });
     // 先写临时文件再改名：中途崩溃不会留下半截 JSON
@@ -144,6 +151,7 @@ class AiSessionStore {
       if (!parsed || !Array.isArray(parsed.messages) || typeof parsed.id !== 'string') return null;
       parsed.messages = parsed.messages.map(normalizeMessage).filter(Boolean);
       parsed.title = str(parsed.title, 120);
+      parsed.context = parsed.context && Array.isArray(parsed.context.messages) ? normalizeContext(parsed.context) : null;
       return parsed;
     } catch (_) {
       return null;
@@ -193,6 +201,10 @@ function normalizeMessage(m) {
     if (m.completionTokens) out.completionTokens = numOrNull(m.completionTokens);
     return out;
   }
+  if (m.role === 'compress') {
+    // 展示行只留「这里压过一次」的数字，备忘正文在 context 段里，不重复存一遍
+    return { role: 'compress', moved: numOrNull(m.moved), from: numOrNull(m.from), to: numOrNull(m.to) };
+  }
   if (m.role === 'step') {
     return {
       role: 'step',
@@ -207,6 +219,45 @@ function normalizeMessage(m) {
     };
   }
   return null;
+}
+
+/** 上下文里的单条消息：只认模型序列用得上的四种角色，其余一律丢弃。 */
+function normalizeContextMessage(m) {
+  if (!m || typeof m !== 'object') return null;
+  if (!['system', 'user', 'assistant', 'tool'].includes(m.role)) return null;
+  const out = { role: m.role, content: str(m.content, CONTEXT_CONTENT_CHARS) };
+  if (m.role === 'tool') {
+    const callId = str(m.tool_call_id, 60);
+    if (!callId) return null;
+    out.tool_call_id = callId;
+    return out;
+  }
+  const calls = Array.isArray(m.tool_calls) ? m.tool_calls.slice(0, CONTEXT_CALLS) : [];
+  const kept = calls.map((c) => ({
+    id: str(c && c.id, 60),
+    type: 'function',
+    function: { name: str(c && c.function && c.function.name, 60), arguments: str(c && c.function && c.function.arguments, CONTEXT_ARGS_CHARS) },
+  })).filter((c) => c.id && c.function.name);
+  if (kept.length) out.tool_calls = kept;
+  return out;
+}
+
+/**
+ * 上下文段整备：开头不允许是孤儿 tool（它的 assistant 已经不在），
+ * 回包找不到对应调用 id 的 tool 也一并剔掉，否则恢复出来的序列会被服务端拒。
+ */
+function normalizeContext(ctx) {
+  const messages = (ctx.messages || []).map(normalizeContextMessage).filter(Boolean);
+  while (messages.length && messages[0].role === 'tool') messages.shift();
+  const called = new Set();
+  for (const m of messages) for (const c of m.tool_calls || []) called.add(c.id);
+  const ratio = Number(ctx.ratio);
+  return {
+    window: Number.isFinite(ctx.window) ? ctx.window : 0,
+    used: Number.isFinite(ctx.used) ? ctx.used : 0,
+    ratio: ratio >= 0.4 && ratio <= 3 ? ratio : 1,
+    messages: messages.filter((m) => m.role !== 'tool' || called.has(m.tool_call_id)),
+  };
 }
 
 module.exports = { AiSessionStore };

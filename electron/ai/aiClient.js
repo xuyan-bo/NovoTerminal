@@ -148,6 +148,25 @@ function parseArgs(raw) {
 }
 
 /**
+ * 压缩历史用的单次补全：只要一段备忘文本，不要工具调用，也不流式。
+ * 失败由调用方退回裁剪，所以这里保持「要么给出正文，要么抛出带 code 的错误」。
+ */
+async function completeOnce(opts) {
+  const { baseUrl, apiKey, model, messages, maxTokens, temperature, signal } = opts;
+  const client = clientFor(baseUrl, apiKey);
+  try {
+    const res = await client.chat.completions.create(
+      { model, messages, temperature: temperature == null ? 0 : temperature, max_tokens: maxTokens, stream: false },
+      { signal }
+    );
+    const msg = res && res.choices && res.choices[0] ? res.choices[0].message : null;
+    return { text: String((msg && msg.content) || ''), usage: (res && res.usage) || null };
+  } catch (error) {
+    throw toAiError(error);
+  }
+}
+
+/**
  * 设置页的「测试连接」：只验证地址与 Key 可用，不把模型清单带回去（清单由「添加模型」单独拉）。
  * 优先打 /models；网关不支持该端点时退化成一次 1 token 的补全，此时必须有模型名。
  */
@@ -190,4 +209,4 @@ async function listModels(opts) {
   }
 }
 
-module.exports = { streamChat, testConnection, listModels };
+module.exports = { streamChat, completeOnce, testConnection, listModels };

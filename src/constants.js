@@ -435,7 +435,38 @@ export const AI_LIMITS = {
   maxTurns: [3, 60],
   maxTokens: [256, 32768],
   temperature: [0, 1],
+  // 上下文窗口按 k token 输入（1k = 1000 token），与 electron/ai/aiSettings.js 的收敛范围一致
+  contextK: [64, 1024],
 };
+
+export const AI_CONTEXT_DEFAULT_K = 128;
+
+/**
+ * 主流模型的窗口初值（k token），只用于新增、拉取和旧记录缺字段时的预填：
+ * 一旦保存就写成明确数字，主进程不再按模型 id 猜窗口，界面显示的量即生效的量。
+ */
+export const AI_CONTEXT_PRESETS = [
+  ['gpt-4.1', 1000],
+  ['gpt-4.5', 400],
+  ['gpt-5', 400],
+  ['gpt-4o', 128],
+  ['gpt-4-turbo', 128],
+  ['chatgpt-4o', 128],
+  ['o1', 200],
+  ['o3', 200],
+  ['o4', 200],
+  ['claude', 200],
+  ['gemini', 1000],
+  ['deepseek', 128],
+  ['qwen', 128],
+  ['kimi', 128],
+  ['moonshot', 128],
+  ['glm', 128],
+  ['llama', 128],
+  ['mistral', 128],
+  ['gemma', 128],
+  ['command', 128],
+];
 
 /** Element async-validator: required with i18n at validate time */
 export function requiredRule(t, key, trigger = 'blur') {

@@ -18,6 +18,14 @@ const AI_DEFAULTS = Object.freeze({
 
 const PERMISSIONS = ['ask', 'auto', 'full'];
 
+/**
+ * 上下文窗口的边界，单位是 token（设置页按 k token 输入，1k = 1000 token）。
+ * 界面会把数字写实，这里只做范围收敛；缺失时取 128k 的保守默认，宁可提前压缩也不让请求超限。
+ */
+const CONTEXT_MIN = 64 * 1000;
+const CONTEXT_MAX = 1024 * 1000;
+const CONTEXT_DEFAULT = 128 * 1000;
+
 const str = (value, max = 400) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 const int = (value, min, max, fallback) => {
   const n = Number(value);
@@ -33,7 +41,8 @@ function normalizeModel(raw) {
   const src = raw || {};
   const id = str(src.id, 120);
   if (!id) return null;
-  return { id, alias: str(src.alias, 60) || id };
+  const contextTokens = int(src.contextTokens, CONTEXT_MIN, CONTEXT_MAX, CONTEXT_DEFAULT);
+  return { id, alias: str(src.alias, 60) || id, contextTokens };
 }
 
 function normalizeService(raw) {
@@ -96,6 +105,7 @@ function resolveModel(settings, ref) {
     apiKey: service.apiKey,
     model: model.id,
     label: model.alias || model.id,
+    contextTokens: model.contextTokens,
     serviceId: service.id,
     serviceName: service.name,
   };

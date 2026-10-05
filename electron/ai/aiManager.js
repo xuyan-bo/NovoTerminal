@@ -3,18 +3,22 @@
  *
  * 会话状态按 SSH sessionId 归并，所以面板收起再打开、页签拆成独立窗口都接得上；
  * 事件一律按会话当前 ownerId 定向发送（见 emit），拆分期间换宿主不会丢流。
- * 每条会话另存一份「展示记录」（提问、思考、正文、命令、审批/选择、整轮统计）：第一次提问就落盘，
- * 之后每轮结束、新建会话、载入别的会话或终端会话结束时写回同一个文件，
- * 内存里不保留 system 提示词与凭据。
+ * 每条会话另存两份东西：「展示记录」（提问、思考、正文、命令、审批/选择、压缩行、整轮统计）
+ * 与「模型上下文」（裁剪/压缩之后真正发给序列）。两份一起落盘，
+ * 加载会话时按原样恢复上下文，不再靠展示记录反推。内存里不保留 system 提示词与凭据。
+ * 上下文的口径（什么进、进多少、怎么裁、怎么压）都在 aiContext，这里只管时序。
  */
 
 const crypto = require('crypto');
-const { streamChat } = require('./aiClient');
+const { streamChat, completeOnce } = require('./aiClient');
 const { normalize, resolveModel, PERMISSIONS } = require('./aiSettings');
 const { createTools } = require('./aiTools');
+const {
+  DIGEST_OUT_TOKENS, DIGEST_GAIN_RATIO, DIGEST_PROMPT,
+  budget, estimateTokens, messagesTokens,
+  trimToFit, splitForDigest, digestMessage, digestSource,
+} = require('./aiContext');
 
-const HISTORY_LIMIT = 60;
-const HISTORY_CHARS = 60000;
 const APPROVAL_TIMEOUT_MS = 120000;
 const SCREEN_TIMEOUT_MS = 3000;
 const TITLE_CHARS = 40;
@@ -56,6 +60,12 @@ class AiManager {
       conv = {
         sessionId, messages: [], record: [], running: false, abort: null, approvals: new Map(), seq: 0,
         turnSeq: 0, turnId: '',
+        /** 估算系数：真实 usage.prompt_tokens / 上一轮估算，让没有 tokenizer 的估算越跑越准。 */
+        tokenRatio: 1,
+        /** 最近一次的预算快照，面板圆环与落盘都读它。 */
+        context: null,
+        /** 一次提问里最多压缩一次，避免多轮工具调用把压缩请求刷成后台任务。 */
+        compressTurn: 0,
         /** 归档归属与记录身份：第一次用到时从 SSH 会话取，之后即使连接已断也还能归档。 */
         meta: null, recordId: '', title: '',
       };
@@ -119,6 +129,9 @@ class AiManager {
     conv.record = [];
     conv.recordId = '';
     conv.title = '';
+    conv.context = null;
+    conv.tokenRatio = 1;
+    conv.compressTurn = 0;
     return { ok: true, archived };
   }
 
@@ -131,6 +144,13 @@ class AiManager {
         ...conv.meta,
         title: (typeof title === 'string' && title.trim().slice(0, TITLE_CHARS * 3)) || conv.title || autoTitle(conv.record),
         messages: conv.record,
+        // 上下文与展示记录一起写：只存记录的话，加载时反推出来的上下文会跟当时发给模型的不一致
+        context: {
+          window: conv.context ? conv.context.window : 0,
+          used: conv.context ? conv.context.used : 0,
+          ratio: conv.tokenRatio,
+          messages: conv.messages,
+        },
       });
       conv.recordId = summary.id;
       conv.title = summary.title;
@@ -169,12 +189,15 @@ class AiManager {
       conv.title = '';
       conv.record = [];
       conv.messages = [];
+      conv.context = null;
+      conv.tokenRatio = 1;
+      conv.compressTurn = 0;
     }
     return { ok: true, cleared };
   }
 
   /**
-   * 载入历史记录：既给面板回放，也把模型上下文按原样重建，
+   * 载入历史记录：既给面板回放，也把模型上下文恢复成当时那一份，
    * 这样用户接着提问就是在延续这条会话，而不是从空白重新开始。
    * 载入前无条件把内存里的对话写回文件，避免切走时丢掉刚产生的几轮。
    */
@@ -187,9 +210,24 @@ class AiManager {
     conv.record = rec.messages.slice();
     conv.recordId = rec.id;
     conv.title = rec.title;
-    conv.messages = this._restoreMessages(rec.messages);
-    this.log && this.log.info('ai', 'ai session loaded', { sessionId: conv.sessionId, recordId: rec.id, messages: conv.record.length });
+    conv.messages = this._contextFromRecord(rec);
+    conv.compressTurn = 0;
+    const ratio = Number(rec.context && rec.context.ratio);
+    conv.tokenRatio = ratio >= 0.4 && ratio <= 3 ? ratio : 1;
+    const win = Number(rec.context && rec.context.window) || 0;
+    const used = Number(rec.context && rec.context.used) || 0;
+    conv.context = win ? { window: win, used, pct: Math.min(100, Math.round((used / win) * 100)), parts: null, room: 0 } : null;
+    this.log && this.log.info('ai', 'ai session loaded', { sessionId: conv.sessionId, recordId: rec.id, messages: conv.record.length, contextMessages: conv.messages.length });
     return { ok: true, session: rec };
+  }
+
+  /**
+   * 载入会话时的上下文来源：v2 记录里存着当时真正发给模型的那份序列，直接用它。
+   * 只有老记录（没有 context 段）才退回按展示记录反推，那是有损的：命令参数与 tool id 只能重建。
+   */
+  _contextFromRecord(rec) {
+    const saved = rec.context && Array.isArray(rec.context.messages) ? rec.context.messages : null;
+    return saved && saved.length ? saved.slice() : this._restoreMessages(rec.messages);
   }
 
   /** 展示记录 → OpenAI 消息序列；命令卡片还原成 assistant.tool_calls + tool 回包成对出现。 */
@@ -256,9 +294,21 @@ class AiManager {
     return serviceId && modelId ? { serviceId, modelId } : null;
   }
 
-  history(sessionId) {
+  /**
+   * 面板打开、载入历史或切换模型时读一次：展示记录给回放，水位给圆环。
+   * 窗口按这次请求里的模型现算，所以刚换模型、还没提问，分母就已经是新模型的。
+   */
+  history(req) {
+    const sessionId = req && req.sessionId;
     const conv = this.conversations.get(sessionId);
     const ov = this.overrides.get(sessionId) || {};
+    const ref = this._normalizeRef(req && req.modelRef) || ov.modelRef || this.settings().defaultRef;
+    let window = 0;
+    try {
+      window = resolveModel((this.store.getSettings() || {}).ai, ref).contextTokens;
+    } catch (_) { /* 还没配好服务就没有窗口可报，圆环不显示 */ }
+    const ctx = conv && conv.context;
+    const used = ctx ? ctx.used : 0;
     return {
       ok: true,
       running: !!(conv && conv.running),
@@ -267,6 +317,9 @@ class AiManager {
       title: conv ? conv.title : '',
       recordId: conv ? conv.recordId : '',
       record: conv ? conv.record : [],
+      context: window
+        ? { window, used, pct: Math.min(100, Math.round((used / window) * 100)), parts: ctx ? ctx.parts : null }
+        : null,
     };
   }
 
@@ -393,19 +446,83 @@ class AiManager {
     return lines.join('\n');
   }
 
-  _trimHistory(conv) {
-    while (conv.messages.length > HISTORY_LIMIT) {
-      const drop = conv.messages.findIndex((m) => m.role === 'assistant' && m.tool_calls);
-      if (drop < 0) { conv.messages.shift(); continue; }
-      let end = drop + 1;
-      while (end < conv.messages.length && conv.messages[end].role === 'tool') end += 1;
-      conv.messages.splice(drop, end - drop);
+  /** 窗口跟着当前选中的模型；固定开销是工具定义 + 每轮重建的 system（已含屏幕快照）。 */
+  _budget(conv, { model, settings, system, tools }) {
+    return budget({
+      window: model.contextTokens,
+      maxTokens: settings.maxTokens,
+      system,
+      tools,
+      messages: conv.messages,
+    }, conv.tokenRatio);
+  }
+
+  emitContext(conv, state) {
+    conv.context = { window: state.window, used: state.used, pct: state.pct, parts: state.parts, room: state.room };
+    this.emitTurn(conv, { type: 'context', ...conv.context });
+  }
+
+  /**
+   * 每轮请求前的治理：过水位先压缩，压完仍超额度就成对裁剪，然后把水位报给面板圆环。
+   * 压缩失败不拦路——裁剪总能发得出去，代价只是少点记忆。
+   */
+  async _governContext(conv, scope) {
+    const ratio = conv.tokenRatio;
+    let state = this._budget(conv, scope);
+    if (state.used >= state.triggerAt && conv.compressTurn !== conv.turnSeq) {
+      await this._compressContext(conv, { ...scope, state });
+      state = this._budget(conv, scope);
     }
-    let chars = conv.messages.reduce((n, m) => n + String(m.content || '').length, 0);
-    while (chars > HISTORY_CHARS && conv.messages.length > 2) {
-      const removed = conv.messages.shift();
-      chars -= String(removed.content || '').length;
+    if (state.parts.messages > state.room) {
+      const trimmed = trimToFit(conv.messages, state.room, ratio);
+      if (trimmed.dropped) {
+        conv.messages = trimmed.messages;
+        state = this._budget(conv, scope);
+        this.log && this.log.warn('ai', 'ai context trimmed', { sessionId: conv.sessionId, dropped: trimmed.dropped, room: state.room });
+      }
     }
+    this.emitContext(conv, state);
+    return state;
+  }
+
+  /**
+   * 用会话当前选中的模型把最早的若干条压成一段备忘。
+   * 压不动（原文太少、正文为空、省不下 70%）都当作没发生，交给后续裁剪。
+   */
+  async _compressContext(conv, { model, state }) {
+    const split = splitForDigest(conv.messages, state.targetRoom, conv.tokenRatio);
+    if (!split.ok) return false;
+    const moved = split.head.length;
+    const from = state.parts.messages - messagesTokens(split.tail, conv.tokenRatio);
+    let text = '';
+    try {
+      const res = await completeOnce({
+        baseUrl: model.baseUrl,
+        apiKey: model.apiKey,
+        model: model.model,
+        messages: [{ role: 'system', content: DIGEST_PROMPT }, { role: 'user', content: digestSource(split.head) }],
+        maxTokens: DIGEST_OUT_TOKENS,
+        temperature: 0,
+        signal: conv.abort ? conv.abort.signal : undefined,
+      });
+      text = String(res.text || '').trim().slice(0, 8000);
+    } catch (error) {
+      this.log && this.log.warn('ai', 'ai context compress failed, will trim instead', { sessionId: conv.sessionId, code: error.code, message: error.message });
+      return false;
+    }
+    if (!text) return false;
+    const digest = digestMessage(text);
+    const to = estimateTokens(digest.content);
+    if (to > from * DIGEST_GAIN_RATIO) {
+      this.log && this.log.info('ai', 'ai context compress skipped: no net gain', { sessionId: conv.sessionId, from, to });
+      return false;
+    }
+    conv.messages = [digest, ...split.tail];
+    conv.compressTurn = conv.turnSeq;
+    this._record(conv, { role: 'compress', moved, from, to });
+    this.emitTurn(conv, { type: 'compress', moved, from, to });
+    this.log && this.log.info('ai', 'ai context compressed', { sessionId: conv.sessionId, host: model.serviceName, moved, from, to });
+    return true;
   }
 
   /** 回合异常收场时补齐缺失的 tool 回包，否则下一轮请求会被服务端整条拒掉。 */
@@ -479,6 +596,8 @@ class AiManager {
     let finished = false;
     let tokenIn = 0;
     let tokenOut = 0;
+    /** 本轮最后一个生效的预算范围，收尾时用它重算一次水位给圆环。 */
+    let scope = null;
     /** 整轮统计要落盘，历史回放才有耗时与用量可显示；异常收场同样记一条。 */
     const closeTurn = () => {
       const ms = Date.now() - started;
@@ -488,7 +607,11 @@ class AiManager {
     try {
       for (let round = 0; round < settings.maxTurns; round += 1) {
         if (abort.signal.aborted) break;
-        const messages = [{ role: 'system', content: this.systemPrompt(ctx) }, ...conv.messages];
+        const system = this.systemPrompt(ctx);
+        scope = { model, settings, system, tools };
+        // 治理必须在组装之前：压缩会改 conv.messages，水位要按真正发出去的那一份算
+        const state = await this._governContext(conv, scope);
+        const messages = [{ role: 'system', content: system }, ...conv.messages];
         let thinkStart = 0;
         let thinkEnd = 0;
         let reasonBuf = '';
@@ -525,8 +648,11 @@ class AiManager {
           },
         });
         if (result.usage) {
-          tokenIn += Number(result.usage.prompt_tokens) || 0;
+          const inTok = Number(result.usage.prompt_tokens) || 0;
+          tokenIn += inTok;
           tokenOut += Number(result.usage.completion_tokens) || 0;
+          // 没有真 tokenizer，就用服务端报回的用量把估算系数拉准；用量太小的响应不参与校准
+          if (inTok > 200 && state.used > 0) conv.tokenRatio = Math.min(3, Math.max(0.4, inTok / state.used));
         }
         if (reasonOpen) {
           const ms = Math.max(0, thinkEnd - thinkStart);
@@ -618,7 +744,6 @@ class AiManager {
           answered.add(call.id);
           if (outcome.denied) halted = true;
         }
-        this._trimHistory(conv);
       }
       // 跑满回合上限不是错误，但必须让用户知道这一轮没做完，否则表现为「话说一半就停了」
       const hitLimit = !finished && !abort.signal.aborted;
@@ -646,6 +771,8 @@ class AiManager {
       conv.running = false;
       conv.abort = null;
       this._rejectApprovals(conv, 'ended');
+      // 收尾这轮又追加了正文与工具回包，圆环要显示的是真正留下来的量
+      if (scope) this.emitContext(conv, this._budget(conv, scope));
       this._archive(conv, conv.title);
       this.emitTurn(conv, { type: 'state', running: false, model: model.label });
     }

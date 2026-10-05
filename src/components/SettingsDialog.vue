@@ -2,7 +2,7 @@
   <el-dialog
     :title="$t('settings.title')"
     :visible.sync="visible"
-    width="900px"
+    width="1120px"
     top="5vh"
     :close-on-click-modal="false"
   >
@@ -191,41 +191,79 @@
                       @click="openModelPicker(svc)"
                     />
                   </div>
-                  <div v-for="(m, j) in svc.models" :key="svc.id + '-' + m.id" class="model-row">
-                    <span class="model-id mono">{{ m.id }}</span>
-                    <el-input
-                      v-if="editing[svc.id + '#' + m.id]"
-                      v-model="editing[svc.id + '#' + m.id].alias"
-                      size="mini"
-                      class="model-alias-input"
-                      :placeholder="m.id"
-                      @keyup.enter.native="commitAlias(svc, m)"
-                    />
-                    <span v-else class="model-alias">{{ m.alias || m.id }}</span>
-                    <el-tooltip
-                      :content="$t(isDefaultModel(svc, m) ? 'settings.ai.unsetDefaultModel' : 'settings.ai.setDefaultModel')"
-                      placement="top"
-                    >
-                      <i
-                        class="model-star"
-                        :class="isDefaultModel(svc, m) ? 'el-icon-star-on on' : 'el-icon-star-off'"
-                        @click="toggleDefaultModel(svc, m)"
-                      ></i>
-                    </el-tooltip>
+                  <div class="model-cols">
+                    <span></span>
+                    <span>{{ $t('settings.ai.colId') }}</span>
+                    <span>{{ $t('settings.ai.colAlias') }}</span>
+                    <span>{{ $t('settings.ai.colContext') }}</span>
+                    <span>{{ $t('settings.ai.colOps') }}</span>
+                  </div>
+                  <div
+                    v-for="(m, j) in svc.models"
+                    :key="svc.id + '-' + m.id"
+                    class="model-row"
+                    :class="{
+                      'is-dragging': modelDrag.svcId === svc.id && modelDrag.from === j,
+                      'drop-before': modelDropEdge(svc, j) === 'before',
+                      'drop-after': modelDropEdge(svc, j) === 'after'
+                    }"
+                    @dragover="onModelDragOver($event, svc, j)"
+                    @drop="onModelDrop($event, svc)"
+                  >
+                    <i
+                      class="model-handle el-icon-rank"
+                      draggable="true"
+                      @dragstart="onModelDragStart($event, svc, j)"
+                      @dragend="endModelDrag"
+                    ></i>
+                    <span class="model-id mono" :title="m.id">{{ m.id }}</span>
+                    <template v-if="editing[svc.id + '#' + m.id]">
+                      <el-input
+                        v-model="editing[svc.id + '#' + m.id].alias"
+                        size="mini"
+                        class="model-alias-input"
+                        :placeholder="m.id"
+                        @keyup.enter.native="commitModelEdit(svc, m)"
+                      />
+                      <el-input-number
+                        v-model="editing[svc.id + '#' + m.id].contextK"
+                        size="mini"
+                        class="model-ctx-input"
+                        :min="AI_LIMITS.contextK[0]"
+                        :max="AI_LIMITS.contextK[1]"
+                        :step="8"
+                        controls-position="right"
+                        @keyup.enter.native="commitModelEdit(svc, m)"
+                      />
+                    </template>
+                    <template v-else>
+                      <span class="model-alias" :title="m.alias || m.id">{{ m.alias || m.id }}</span>
+                      <span class="model-ctx mono">{{ ctxText(m) }}</span>
+                    </template>
                     <span class="model-ops">
+                      <el-tooltip
+                        :content="$t(isDefaultModel(svc, m) ? 'settings.ai.unsetDefaultModel' : 'settings.ai.setDefaultModel')"
+                        placement="top"
+                      >
+                        <i
+                          class="model-star"
+                          :class="isDefaultModel(svc, m) ? 'el-icon-star-on on' : 'el-icon-star-off'"
+                          @click="toggleDefaultModel(svc, m)"
+                        ></i>
+                      </el-tooltip>
                       <el-button
                         v-if="editing[svc.id + '#' + m.id]"
                         size="mini"
                         type="text"
-                        @click="commitAlias(svc, m)"
+                        @click="commitModelEdit(svc, m)"
                       >{{ $t('settings.ai.confirm') }}</el-button>
-                      <el-button v-else size="mini" type="text" @click="startAlias(svc, m)">{{ $t('settings.ai.editAlias') }}</el-button>
+                      <el-button v-else size="mini" type="text" @click="startModelEdit(svc, m)">{{ $t('settings.ai.editAlias') }}</el-button>
                       <el-button
                         v-if="editing[svc.id + '#' + m.id]"
                         size="mini"
                         type="text"
                         class="svc-del"
-                        @click="cancelAlias(svc, m)"
+                        @click="cancelModelEdit(svc, m)"
                       >{{ $t('settings.cancel') }}</el-button>
                       <el-popconfirm
                         v-else
@@ -242,11 +280,25 @@
                     </span>
                   </div>
                   <div v-if="!svc.models.length" class="model-empty">{{ $t('settings.ai.modelsEmpty') }}</div>
-                  <div v-if="manual[svc.id]" class="model-add">
-                    <el-input v-model="draft[svc.id].id" size="mini" class="mono" :placeholder="$t('settings.ai.modelId')" @keyup.enter.native="addModel(svc)" />
+                  <div v-if="manual[svc.id]" class="model-row model-add">
+                    <span></span>
+                    <el-input v-model="draft[svc.id].id" size="mini" class="mono" :placeholder="$t('settings.ai.modelId')" @input="onDraftId(svc)" @keyup.enter.native="addModel(svc)" />
                     <el-input v-model="draft[svc.id].alias" size="mini" :placeholder="$t('settings.ai.modelAlias')" @keyup.enter.native="addModel(svc)" />
-                    <el-button size="mini" @click="addModel(svc)">{{ $t('settings.ai.addModel') }}</el-button>
-                    <el-button size="mini" type="text" class="svc-del" @click="closeManual(svc)">{{ $t('settings.cancel') }}</el-button>
+                    <el-input-number
+                      v-model="draft[svc.id].contextK"
+                      size="mini"
+                      class="add-ctx"
+                      :min="AI_LIMITS.contextK[0]"
+                      :max="AI_LIMITS.contextK[1]"
+                      :step="8"
+                      controls-position="right"
+                      @change="markCtxTouched(svc)"
+                      @keyup.enter.native="addModel(svc)"
+                    />
+                    <span class="model-ops">
+                      <el-button size="mini" @click="addModel(svc)">{{ $t('settings.ai.addModel') }}</el-button>
+                      <el-button size="mini" type="text" class="svc-del" @click="closeManual(svc)">{{ $t('settings.cancel') }}</el-button>
+                    </span>
                   </div>
                   <el-button v-else size="mini" type="text" icon="el-icon-plus" @click="openManual(svc)">
                     {{ $t('settings.ai.manualAdd') }}
@@ -280,7 +332,7 @@
     <el-dialog
       :title="$t('settings.ai.pickModels')"
       :visible.sync="picker.visible"
-      width="520px"
+      width="620px"
       append-to-body
       :close-on-click-modal="false"
     >
@@ -295,12 +347,30 @@
       <div v-if="picker.loading" class="pick-state"><i class="el-icon-loading"></i> {{ $t('settings.ai.pickLoading') }}</div>
       <div v-else-if="picker.error" class="pick-state bad">{{ picker.error }}</div>
       <div v-else class="pick-list">
+        <div class="pick-row is-head">
+          <span></span>
+          <span>{{ $t('settings.ai.colId') }}</span>
+          <span class="is-alias">{{ $t('settings.ai.colAlias') }}</span>
+          <span class="is-ctx">{{ $t('settings.ai.colContext') }}</span>
+        </div>
         <div v-for="row in filteredPickRows" :key="row.id" class="pick-row" :class="{ added: row.added }">
-          <el-checkbox v-model="row.picked" :disabled="row.added">
-            <span class="pick-id mono">{{ row.id }}</span>
+          <el-checkbox v-model="row.picked" :disabled="row.added" />
+          <span class="pick-cell">
+            <span class="pick-id mono" :title="row.id">{{ row.id }}</span>
             <span v-if="row.added" class="pick-added">{{ $t('settings.ai.pickAdded') }}</span>
-          </el-checkbox>
+          </span>
           <el-input v-model="row.alias" size="mini" :placeholder="row.id" :disabled="row.added" />
+          <el-input-number
+            v-model="row.contextK"
+            size="mini"
+            class="pick-ctx"
+            :min="AI_LIMITS.contextK[0]"
+            :max="AI_LIMITS.contextK[1]"
+            :step="8"
+            controls-position="right"
+            :disabled="row.added"
+            @keyup.enter.native="confirmPick"
+          />
         </div>
         <div v-if="!filteredPickRows.length" class="pick-state">{{ $t('settings.ai.pickEmpty') }}</div>
       </div>
@@ -327,14 +397,45 @@
 <script>
 import { store, api, unwrap, refresh } from '../store';
 import { applyTheme, applyFont, setLocale, t } from '../i18n';
-import { UI_FONTS, AI_PERMISSIONS, AI_DEFAULTS, AI_LIMITS } from '../constants';
+import { UI_FONTS, AI_PERMISSIONS, AI_DEFAULTS, AI_LIMITS, AI_CONTEXT_DEFAULT_K, AI_CONTEXT_PRESETS } from '../constants';
 import locale from 'element-ui/lib/locale';
 import zhLocale from 'element-ui/lib/locale/lang/zh-CN';
 import enLocale from 'element-ui/lib/locale/lang/en';
 
-/** 服务与模型的临时字段（测试状态、新增草稿）不进持久化对象。 */
+/** 上下文窗口：界面按 k token 输入（1k = 1000 token），落盘仍是 token。 */
+const K_UNIT = 1000;
+const MODEL_DRAG_TYPE = 'application/x-omnidesk-model';
+const clampK = (n) => Math.min(AI_LIMITS.contextK[1], Math.max(AI_LIMITS.contextK[0], n));
+
+/** 模型 ID 对应的窗口初值（k token）：只在新增、拉取和旧记录缺字段时预填，保存后以设置值为准。 */
+function presetContextK(id) {
+  const key = String(id || '').toLowerCase();
+  const hit = AI_CONTEXT_PRESETS.find(([prefix]) => key.startsWith(prefix));
+  return clampK(hit ? hit[1] : AI_CONTEXT_DEFAULT_K);
+}
+
+/** 存的始终是 token，界面按 k 输入：把任何来源都收敛成一个可显示的 k 值。 */
+function contextK(tokens, id) {
+  const n = Math.round(Number(tokens));
+  return n > 0 ? clampK(Math.round(n / K_UNIT)) : presetContextK(id);
+}
+
+/** 输入框里的 k 值 → token：越界夹住，清空视为未填并按模型 ID 的预置兜底。 */
+function toTokens(k, id) {
+  const n = Math.round(Number(k));
+  return (n > 0 ? clampK(n) : presetContextK(id)) * K_UNIT;
+}
+
+/** 手输新增那行的草稿：窗口先给默认值，模型 ID 变化时再按预置刷新。 */
+const newModelDraft = () => ({ id: '', alias: '', contextK: AI_CONTEXT_DEFAULT_K });
+
+/** 服务与模型的临时字段（测试状态、新增草稿）不进持久化对象；窗口一律落成明确的 token 数。 */
+function cleanModel(m) {
+  return { id: m.id, alias: m.alias || m.id, contextTokens: contextK(m.contextTokens, m.id) * K_UNIT };
+}
+
 function cleanService(svc) {
-  return { id: svc.id, name: String(svc.name || '').trim(), baseUrl: String(svc.baseUrl || '').trim(), apiKey: String(svc.apiKey || ''), models: (svc.models || []).map((m) => ({ id: m.id, alias: m.alias || m.id })) };
+  return { id: svc.id, name: String(svc.name || '').trim(), baseUrl: String(svc.baseUrl || '').trim(), apiKey: String(svc.apiKey || ''), models: (svc.models || []).map(cleanModel) };
 }
 
 /** 手输的模型 ID：非空、不含空白、长度受主进程 normalize 的 120 上限约束。 */
@@ -352,6 +453,10 @@ export default {
       draft: {},
       manual: {},
       editing: {},
+      /** 手输模型时是否改过窗口：没改过就跟着模型 ID 刷新预填值。 */
+      ctxTouched: {},
+      /** 模型行拖动排序：svcId + from 标记被拖行，to 是插入位置（0 ~ length），-1 表示未在拖。 */
+      modelDrag: { svcId: '', from: -1, to: -1 },
       picker: { visible: false, service: null, loading: false, error: '', filter: '', rows: [] },
       ai: { ...AI_DEFAULTS, services: [], defaultRef: null },
       sections: [
@@ -493,13 +598,13 @@ export default {
     /* ---- AI 服务与模型：与终端面板共用同一份 settings.ai ---- */
     ensureDrafts() {
       for (const svc of this.ai.services) {
-        if (!this.draft[svc.id]) this.$set(this.draft, svc.id, { id: '', alias: '' });
+        if (!this.draft[svc.id]) this.$set(this.draft, svc.id, newModelDraft());
       }
     },
     addService() {
       const id = 'svc-' + crypto.randomUUID();
       this.ai.services = [...this.ai.services, { id, name: '', baseUrl: '', apiKey: '', models: [] }];
-      this.$set(this.draft, id, { id: '', alias: '' });
+      this.$set(this.draft, id, newModelDraft());
     },
     removeService(i) {
       const [gone] = this.ai.services.splice(i, 1);
@@ -518,23 +623,44 @@ export default {
       this.ai.defaultRef = this.isDefaultModel(svc, model) ? null : { serviceId: svc.id, modelId: model.id };
     },
     openManual(svc) {
-      if (!this.draft[svc.id]) this.$set(this.draft, svc.id, { id: '', alias: '' });
+      if (!this.draft[svc.id]) this.$set(this.draft, svc.id, newModelDraft());
       this.$set(this.manual, svc.id, true);
     },
     closeManual(svc) {
-      this.$set(this.draft, svc.id, { id: '', alias: '' });
+      this.$set(this.draft, svc.id, newModelDraft());
+      this.$set(this.ctxTouched, svc.id, false);
       this.$set(this.manual, svc.id, false);
     },
-    startAlias(svc, model) {
-      this.$set(this.editing, svc.id + '#' + model.id, { alias: model.alias || model.id });
+    startModelEdit(svc, model) {
+      this.$set(this.editing, svc.id + '#' + model.id, {
+        alias: model.alias || model.id,
+        contextK: contextK(model.contextTokens, model.id),
+      });
     },
-    cancelAlias(svc, model) {
+    cancelModelEdit(svc, model) {
       this.$delete(this.editing, svc.id + '#' + model.id);
     },
-    commitAlias(svc, model) {
+    /** 一次编辑同时收别名与上下文窗口，避免模型行堆两对按钮。 */
+    applyModelEdit(model, box) {
+      model.alias = String(box.alias || '').trim() || model.id;
+      this.$set(model, 'contextTokens', toTokens(box.contextK, model.id));
+    },
+    commitModelEdit(svc, model) {
       const box = this.editing[svc.id + '#' + model.id];
-      model.alias = String((box && box.alias) || '').trim() || model.id;
-      this.cancelAlias(svc, model);
+      if (box) this.applyModelEdit(model, box);
+      this.cancelModelEdit(svc, model);
+    },
+    /** 只读态直接显示生效的窗口数字，单位 k token。 */
+    ctxText(m) {
+      return contextK(m.contextTokens, m.id) + 'k';
+    },
+    /** 手输模型 ID 时跟着刷新窗口初值，用户自己改过就不再覆盖。 */
+    onDraftId(svc) {
+      const box = this.draft[svc.id];
+      if (box && !this.ctxTouched[svc.id]) box.contextK = presetContextK(box.id);
+    },
+    markCtxTouched(svc) {
+      this.$set(this.ctxTouched, svc.id, true);
     },
     removeModel(svc, j) {
       const [gone] = svc.models.splice(j, 1);
@@ -544,7 +670,7 @@ export default {
       if (ref && ref.serviceId === svc.id && ref.modelId === gone.id) this.ai.defaultRef = null;
     },
     addModel(svc) {
-      const box = this.draft[svc.id] || { id: '', alias: '' };
+      const box = this.draft[svc.id] || newModelDraft();
       const id = String(box.id || '').trim();
       if (!MODEL_ID_RE.test(id)) {
         this.$message.warning(t('settings.ai.modelIdInvalid'));
@@ -554,8 +680,49 @@ export default {
         this.$message.warning(t('settings.ai.modelExists'));
         return;
       }
-      svc.models.push({ id, alias: String(box.alias || '').trim() || id });
+      svc.models.push({ id, alias: String(box.alias || '').trim() || id, contextTokens: toTokens(box.contextK, id) });
       this.closeManual(svc);
+    },
+    onModelDragStart(event, svc, j) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData(MODEL_DRAG_TYPE, svc.id + '#' + j);
+      // 整行作为拖拽影像，只有柄可拖，输入框里的选区不受影响
+      event.dataTransfer.setDragImage(event.currentTarget.parentNode, 12, 10);
+      this.modelDrag = { svcId: svc.id, from: j, to: -1 };
+    },
+    onModelDragOver(event, svc, j) {
+      const d = this.modelDrag;
+      if (d.from < 0 || d.svcId !== svc.id || !this.isModelDragPayload(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      const rect = event.currentTarget.getBoundingClientRect();
+      d.to = event.clientY - rect.top < rect.height / 2 ? j : j + 1;
+    },
+    onModelDrop(event, svc) {
+      const d = this.modelDrag;
+      if (d.from < 0 || d.to < 0 || d.svcId !== svc.id || !this.isModelDragPayload(event)) return;
+      event.preventDefault();
+      const target = d.to > d.from ? d.to - 1 : d.to;
+      if (target !== d.from) {
+        const list = svc.models;
+        list.splice(target, 0, list.splice(d.from, 1)[0]);
+      }
+      this.endModelDrag();
+    },
+    endModelDrag() {
+      this.modelDrag = { svcId: '', from: -1, to: -1 };
+    },
+    /** 落在被拖行自身或其原位相邻侧时不画插入线。 */
+    modelDropEdge(svc, j) {
+      const d = this.modelDrag;
+      if (d.from < 0 || d.to < 0 || d.svcId !== svc.id) return '';
+      if (d.to === j && j !== d.from) return 'before';
+      if (d.to === j + 1 && j + 1 !== d.from) return 'after';
+      return '';
+    },
+    isModelDragPayload(event) {
+      const types = event.dataTransfer && event.dataTransfer.types;
+      return !!types && Array.from(types).includes(MODEL_DRAG_TYPE);
     },
     /** 点「模型」旁的加号：拉服务商的 /models，勾选后按行写别名。 */
     async openModelPicker(svc) {
@@ -572,7 +739,7 @@ export default {
       this.picker = { visible: true, service: svc, loading: true, error: '', filter: '', rows: [] };
       try {
         const r = unwrap(await api.aiModels({ baseUrl: svc.baseUrl, apiKey: svc.apiKey }));
-        this.picker.rows = (r.models || []).map((id) => ({ id, alias: id, added: existing.has(id), picked: false }));
+        this.picker.rows = (r.models || []).map((id) => ({ id, alias: id, contextK: presetContextK(id), added: existing.has(id), picked: false }));
       } catch (e) {
         this.picker.error = this.aiErrorText(e);
       } finally {
@@ -590,7 +757,7 @@ export default {
       }
       for (const row of chosen) {
         if (svc.models.some((m) => m.id === row.id)) continue;
-        svc.models.push({ id: row.id, alias: String(row.alias || '').trim() || row.id });
+        svc.models.push({ id: row.id, alias: String(row.alias || '').trim() || row.id, contextTokens: toTokens(row.contextK, row.id) });
       }
       this.picker.visible = false;
     },
@@ -682,12 +849,12 @@ export default {
       }
       this.$message.error(msg);
     },
-    /** 保存前收尾：别名字段就地提交，手输框里残留的模型 ID 必须先生效或清空。 */
+    /** 保存前收尾：编辑框里的别名与窗口就地提交，手输框里残留的模型 ID 必须先生效或清空。 */
     commitPendingAi() {
       for (const svc of this.ai.services) {
         for (const m of svc.models) {
           const box = this.editing[svc.id + '#' + m.id];
-          if (box) m.alias = String(box.alias || '').trim() || m.id;
+          if (box) this.applyModelEdit(m, box);
         }
       }
       this.editing = {};
@@ -821,45 +988,90 @@ export default {
 .svc-models { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .svc-models-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); margin-bottom: 2px; }
 .svc-models-head .el-button.head-plus { padding: 0; height: 18px; font-size: 13px; color: var(--accent); }
-.model-row { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 2px 0; }
-.model-id { color: var(--text); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-alias { color: var(--text-2); font-size: 11.5px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-alias-input { width: 180px; flex: none; }
-.model-ops { margin-left: auto; display: flex; align-items: center; flex: none; }
-.model-ops > * + * { margin-left: 6px; }
+/* 模型区与拉取弹框共用列宽：拖拽柄 / ID / 别名 / 上下文 / 操作 */
+.model-cols,
+.model-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1.4fr) minmax(0, 1fr) 108px 132px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.model-cols { padding: 0 0 5px; border-bottom: 1px solid var(--border); font-size: 10.5px; letter-spacing: 0.4px; color: var(--text-3); }
+.model-row { position: relative; padding: 3px 0; }
+.model-handle { cursor: grab; font-size: 12px; color: var(--text-3); }
+.model-handle:hover { color: var(--accent); }
+.model-handle:active { cursor: grabbing; }
+.model-row.is-dragging { opacity: 0.5; }
+.model-row.drop-before::before,
+.model-row.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.model-row.drop-before::before { top: 0; }
+.model-row.drop-after::after { bottom: 0; }
+.model-id { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-alias { color: var(--text-2); font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-alias-input { width: 100%; min-width: 0; }
+.model-ctx-input { width: 100%; margin-top: 0; }
+.model-ctx-input /deep/ .el-input__inner { text-align: left; font-size: 11.5px; }
+.model-ctx {
+  justify-self: start;
+  min-width: 52px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+.model-ops { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .model-star { cursor: pointer; font-size: 14px; color: var(--text-3); }
 .model-star:hover { color: var(--accent); }
 .model-star.on { color: var(--accent); }
 .model-empty { font-size: 11.5px; color: var(--text-3); padding: 2px 0 4px; }
-.model-add { display: flex; gap: 6px; margin-top: 6px; }
-.model-add .el-input { flex: 1; }
+.model-add { margin-top: 4px; }
+.model-add .add-ctx { width: 100%; margin-top: 0; }
+.model-add .add-ctx /deep/ .el-input__inner { text-align: left; font-size: 11.5px; }
 .pick-head { margin-bottom: 8px; }
 .pick-list { max-height: 44vh; overflow-y: auto; }
 .pick-list::-webkit-scrollbar { width: 6px; }
 .pick-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .pick-list::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 .pick-list::-webkit-scrollbar-track { background: transparent; }
+/* 与模型列表同一套列宽，只是少了拖拽柄与操作两列 */
 .pick-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  align-items: center;
-  gap: 12px;
-  padding: 6px 0;
-  border-bottom: 1px dashed var(--border);
-}
-.pick-row.added { opacity: 0.55; }
-.pick-row /deep/ .el-checkbox { display: flex; align-items: center; min-width: 0; }
-.pick-row /deep/ .el-checkbox__label {
-  display: inline-flex;
+  grid-template-columns: 14px minmax(0, 1.4fr) minmax(0, 1fr) 108px;
   align-items: center;
   gap: 8px;
-  flex: 1;
-  min-width: 0;
-  font-size: 12.5px;
-  color: var(--text);
-  overflow: hidden;
+  font-size: 12px;
+  padding: 3px 0;
 }
-.pick-id { font-family: Consolas, "Courier New", monospace; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 列头与模型列表的 .model-cols 保持同一外观：只有一条下边框，不铺底色 */
+.pick-row.is-head {
+  padding: 0 0 5px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  color: var(--text-3);
+}
+/* 列头左对齐到单元格里的文字：mini 输入框与数字框的文字都内缩 15px（浏览器实测） */
+.pick-row.is-head .is-alias { padding-left: 15px; }
+.pick-row.is-head .is-ctx { padding-left: 15px; }
+.pick-row.added { opacity: 0.55; }
+.pick-row /deep/ .el-checkbox { margin-right: 0; }
+.pick-ctx { width: 100%; margin-top: 0; }
+.pick-ctx /deep/ .el-input__inner { text-align: left; font-size: 11.5px; }
+.pick-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pick-id { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pick-added { font-size: 10px; color: var(--text-3); flex: none; }
 .pick-state { font-size: 12px; color: var(--text-3); padding: 10px 0; }
 .pick-state.bad { color: var(--danger); }

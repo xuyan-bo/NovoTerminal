@@ -758,7 +758,7 @@ function registerIpc() {
   }, true);
   handle('ai:history', (sender, req) => {
     ownSsh(sender, req && req.sessionId);
-    return aiAssistant.history(req.sessionId);
+    return aiAssistant.history(req);
   }, true);
   /** 模型中途要读屏幕时主进程会发 screen-request，渲染端取到 buffer 文本后回到这里。 */
   handle('ai:screen-reply', (sender, req) => {
