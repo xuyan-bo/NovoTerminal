@@ -1146,7 +1146,7 @@ class SftpManager {
   /** Prepare a local copy under temp for OS drag-out; returns absolute local path */
   async prepareDragOut({ connId, remotePath, isDir, name }) {
     const base = path.basename(remotePath) || name || 'download';
-    const tmpRoot = path.join(os.tmpdir(), 'omnidesk-sftp-drag');
+    const tmpRoot = path.join(os.tmpdir(), 'novoterminal-sftp-drag');
     fs.mkdirSync(tmpRoot, { recursive: true });
     const stamp = Date.now().toString(36);
     const localPath = path.join(tmpRoot, `${stamp}-${base}`);

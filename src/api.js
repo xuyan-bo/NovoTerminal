@@ -2,7 +2,7 @@
 import { t } from './i18n';
 import { AI_DEFAULTS } from './constants';
 
-const hasBridge = typeof window !== 'undefined' && !!window.omniDesk;
+const hasBridge = typeof window !== 'undefined' && !!window.novoTerminal;
 
 const mockState = {
   groups: [
@@ -33,7 +33,7 @@ async function local(method, ...args) {
 }
 
 export const api = hasBridge
-  ? window.omniDesk
+  ? window.novoTerminal
   : {
       getPathForFile(file) {
         return (file && file.path) || '';

@@ -4,7 +4,7 @@ import { UI_FONTS } from './constants';
 
 const dict = {
   zh: {
-    'app.name': 'OmniDesk',
+    'app.name': 'NovoTerminal',
     'nav.home': '首页',
     'nav.settings': '设置',
     'nav.logs': '日志',
@@ -13,7 +13,7 @@ const dict = {
     'sidebar.emptyTree': '暂无分组',
     'sidebar.needGroup': '需要先有一个分组',
     'sidebar.groupTitle': '分组 · {name}',
-    'home.title': '欢迎使用 OmniDesk',
+    'home.title': '欢迎使用 NovoTerminal',
     'home.sub': '高效运维之旅从这里开始，多协议会话与文件传输尽在掌握',
     'home.recent': '最近连接',
     'home.recentEmpty': '暂无最近连接',
@@ -79,7 +79,7 @@ const dict = {
     'msg.confirmDeleteGroup': '删除此分组？',
     'msg.confirm': '确认',
     'msg.cancel': '取消',
-    'closePrompt.title': '关闭 OmniDesk',
+    'closePrompt.title': '关闭 NovoTerminal',
     'closePrompt.minimize': '最小化到托盘',
     'closePrompt.quit': '退出程序',
     'closePrompt.remember': '记住此选择，不再提示',
@@ -292,7 +292,7 @@ const dict = {
     'ssh.endedHint': '会话已断开。',
     'ssh.errorPrefix': '错误：',
     'ssh.hostkeySaved': '已保存主机密钥 SHA256:{fp}',
-    'ssh.hostkeyMismatch': '主机密钥与本地记录不一致，已拒绝连接。请确认后删除 ~/.omnidesk/ssh_known_hosts.json 中对应项。',
+    'ssh.hostkeyMismatch': '主机密钥与本地记录不一致，已拒绝连接。请确认后删除 ~/.novoterminal/ssh_known_hosts.json 中对应项。',
     'ssh.hostkeyUnknown': '未知主机密钥（策略为严格校验），已拒绝连接。可在高级设置中改为「首次询问」。',
     'ssh.fullscreenTip': '切换全屏',
     'ssh.fullscreenExitHint': '退出全屏',
@@ -665,7 +665,7 @@ const dict = {
     'time.earlier': '更早',
   },
   en: {
-    'app.name': 'OmniDesk',
+    'app.name': 'NovoTerminal',
     'nav.home': 'Home',
     'nav.settings': 'Settings',
     'nav.logs': 'Logs',
@@ -674,7 +674,7 @@ const dict = {
     'sidebar.emptyTree': 'No groups yet',
     'sidebar.needGroup': 'Create a group first',
     'sidebar.groupTitle': 'Group · {name}',
-    'home.title': 'Welcome to OmniDesk',
+    'home.title': 'Welcome to NovoTerminal',
     'home.sub': 'Your efficient ops journey starts here — multi-protocol sessions and file transfer at your fingertips',
     'home.recent': 'Recent connections',
     'home.recentEmpty': 'No recent connections',
@@ -740,7 +740,7 @@ const dict = {
     'msg.confirmDeleteGroup': 'Delete this group?',
     'msg.confirm': 'Confirm',
     'msg.cancel': 'Cancel',
-    'closePrompt.title': 'Close OmniDesk',
+    'closePrompt.title': 'Close NovoTerminal',
     'closePrompt.minimize': 'Minimize to tray',
     'closePrompt.quit': 'Quit program',
     'closePrompt.remember': 'Remember this choice, don\'t ask again',
@@ -1378,7 +1378,7 @@ export function applySettings(settings) {
   setLocale(settings.lang || 'zh');
   applyFont(settings.font || 'default');
   // In Electron the main process owns real zoom; CSS zoom only approximates it in browser preview
-  if (!window.omniDesk) {
+  if (!window.novoTerminal) {
     const z = Number(settings.zoom) || 100;
     document.documentElement.style.zoom = z === 100 ? '' : String(z / 100);
   }

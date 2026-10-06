@@ -321,9 +321,9 @@
 
         <div v-show="activeMenu === 'about'" class="set-section">
           <div class="about-box">
-            <img class="logo-mark" src="../assets/logo.svg" alt="OmniDesk" width="36" height="36" />
+            <img class="logo-mark" src="../assets/logo.svg" alt="NovoTerminal" width="36" height="36" />
             <div>
-              <div style="font-family:Consolas,monospace;font-weight:600">OmniDesk v0.1.0</div>
+              <div style="font-family:Consolas,monospace;font-weight:600">NovoTerminal v0.1.0</div>
               <div class="meta" v-html="$t('settings.aboutBody')"></div>
               <div class="meta">
                 {{ $t('settings.aboutSource') }}
@@ -413,7 +413,7 @@ import enLocale from 'element-ui/lib/locale/lang/en';
 
 /** 上下文窗口：界面按 k token 输入（1k = 1000 token），落盘仍是 token。 */
 const K_UNIT = 1000;
-const MODEL_DRAG_TYPE = 'application/x-omnidesk-model';
+const MODEL_DRAG_TYPE = 'application/x-novoterminal-model';
 const clampK = (n) => Math.min(AI_LIMITS.contextK[1], Math.max(AI_LIMITS.contextK[0], n));
 
 /** 模型 ID 对应的窗口初值（k token）：只在新增、拉取和旧记录缺字段时预填，保存后以设置值为准。 */
@@ -542,8 +542,8 @@ export default {
   },
   methods: {
     openUrl(url) {
-      if (window.omniDesk && window.omniDesk.openExternal) {
-        window.omniDesk.openExternal(url);
+      if (window.novoTerminal && window.novoTerminal.openExternal) {
+        window.novoTerminal.openExternal(url);
       }
     },
     /** 「完全访问」跳过所有审批，与面板内切换共用同一条风险确认；取消就不改级别。 */
@@ -846,7 +846,7 @@ export default {
         const blob = new Blob([text], { type: 'application/json' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'omnidesk-groups.json';
+        a.download = 'novoterminal-groups.json';
         a.click();
         URL.revokeObjectURL(a.href);
       } catch (e) {

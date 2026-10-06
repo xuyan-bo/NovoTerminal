@@ -1,9 +1,9 @@
 {
-  "name": "omnidesk",
+  "name": "novoterminal",
   "version": "0.1.0",
-  "description": "OmniDesk — local-first remote desktop client (Windows first)",
+  "description": "NovoTerminal — local-first remote desktop client (Windows first)",
   "main": "electron/main.js",
-  "author": "OmniDesk <xuyanbo.c@qq.com>",
+  "author": "NovoTerminal <xuyanbo.c@qq.com>",
   "homepage": "https://gitee.com/xu-san333/omni-desk",
   "license": "MIT",
   "private": true,
@@ -42,8 +42,8 @@
     "vite": "^5.4.11"
   },
   "build": {
-    "appId": "com.omnidesk.app",
-    "productName": "OmniDesk",
+    "appId": "com.novoterminal.app",
+    "productName": "NovoTerminal",
     "directories": {
       "output": "release"
     },
@@ -56,9 +56,9 @@
     "mac": {
       "target": ["dmg", "zip"],
       "extraResources": [
-        { "from": "build/auth/omnidesk-auth", "to": "auth/omnidesk-auth" }
+        { "from": "build/auth/novoterminal-auth", "to": "auth/novoterminal-auth" }
       ],
-      "binaries": ["Contents/Resources/auth/omnidesk-auth"]
+      "binaries": ["Contents/Resources/auth/novoterminal-auth"]
     },
     "win": {
       "target": [

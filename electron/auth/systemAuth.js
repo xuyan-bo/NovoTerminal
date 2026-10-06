@@ -1,5 +1,5 @@
 /**
- * OmniDesk system-level identity verification.
+ * NovoTerminal system-level identity verification.
  *
  * Windows implementation uses a small PowerShell (.NET) helper to:
  *   1. Show the native credential dialog (CredUIPromptForWindowsCredentialsW),
@@ -44,7 +44,7 @@ function resultMessage(code, lang) {
 }
 
 function defaultReason(lang) {
-  return lang === 'en' ? 'OmniDesk needs to verify your identity' : 'OmniDesk 需要验证您的身份';
+  return lang === 'en' ? 'NovoTerminal needs to verify your identity' : 'NovoTerminal 需要验证您的身份';
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +163,7 @@ function buildPasswordScript() {
     '        info.cbSize = Marshal.SizeOf(info);',
     '        info.hwndParent = hwnd > 0 ? new IntPtr(hwnd) : IntPtr.Zero;',
     '        info.pszMessageText = string.IsNullOrEmpty(message) ? "" : message;',
-    '        info.pszCaptionText = string.IsNullOrEmpty(caption) ? "OmniDesk" : caption;',
+    '        info.pszCaptionText = string.IsNullOrEmpty(caption) ? "NovoTerminal" : caption;',
     '        info.hbmBanner = IntPtr.Zero;',
     '',
     '        uint authPackage = 0;',
@@ -225,7 +225,7 @@ function buildPasswordScript() {
     '',
     'Add-Type -TypeDefinition $cs -Language CSharp',
     '',
-    '$res = [AuthHelper]::Prompt($hwnd, $reason, "OmniDesk")',
+    '$res = [AuthHelper]::Prompt($hwnd, $reason, "NovoTerminal")',
     'Write-Output $res',
   ].join('\r\n');
 }
@@ -253,7 +253,7 @@ function runPs(script, options) {
 function runPsFile(psContent, psArgs, options) {
   const { timeout } = options || {};
   return new Promise((resolve) => {
-    const tmpFile = path.join(os.tmpdir(), `omnidesk_auth_${Date.now()}.ps1`);
+    const tmpFile = path.join(os.tmpdir(), `novoterminal_auth_${Date.now()}.ps1`);
     fs.writeFileSync(tmpFile, psContent, 'utf-8');
     const args = ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', tmpFile];
     if (psArgs) psArgs.forEach((a) => args.push(a));
@@ -331,14 +331,14 @@ function macAuthResult(code, lang) {
 
 function verifyMacAuth(reason, lang) {
   if (macAuthProcess) return Promise.resolve(macAuthResult('DeviceBusy', lang));
-  const message = reason || (lang === 'en' ? 'OmniDesk needs to verify your identity' : 'OmniDesk 需要验证您的身份');
+  const message = reason || (lang === 'en' ? 'NovoTerminal needs to verify your identity' : 'NovoTerminal 需要验证您的身份');
   if (typeof message !== 'string' || message.length > 1024 || message.includes('\0')) {
     return Promise.resolve(macAuthResult('Failed', lang));
   }
   const { app } = require('electron');
   const helper = app.isPackaged
-    ? path.join(process.resourcesPath, 'auth', 'omnidesk-auth')
-    : path.join(app.getAppPath(), 'build', 'auth', 'omnidesk-auth');
+    ? path.join(process.resourcesPath, 'auth', 'novoterminal-auth')
+    : path.join(app.getAppPath(), 'build', 'auth', 'novoterminal-auth');
   return new Promise((resolve) => {
     macAuthProcess = execFile(helper, [message], {
       timeout: 130000, killSignal: 'SIGKILL', maxBuffer: 4096,

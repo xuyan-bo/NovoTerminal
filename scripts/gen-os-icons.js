@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path');
 
 function extract(p) {
   const s = fs.readFileSync(p, 'utf8');
@@ -86,5 +87,5 @@ const out = [
   rest,
 ].join('\n');
 
-fs.writeFileSync('D:/MyCode/OmniDesk/src/constants.js', out, 'utf8');
+fs.writeFileSync(path.join(__dirname, '..', 'src', 'constants.js'), out, 'utf8');
 console.log('ok', { win: win.length, mac: mac.length, linux: linux.length });

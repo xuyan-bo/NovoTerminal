@@ -7,7 +7,7 @@ function buildMacAuth() {
     throw new Error('The macOS authentication helper must be built on macOS with Xcode Command Line Tools');
   }
   const root = path.resolve(__dirname, '..');
-  const output = path.join(root, 'build', 'auth', 'omnidesk-auth');
+  const output = path.join(root, 'build', 'auth', 'novoterminal-auth');
   fs.mkdirSync(path.dirname(output), { recursive: true });
   execFileSync('/usr/bin/xcrun', [
     'clang', '-O2', '-fobjc-arc', '-fblocks',

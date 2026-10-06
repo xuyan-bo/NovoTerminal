@@ -962,9 +962,9 @@ test('authentication test reports authentication scope only and onConnection own
 
 for (const mode of ['auth-failure', 'owner-cancel', 'callback-failure', 'config-failure']) {
   test('authentication test ' + mode + ' never reports success and cleans onConnection resources', async (t) => {
-    if (mode === 'callback-failure' && process.env.OMNIDESK_SSH_CALLBACK_PROBE !== '1') {
+    if (mode === 'callback-failure' && process.env.NOVOTERMINAL_SSH_CALLBACK_PROBE !== '1') {
       // Isolate an unhandled ready rejection so it fails this regression, not a later test.
-      const env = { ...process.env, OMNIDESK_SSH_CALLBACK_PROBE: '1' };
+      const env = { ...process.env, NOVOTERMINAL_SSH_CALLBACK_PROBE: '1' };
       delete env.NODE_TEST_CONTEXT;
       const child = spawnSync(process.execPath, ['--unhandled-rejections=strict', '--test',
         '--test-name-pattern=^authentication test callback-failure ', __filename], {

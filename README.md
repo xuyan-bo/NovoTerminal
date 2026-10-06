@@ -1,4 +1,4 @@
-# OmniDesk
+# NovoTerminal
 
 本地优先（local-first）的一体化远程运维工作台：把 SSH 终端、VNC / RDP 远程桌面、SFTP 文件传输和资产凭据管理收进同一个桌面应用，会话以页签编排、可拆成独立窗口，数据全部存在你自己机器上。
 
@@ -278,4 +278,4 @@ MIT — see [LICENSE](./LICENSE).
 
 ## License
 
-MIT © OmniDesk — 详见 [LICENSE](./LICENSE) / see [LICENSE](./LICENSE).
+MIT © NovoTerminal — 详见 [LICENSE](./LICENSE) / see [LICENSE](./LICENSE).

@@ -98,7 +98,7 @@ import { t } from '../i18n';
 import { OS_SVG } from '../constants';
 import { getProtocol } from '../protocols';
 
-const TAB_DRAG_TYPE = 'application/x-omnidesk-tab';
+const TAB_DRAG_TYPE = 'application/x-novoterminal-tab';
 /** How often the tab bar rect is re-published for the detached window's hit test. */
 const BOUNDS_REPORT_MS = 150;
 /** Preview size of the detached-window outline shown while a tab is dragged out. */

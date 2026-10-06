@@ -3,6 +3,8 @@ const path = require('path');
 const { app, safeStorage } = require('electron');
 const { AI_DEFAULTS } = require('../ai/aiSettings');
 
+const CIPHER_PREFIX = 'novoterminal1:';
+
 function newId(prefix) {
   return prefix + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 }
@@ -45,14 +47,14 @@ class AssetStore {
   }
 
   resolveActiveFile() {
-    const defaultFile = path.join(defaultDataDir(), 'omnidesk.json');
+    const defaultFile = path.join(defaultDataDir(), 'novoterminal.json');
     let dir;
     try {
       dir = fs.readFileSync(pointerFile(), 'utf8').trim();
     } catch (_) {
       return defaultFile;
     }
-    const target = dir && path.join(dir, 'omnidesk.json');
+    const target = dir && path.join(dir, 'novoterminal.json');
     return target && target !== defaultFile && fs.existsSync(target) ? target : defaultFile;
   }
 
@@ -68,7 +70,7 @@ class AssetStore {
 
   setCustomPath(dir) {
     if (!dir) return this.file;
-    const target = path.join(dir, 'omnidesk.json');
+    const target = path.join(dir, 'novoterminal.json');
     if (target === this.file) return this.file;
     this.file = target;
     this.backupFile = target + '.bak';
@@ -93,8 +95,8 @@ class AssetStore {
       }
       const raw = fs.readFileSync(this.file, 'utf8');
       let parsed;
-      if (raw.startsWith('omni1:')) {
-        const buf = Buffer.from(raw.slice(6), 'base64');
+      if (raw.startsWith(CIPHER_PREFIX)) {
+        const buf = Buffer.from(raw.slice(CIPHER_PREFIX.length), 'base64');
         const plain = safeStorage.decryptString(buf);
         parsed = JSON.parse(plain);
       } else {
@@ -167,7 +169,7 @@ class AssetStore {
     try {
       if (safeStorage.isEncryptionAvailable()) {
         const enc = safeStorage.encryptString(json);
-        fs.writeFileSync(this.file, 'omni1:' + enc.toString('base64'), 'utf8');
+        fs.writeFileSync(this.file, CIPHER_PREFIX + enc.toString('base64'), 'utf8');
       } else {
         fs.writeFileSync(this.file, json, 'utf8');
       }

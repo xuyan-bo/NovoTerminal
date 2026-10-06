@@ -194,7 +194,7 @@ export default {
       };
     },
     platformKey() {
-      const p = (window.omniDesk && window.omniDesk.platform) || '';
+      const p = (window.novoTerminal && window.novoTerminal.platform) || '';
       return osKeyFromPlatform(p);
     },
     clientOptions() {

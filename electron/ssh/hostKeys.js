@@ -45,7 +45,7 @@ function getKeyType(key) {
   return keyType;
 }
 
-function createHostKeyVerifier({ file = path.join(os.homedir(), '.omnidesk', 'ssh_known_hosts.json'),
+function createHostKeyVerifier({ file = path.join(os.homedir(), '.novoterminal', 'ssh_known_hosts.json'),
   confirm, log } = {}) {
   file = path.resolve(file);
 

@@ -21,7 +21,7 @@ const fingerprint = (key) => crypto.createHash('sha256').update(key).digest('bas
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
 function temporary(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'omnidesk-ssh-test-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'novoterminal-ssh-test-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return { directory, file: path.join(directory, 'known_hosts.json') };
 }

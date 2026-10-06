@@ -32,7 +32,7 @@ export default {
     try {
       e.dataTransfer.effectAllowed = 'copyMove';
       e.dataTransfer.setData('text/plain', list.map((x) => x.path).join('\n'));
-      e.dataTransfer.setData('text/omnidesk-sftp', JSON.stringify(payload));
+      e.dataTransfer.setData('text/novoterminal-sftp', JSON.stringify(payload));
     } catch (_) {}
     // HTML5 only — in-app drop. Do NOT auto-download to temp on dragstart.
     this.pushDlog(`dragstart ${payload.side} n=${list.length} ${list[0].path}`);
@@ -122,8 +122,8 @@ export default {
   /** Fallback for panel zones and document drops; keep distinct from direct transfers. */
   async runDrop(e, zoneSide) {
     if (this._tabDragging) return;
-    if (e && e._omniHandled) return;
-    if (e) e._omniHandled = true;
+    if (e && e._novoHandled) return;
+    if (e) e._novoHandled = true;
     this.dropHi = '';
     let s = this.s;
     const payload = this._lastDrag || this.dragPayload;

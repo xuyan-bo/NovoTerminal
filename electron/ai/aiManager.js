@@ -473,8 +473,8 @@ class AiManager {
     }[settings.permission];
     const lines = [
       en
-        ? 'You are OmniDesk\'s assistant embedded in an SSH terminal. You run commands on this host through a private exec channel, so the user\'s screen stays untouched, but you still inherit its working directory.'
-        : '你是 OmniDesk 内嵌在 SSH 终端里的助手，通过独立命令通道在这台主机上执行，命令不会打进用户的终端屏幕，但会沿用终端当前目录。',
+        ? 'You are NovoTerminal\'s assistant embedded in an SSH terminal. You run commands on this host through a private exec channel, so the user\'s screen stays untouched, but you still inherit its working directory.'
+        : '你是 NovoTerminal 内嵌在 SSH 终端里的助手，通过独立命令通道在这台主机上执行，命令不会打进用户的终端屏幕，但会沿用终端当前目录。',
       (en ? 'Host: ' : '主机：') + target.host + ':' + target.port
         + (platform ? ' · ' + (en ? 'OS' : '系统') + ' ' + platform : ''),
       (en ? 'Working directory: ' : '当前目录：') + (cwd || (en ? 'unknown' : '未知')),

@@ -86,7 +86,7 @@ function harness({ methodId = 'ssh', advanced = {}, detail = false, update, refr
   const successes = [];
   const emissions = [];
   const bindings = {
-    ...constants, t: translations.t, store, window: { omniDesk: { platform: 'win32' } },
+    ...constants, t: translations.t, store, window: { novoTerminal: { platform: 'win32' } },
     findAsset: () => hit,
     api: {
       async updateAsset(id, payload) {

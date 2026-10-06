@@ -365,7 +365,7 @@ function createTray() {
 
   try {
     tray = new Tray(trayIcon);
-    tray.setToolTip('OmniDesk');
+    tray.setToolTip('NovoTerminal');
     rebuildTrayMenu();
     tray.on('click', () => showMainWindow());
     tray.on('double-click', () => showMainWindow());
@@ -381,7 +381,7 @@ function rebuildTrayMenu() {
   const menu = Menu.buildFromTemplate([
     { label: en ? 'Open Main Window' : '打开主窗口', click: () => showMainWindow() },
     { type: 'separator' },
-    { label: en ? 'Quit OmniDesk' : '退出 OmniDesk', click: () => { trayDestroying = true; app.quit(); } },
+    { label: en ? 'Quit NovoTerminal' : '退出 NovoTerminal', click: () => { trayDestroying = true; app.quit(); } },
   ]);
   tray.setContextMenu(menu);
 }
@@ -408,7 +408,7 @@ function createWindow() {
     height: 800,
     minWidth: 960,
     minHeight: 600,
-    title: `OmniDesk ${APP_BUILD}`,
+    title: `NovoTerminal ${APP_BUILD}`,
     backgroundColor: '#0f1419',
     icon: path.join(__dirname, 'assets', 'icon.png'),
     autoHideMenuBar: true,
@@ -597,7 +597,7 @@ function registerIpc() {
   });
   handle('store:export', async () => {
     const lang = store.getSettings().lang;
-    const reason = lang === 'en' ? 'Export OmniDesk settings (includes sensitive information)' : '导出 OmniDesk 配置（包含敏感信息）';
+    const reason = lang === 'en' ? 'Export NovoTerminal settings (includes sensitive information)' : '导出 NovoTerminal 配置（包含敏感信息）';
     const auth = await verifySystemAuth(reason, mainWindowHwnd(), {
       force: process.platform === 'darwin', lang, log: logger,
     });
@@ -610,7 +610,7 @@ function registerIpc() {
   });
   handle('store:import', async (text) => {
     const lang = store.getSettings().lang;
-    const reason = lang === 'en' ? 'Import OmniDesk settings (replaces current data)' : '导入 OmniDesk 配置（将覆盖当前数据）';
+    const reason = lang === 'en' ? 'Import NovoTerminal settings (replaces current data)' : '导入 NovoTerminal 配置（将覆盖当前数据）';
     const auth = await verifySystemAuth(reason, mainWindowHwnd(), {
       force: process.platform === 'darwin', lang, log: logger,
     });

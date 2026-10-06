@@ -239,4 +239,4 @@ const api = {
   platform: process.platform,
 };
 
-contextBridge.exposeInMainWorld('omniDesk', api);
+contextBridge.exposeInMainWorld('novoTerminal', api);

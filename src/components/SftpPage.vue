@@ -181,7 +181,7 @@ import transferMethods from './sftp/transferMethods';
 import dragDropMethods from './sftp/dragDropMethods';
 import selectionMethods from './sftp/selectionMethods';
 
-const TAB_DRAG_TYPE = 'application/x-omnidesk-sftp-tab';
+const TAB_DRAG_TYPE = 'application/x-novoterminal-sftp-tab';
 
 /** One tab per SFTP session: an asset can be opened several times, like SSH. */
 function createSession(meta, id, seq) {
