@@ -545,7 +545,7 @@ function registerIpc() {
   });
   handle('store:create-group', (p) => unwrap(store.createGroup(p)));
   handle('store:update-group', (gid, p) => unwrap(store.updateGroup(gid, p)));
-  handle('store:reorder-groups', (p) => unwrap(store.reorderGroups(p && p.fromId, p && p.toId)));
+  handle('store:reorder-groups', (p) => unwrap(store.reorderGroups(p)));
   handle('store:reorder-asset', (p) => unwrap(store.reorderAsset(p)));
   handle('store:delete-group', (gid) => unwrap(store.deleteGroup(gid)));
   handle('store:create-asset', (gid, p) => unwrap(store.createAsset(gid, p)));
@@ -1409,7 +1409,7 @@ app.whenReady().then(() => {
     dir: path.join(app.getPath('userData'), 'logs'),
     onNew: (entry) => send('log:new', entry),
   });
-  store = new AssetStore();
+  store = new AssetStore(logger);
   sessions = new SessionManager({ store, send, log: logger });
   sshSessions = new SshSessionManager({
     log: logger,

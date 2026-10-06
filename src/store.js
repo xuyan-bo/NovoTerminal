@@ -198,28 +198,15 @@ export async function updateGroup(gid, payload) {
   await refresh();
 }
 
-export async function reorderGroups(fromId, toId) {
-  if (api.reorderGroups) {
-    unwrap(await api.reorderGroups({ fromId, toId }));
-  } else {
-    // browser mock: local array swap
-    const gs = store.snapshot.groups || [];
-    const from = gs.findIndex((g) => g.id === fromId);
-    const to = gs.findIndex((g) => g.id === toId);
-    if (from >= 0 && to >= 0 && from !== to) {
-      const list = gs.slice();
-      const [item] = list.splice(from, 1);
-      list.splice(to, 0, item);
-      store.snapshot = { ...store.snapshot, groups: list };
-    }
-  }
+/** Move a folder in the tree: new parent `toGid` plus optional sibling anchor `beforeId`. */
+export async function reorderGroups({ fromId, toGid, beforeId }) {
+  unwrap(await api.reorderGroups({ fromId, toGid, beforeId }));
   await refresh();
 }
 
-export async function reorderAsset({ assetId, fromGid, toGid, beforeAssetId }) {
-  if (api.reorderAsset) {
-    unwrap(await api.reorderAsset({ assetId, fromGid, toGid, beforeAssetId }));
-  }
+/** Move an asset within the tree; beforeAssetId null means append to the end of toGid. */
+export async function reorderAsset({ assetId, toGid, beforeAssetId }) {
+  unwrap(await api.reorderAsset({ assetId, toGid, beforeAssetId }));
   await refresh();
 }
 

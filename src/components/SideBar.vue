@@ -1,80 +1,58 @@
 <template>
   <aside class="sidebar">
-    <div class="side-toolbar">
-      <el-button type="primary" icon="el-icon-plus" @click="onNewAsset">{{ $t('sidebar.newAsset') }}</el-button>
-      <el-button icon="el-icon-plus" @click="onNewGroup">{{ $t('sidebar.newGroup') }}</el-button>
-    </div>
     <div class="side-search">
-      <el-input v-model="filter" size="mini" :placeholder="$t('sidebar.search')" clearable />
+      <el-input v-model="filter" size="mini" :placeholder="$t('sidebar.search')" clearable prefix-icon="el-icon-search" />
     </div>
-    <el-scrollbar class="tree-scroll">
-    <div class="tree" @contextmenu.prevent="onBlankCtx" @dragend="onDragEnd" @drop="onTreeDrop">
-      <div
-        v-for="g in filteredGroups"
-        :key="g.id"
-        class="group-block"
-        :class="{
-          'dragging-group': drag.type === 'group' && drag.id === g.id,
-          'drop-group': dropKey === 'g:' + g.id,
-        }"
-        @dragover.prevent="onGroupBlockOver($event, g)"
-        @drop.prevent.stop="onGroupBlockDrop($event, g)"
-      >
-        <div
-          class="group-h"
+    <el-scrollbar class="tree-scroll" @contextmenu.native.prevent="onBlankCtx">
+      <div class="tree">
+        <el-tree
+          ref="tree"
+          :data="treeData"
+          node-key="key"
+          :props="treeProps"
           :draggable="canDrag"
-          :class="{ 'drag-over': dropKey === 'g:' + g.id }"
-          @click="toggleGroup(g)"
-          @contextmenu.prevent.stop="onGroupCtx($event, g)"
-          @dragstart="onGroupDragStart($event, g)"
-          @dragover.prevent="onGroupHeadOver($event, g)"
-          @dragleave="onDragLeave($event, 'g:' + g.id)"
-          @drop.prevent.stop="onGroupHeadDrop($event, g)"
+          :allow-drag="allowDrag"
+          :allow-drop="allowDrop"
+          :default-expanded-keys="expandedKeys"
+          highlight-current
+          empty-text=" "
+          @node-click="onNodeClick"
+          @node-contextmenu="onNodeCtx"
+          @node-expand="onNodeExpand"
+          @node-collapse="onNodeCollapse"
+          @node-drag-start="onNodeDragStart"
+          @node-drag-end="onNodeDragEnd"
+          @node-drop="onNodeDrop"
         >
-          <span :style="{ transform: g.open ? '' : 'rotate(-90deg)', display: 'inline-block', fontSize: '10px' }">▾</span>
-          <span :style="{ width: '8px', height: '8px', borderRadius: '2px', background: g.color, display: 'inline-block' }"></span>
-          <span style="flex:1">{{ groupLabel(g) }}</span>
-          <span class="pill">{{ g.nodes.length }}</span>
+          <template #default="{ data }">
+            <div v-if="data.kind === 'folder'" class="tn tn-folder">
+              <span class="cdot" :style="{ background: data.color }"></span>
+              <span class="tn-label">{{ data.name }}</span>
+              <span class="pill">{{ data.count }}</span>
+            </div>
+            <div v-else class="tn tn-asset" @dblclick="onDblAsset(data)">
+              <span class="os-icon" :class="'os-' + data.raw.os" v-html="osSvg(data.raw.os)"></span>
+              <div class="tn-meta">
+                <div class="tn-name">{{ data.raw.name }}</div>
+                <div class="tn-host">{{ data.raw.host }}<template v-if="data.raw.user"> · {{ data.raw.user }}</template></div>
+              </div>
+              <div class="tn-pills">
+                <span
+                  v-for="m in methodsOf(data.raw)"
+                  :key="m.id"
+                  class="pill"
+                  :class="pillClass(m.id)"
+                  :title="$t('ctx.connectWith', { name: $t(m.nameKey) })"
+                  @click.stop="connect(data.raw, m)"
+                >{{ shortProto(m.id) }}</span>
+              </div>
+            </div>
+          </template>
+        </el-tree>
+        <div v-if="!treeData.length" class="tree-empty">
+          {{ groups.length ? $t('sidebar.noMatch') : $t('sidebar.emptyTree') }}
         </div>
-        <template v-if="g.open">
-          <div
-            v-for="n in g.nodes"
-            :key="n.id"
-            class="node"
-            :class="{
-              active: activeAssetId === n.id,
-              dragging: drag.type === 'asset' && drag.id === n.id,
-              'drag-over': dropKey === 'n:' + n.id,
-            }"
-            :draggable="canDrag"
-            @click="onClickNode(n)"
-            @dblclick="onDbl(n)"
-            @contextmenu.prevent.stop="onNodeCtx($event, g, n)"
-            @dragstart="onAssetDragStart($event, g, n)"
-            @dragover.prevent.stop="onAssetOver($event, g, n)"
-            @dragleave="onDragLeave($event, 'n:' + n.id)"
-            @drop.prevent.stop="onAssetDrop($event, g, n)"
-          >
-            <span class="os-icon" :class="'os-' + n.os" v-html="osSvg(n.os)"></span>
-            <div class="node-meta">
-              <div class="node-name">{{ n.name }}</div>
-              <div class="node-host">{{ n.host }}<template v-if="n.user"> · {{ n.user }}</template></div>
-            </div>
-            <div class="node-pills">
-              <span
-                v-for="m in methodsOf(n)"
-                :key="m.id"
-                class="pill"
-                :class="pillClass(m.id)"
-                @click.stop="connect(n, m)"
-                :title="$t('ctx.connectWith', { name: $t(m.nameKey) })"
-              >{{ shortProto(m.id) }}</span>
-            </div>
-          </div>
-        </template>
       </div>
-      <div v-if="!filteredGroups.length" class="empty" style="padding:24px">{{ $t('sidebar.empty') }}</div>
-    </div>
     </el-scrollbar>
     <div class="side-footer">
       <button
@@ -105,17 +83,18 @@ import {
   enabledMethods,
   findAsset,
   api,
-  unwrap,
-  refresh,
   connectAsset,
   connectionErrorMessage,
   reorderGroups,
   reorderAsset,
+  deleteGroup,
+  deleteAsset,
 } from '../store';
-import { OS_SVG, methodPillClass, isUngroupedGroup, UNGROUPED_ID } from '../constants';
+import { OS_SVG, methodPillClass } from '../constants';
 import { protocolLabel } from '../protocols';
+import { buildAssetTree, filterTree, folderKeys, isDescendantOf } from '../assetTree';
 import CtxMenu from './CtxMenu.vue';
-import { t, groupName } from '../i18n';
+import { t } from '../i18n';
 
 export default {
   name: 'SideBar',
@@ -123,9 +102,9 @@ export default {
   data() {
     return {
       filter: '',
-      drag: { type: null, id: null, fromGid: null },
-      dropKey: '',
-      dragging: false,
+      treeProps: { children: 'children', label: 'name' },
+      expandedKeys: [],
+      treeRev: 0,
     };
   },
   computed: {
@@ -135,30 +114,41 @@ export default {
     activeAssetId() {
       return store.activeAssetId;
     },
+    /** 选中资产所在的文件夹，其次是用右键菜单选中的文件夹；都没有时由表单强制选择 */
+    activeFolderId() {
+      const hit = this.activeAssetId ? findAsset(this.activeAssetId) : null;
+      if (hit && hit.group) return hit.group.id;
+      const active = this.groups.find((g) => g.id === store.activeGroupId);
+      return active ? active.id : '';
+    },
     canDrag() {
       return !this.filter.trim();
     },
-    filteredGroups() {
-      const q = this.filter.trim().toLowerCase();
-      if (!q) return this.groups;
-      return this.groups
-        .map((g) => {
-          const nodes = g.nodes.filter(
-            (n) =>
-              n.name.toLowerCase().includes(q) ||
-              (n.host || '').includes(q) ||
-              g.name.toLowerCase().includes(q)
-          );
-          return { ...g, open: true, nodes };
-        })
-        .filter((g) => g.nodes.length);
+    treeData() {
+      // el-tree 拖放会就地改写它拿到的那份数组，失败时没有刷新，靠 treeRev 强制重建回真实数据
+      const _ = this.treeRev;
+      return filterTree(buildAssetTree(this.groups), this.filter);
     },
+  },
+  watch: {
+    // snapshot 每次刷新都会替换 groups 数组，el-tree 重建节点后不会重放 defaultExpandedKeys
+    groups() {
+      this.syncExpansion();
+    },
+    filter() {
+      this.syncExpansion();
+    },
+  },
+  created() {
+    // el-tree 不给拖拽源加类名，只能自己记住那一行并在 dragend 还原
+    this._dragEl = null;
   },
   mounted() {
     this._openSettings = () => {
       store.settingsDialog = true;
     };
     this.$root.$on('open-settings', this._openSettings);
+    this.syncExpansion();
   },
   beforeDestroy() {
     this.$root.$off('open-settings', this._openSettings);
@@ -178,200 +168,166 @@ export default {
     },
     shortProto: protocolLabel,
 
+    /**
+     * 展开状态以持久化的 folder.open 为唯一来源：搜索时命中分支强制展开，但写回仍只在用户操作时发生。
+     */
+    syncExpansion() {
+      const open = this.groups.filter((g) => g.open !== false).map((g) => 'f:' + g.id);
+      const keys = this.filter.trim() ? Array.from(new Set(open.concat(folderKeys(this.treeData)))) : open;
+      this.expandedKeys = keys;
+      this.$nextTick(() => {
+        const tree = this.$refs.tree;
+        if (!tree) return;
+        const set = new Set(keys);
+        folderKeys(this.treeData).forEach((key) => {
+          const node = tree.getNode(key);
+          if (!node) return;
+          if (set.has(key)) node.expand();
+          else node.collapse();
+        });
+        tree.setCurrentKey(this.activeAssetId ? 'a:' + this.activeAssetId : null);
+      });
+    },
+
     // ---------- drag & drop ----------
-    onGroupDragStart(e, g) {
-      if (!this.canDrag) {
-        e.preventDefault();
-        return;
+    allowDrag(node) {
+      return this.canDrag;
+    },
+    allowDrop(dragNode, dropNode, type) {
+      const d = dragNode.data;
+      const t = dropNode.data;
+      if (d.kind === 'asset') {
+        // 文件夹只接受「放入内部」，整行都是落点；资产之间才是前/后排序
+        return t.kind === 'folder' ? type === 'inner' : type !== 'inner';
       }
-      this.drag = { type: 'group', id: g.id, fromGid: null };
-      this.dragging = true;
+      if (t.kind !== 'folder') return false;
+      if (type === 'inner') return !isDescendantOf(this.groups, t.gid, d.gid);
+      // 文件夹的前后位置只在同一父级内成立，改变从属请拖进文件夹内部
+      return t.pid === d.pid;
+    },
+    /**
+     * 落点锚点：before 用目标自身，after 用目标后面那个同类型兄弟，末尾则返回空表示追加。
+     * el-tree 在 emit node-drop 前已经把被拖节点插进内部 children，所以要按数据引用把它排除，
+     * 否则算出的锚点会是自己。
+     */
+    siblingAnchor(dropNode, kind, type, dragData) {
+      const data = dropNode.data;
+      if (data.kind !== kind) return null;
+      const idOf = (n) => (kind === 'folder' ? n.gid : n.id);
+      if (type === 'before') return idOf(data);
+      const siblings = dropNode.parent.childNodes.filter((n) => n.data !== dragData);
+      const next = siblings.slice(siblings.indexOf(dropNode) + 1).find((n) => n.data.kind === kind);
+      return next ? idOf(next.data) : null;
+    },
+    async onNodeDrop(dragNode, dropNode, type) {
+      const d = dragNode.data;
+      const t = dropNode.data;
       try {
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', 'group:' + g.id);
-      } catch (_) {}
-    },
-    onAssetDragStart(e, g, n) {
-      if (!this.canDrag) {
-        e.preventDefault();
-        return;
-      }
-      this.drag = { type: 'asset', id: n.id, fromGid: g.id };
-      this.dragging = true;
-      try {
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', 'asset:' + n.id);
-      } catch (_) {}
-    },
-    onDragEnd() {
-      this.clearDrag();
-    },
-    onTreeDrop() {
-      this.clearDrag();
-    },
-    onDragLeave(e, key) {
-      if (this.dropKey === key && !e.currentTarget.contains(e.relatedTarget)) {
-        this.dropKey = '';
-      }
-    },
-    clearDrag() {
-      this.drag = { type: null, id: null, fromGid: null };
-      this.dropKey = '';
-      this.dragging = false;
-    },
-
-    onGroupHeadOver(e, g) {
-      if (!this.drag.type) return;
-      e.dataTransfer.dropEffect = 'move';
-      this.dropKey = 'g:' + g.id;
-    },
-    onGroupBlockOver(e, g) {
-      if (!this.drag.type) return;
-      e.dataTransfer.dropEffect = 'move';
-      if (!this.dropKey) this.dropKey = 'g:' + g.id;
-    },
-    onAssetOver(e, g, n) {
-      if (!this.drag.type) return;
-      e.dataTransfer.dropEffect = 'move';
-      this.dropKey = 'n:' + n.id;
-    },
-
-    async onGroupHeadDrop(e, g) {
-      const drag = { ...this.drag };
-      this.clearDrag();
-      if (!drag.type || !this.canDrag) return;
-      try {
-        if (drag.type === 'group') {
-          if (drag.id === g.id) return;
-          await reorderGroups(drag.id, g.id);
-        } else if (drag.type === 'asset') {
-          // drop on group header → move into that group (end)
-          await reorderAsset({
-            assetId: drag.id,
-            fromGid: drag.fromGid,
-            toGid: g.id,
-            beforeAssetId: null,
+        if (d.kind === 'asset') {
+          // 文件夹节点的 gid 是自身、资产节点的 gid 是所属文件夹，两者都是落点文件夹
+          const toGid = t.gid;
+          const beforeAssetId = t.kind === 'asset' && type !== 'inner'
+            ? this.siblingAnchor(dropNode, 'asset', type, d)
+            : null;
+          await reorderAsset({ assetId: d.id, toGid, beforeAssetId });
+        } else if (type === 'inner') {
+          await reorderGroups({ fromId: d.gid, toGid: t.gid, beforeId: null });
+        } else {
+          await reorderGroups({
+            fromId: d.gid,
+            toGid: t.pid,
+            beforeId: this.siblingAnchor(dropNode, 'folder', type, d),
           });
         }
       } catch (err) {
+        this.treeRev++;
         this.$message.error(err.message || String(err));
       }
+      this.syncExpansion();
     },
 
-    async onGroupBlockDrop(e, g) {
-      // empty area under group header
-      const drag = { ...this.drag };
-      this.clearDrag();
-      if (!drag.type || !this.canDrag) return;
-      if (drag.type === 'group') {
-        // only reorder when targeting a different group header; block body is for assets
-        return;
-      }
-      try {
-        if (drag.type === 'asset') {
-          await reorderAsset({
-            assetId: drag.id,
-            fromGid: drag.fromGid,
-            toGid: g.id,
-            beforeAssetId: null,
-          });
-        }
-      } catch (err) {
-        this.$message.error(err.message || String(err));
-      }
+    onNodeDragStart(node, event) {
+      this._dragEl = event && event.target ? event.target.closest('.el-tree-node') : null;
+      if (this._dragEl) this._dragEl.classList.add('is-drag-src');
+    },
+    onNodeDragEnd() {
+      if (this._dragEl) this._dragEl.classList.remove('is-drag-src');
+      this._dragEl = null;
     },
 
-    async onAssetDrop(e, targetG, targetN) {
-      const drag = { ...this.drag };
-      this.clearDrag();
-      if (!drag.type || !this.canDrag) return;
-      try {
-        if (drag.type === 'asset') {
-          if (drag.id === targetN.id) return;
-          await reorderAsset({
-            assetId: drag.id,
-            fromGid: drag.fromGid,
-            toGid: targetG.id,
-            beforeAssetId: targetN.id,
-          });
-        } else if (drag.type === 'group') {
-          // dropping a group onto an asset → reorder groups to that asset's group
-          if (drag.id === targetG.id) return;
-          await reorderGroups(drag.id, targetG.id);
-        }
-      } catch (err) {
-        this.$message.error(err.message || String(err));
-      }
+    // ---------- 展开状态持久化 ----------
+    persistOpen(gid, open) {
+      const g = this.groups.find((x) => x.id === gid);
+      if (g) g.open = open;
+      api.updateGroup(gid, { open }).catch(() => {});
+    },
+    onNodeExpand(data) {
+      if (this.filter.trim()) return;
+      this.persistOpen(data.gid, true);
+    },
+    onNodeCollapse(data) {
+      if (this.filter.trim()) return;
+      this.persistOpen(data.gid, false);
     },
 
-    toggleGroup(g) {
-      g.open = !g.open;
-      api.updateGroup(g.id, { open: g.open }).catch(() => {});
+    // ---------- 选择与打开 ----------
+    onNodeClick(data) {
+      if (data.kind === 'folder') return;
+      store.activeAssetId = data.id;
+      store.activeGroupId = data.gid;
     },
-    onClickNode(n) {
-      store.activeAssetId = n.id;
-      const hit = findAsset(n.id);
-      store.activeGroupId = hit && hit.group ? hit.group.id : null;
+    onDblAsset(data) {
+      openAssetDetail(data.raw);
     },
-    onDbl(n) {
-      openAssetDetail(n);
+    onNewAsset(gid) {
+      if (!this.groups.length) return;
+      store.assetDialog = { visible: true, editId: null, gid: gid || '' };
     },
-    onNewAsset() {
-      // group is optional; keep empty unless a non-default group is active
-      const active = this.groups.find((g) => g.id === store.activeGroupId);
-      const gid =
-        active && !isUngroupedGroup(active)
-          ? active.id
-          : store.assetDialog.gid || '';
-      store.assetDialog = {
-        visible: true,
-        editId: null,
-        gid,
-      };
-    },
-    onNewGroup() {
-      store.groupDialog = { visible: true, editId: null };
+    onNewFolder(pid) {
+      store.groupDialog = { visible: true, editId: null, pid: pid || '' };
     },
     onBlankCtx(e) {
       this.showMenu(e, [
-        { label: t('ctx.newAsset'), icon: 'el-icon-plus', act: 'new-asset' },
-        { label: t('ctx.newGroup'), icon: 'el-icon-plus', act: 'new-group' },
+        { label: t('ctx.newAsset'), icon: 'el-icon-plus', act: 'new-asset', disabled: !this.groups.length, hint: t('sidebar.needGroup') },
+        { label: t('ctx.newGroup'), icon: 'el-icon-folder-add', act: 'new-group' },
       ]);
     },
-    groupLabel(g) {
-      return groupName(g);
-    },
-    onGroupCtx(e, g) {
-      const ungrouped = isUngroupedGroup(g);
-      if (ungrouped) {
-        this.showMenu(e, [
-          { label: t('sidebar.groupTitle', { name: groupName(g) }), title: true },
-          { label: t('ctx.inGroupNew'), icon: 'el-icon-plus', act: 'new-asset-g', gid: g.id },
-          { label: t('ctx.editGroup'), icon: 'el-icon-edit', act: 'edit-group', gid: g.id },
-        ]);
+    onNodeCtx(e, data) {
+      if (data.kind === 'folder') {
+        this.folderMenu(e, data);
         return;
       }
-      this.showMenu(e, [
-        { label: t('sidebar.groupTitle', { name: groupName(g) }), title: true },
-        { label: t('ctx.inGroupNew'), icon: 'el-icon-plus', act: 'new-asset-g', gid: g.id },
-        { label: t('ctx.editGroup'), icon: 'el-icon-edit', act: 'edit-group', gid: g.id },
-        { sep: true },
-        { label: t('ctx.delGroup'), icon: 'el-icon-delete', act: 'del-group', gid: g.id, danger: true },
-      ]);
-    },
-    onNodeCtx(e, g, n) {
-      store.activeAssetId = n.id;
-      const methods = enabledMethods(n);
-      const items = [{ label: `${t('ctx.asset')} · ${n.name}`, title: true }];
+      store.activeAssetId = data.id;
+      const methods = enabledMethods(data.raw);
+      const items = [{ label: `${t('ctx.asset')} · ${data.name}`, title: true }];
       methods.forEach((m) => {
-        items.push({ label: t('ctx.connectWith', { name: t(m.nameKey) }), icon: 'el-icon-video-play', act: 'connect', aid: n.id, mid: m.id });
+        items.push({ label: t('ctx.connectWith', { name: t(m.nameKey) }), icon: 'el-icon-video-play', act: 'connect', aid: data.id, mid: m.id });
       });
       items.push({ sep: true });
-      items.push({ label: t('ctx.edit'), icon: 'el-icon-edit', act: 'edit', aid: n.id });
-      items.push({ label: t('ctx.clone'), icon: 'el-icon-document-copy', act: 'clone', aid: n.id });
+      items.push({ label: t('ctx.edit'), icon: 'el-icon-edit', act: 'edit', aid: data.id });
+      items.push({ label: t('ctx.clone'), icon: 'el-icon-document-copy', act: 'clone', aid: data.id });
       items.push({ sep: true });
-      items.push({ label: t('ctx.del'), icon: 'el-icon-delete', act: 'del', aid: n.id, danger: true });
+      items.push({ label: t('ctx.del'), icon: 'el-icon-delete', act: 'del', aid: data.id, danger: true });
       this.showMenu(e, items);
+    },
+    folderMenu(e, data) {
+      const occupied = data.count + data.folderCount > 0;
+      this.showMenu(e, [
+        { label: t('sidebar.groupTitle', { name: data.name }), title: true },
+        { label: t('ctx.inGroupNew'), icon: 'el-icon-plus', act: 'new-asset-g', gid: data.gid },
+        { label: t('ctx.newSubGroup'), icon: 'el-icon-folder-add', act: 'new-group-in', gid: data.gid },
+        { label: t('ctx.editGroup'), icon: 'el-icon-edit', act: 'edit-group', gid: data.gid },
+        { sep: true },
+        {
+          label: t('ctx.delGroup'),
+          icon: 'el-icon-delete',
+          act: 'del-group',
+          gid: data.gid,
+          danger: true,
+          disabled: occupied,
+          hint: t('ctx.delGroupBusy'),
+        },
+      ]);
     },
     showMenu(e, items) {
       this.$refs.contextMenu.open(e, items);
@@ -379,20 +335,19 @@ export default {
     async handleCtx(it) {
       try {
         if (it.act === 'new-asset') {
-          const active = this.groups.find((g) => g.id === store.activeGroupId);
-          const gid =
-            active && !isUngroupedGroup(active) ? active.id : '';
-          store.assetDialog = { visible: true, editId: null, gid };
+          this.onNewAsset(this.activeFolderId);
         } else if (it.act === 'new-asset-g') {
-          store.assetDialog = { visible: true, editId: null, gid: it.gid };
+          this.onNewAsset(it.gid);
         } else if (it.act === 'new-group') {
-          store.groupDialog = { visible: true, editId: null };
+          this.onNewFolder('');
+        } else if (it.act === 'new-group-in') {
+          this.onNewFolder(it.gid);
         } else if (it.act === 'edit-group') {
-          store.groupDialog = { visible: true, editId: it.gid };
+          store.groupDialog = { visible: true, editId: it.gid, pid: null };
         } else if (it.act === 'del-group') {
           await this.$confirm(t('msg.confirmDeleteGroup'), t('msg.confirm'), { type: 'warning' });
-          unwrap(await api.deleteGroup(it.gid));
-          await refresh();
+          await deleteGroup(it.gid);
+          this.syncExpansion();
         } else if (it.act === 'connect') {
           const hit = findAsset(it.aid);
           if (hit) await this.connect(hit.asset, enabledMethods(hit.asset).find((m) => m.id === it.mid));
@@ -402,8 +357,8 @@ export default {
           store.assetDialog = { visible: true, editId: null, gid: null, cloneId: it.aid };
         } else if (it.act === 'del') {
           await this.$confirm(t('msg.confirmDeleteAsset'), t('msg.confirm'), { type: 'warning' });
-          unwrap(await api.deleteAsset(it.aid));
-          await refresh();
+          await deleteAsset(it.aid);
+          this.syncExpansion();
         }
       } catch (err) {
         if (err !== 'cancel') this.$message.error(err.message || String(err));
@@ -420,3 +375,10 @@ export default {
   },
 };
 </script>
+
+<style scoped>
+/* 双击资产仍然打开详情页，单击只负责选中 */
+.tn-asset {
+  cursor: pointer;
+}
+</style>

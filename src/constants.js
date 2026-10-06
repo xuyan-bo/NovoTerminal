@@ -9,9 +9,6 @@ export const OS_SVG = {
 
 export const OS_NAME = { win: 'Windows', mac: 'macOS', linux: 'Linux' };
 
-/** Reserved default group: always in the tree, not selectable, not deletable */
-export const UNGROUPED_ID = 'g-ungrouped';
-
 /** UI font choices for the settings dialog; 'default' keeps the built-in stack */
 export const UI_FONTS = [
   { id: 'default', family: '' },
@@ -20,10 +17,6 @@ export const UI_FONTS = [
   { id: 'simsun', family: "'SimSun', 'Songti SC', serif" },
   { id: 'mono', family: "Consolas, 'Courier New', monospace" },
 ];
-
-export function isUngroupedGroup(g) {
-  return !!(g && (g.id === UNGROUPED_ID || g.id === 'g-default'));
-}
 
 export const CATALOG = {
   win: [

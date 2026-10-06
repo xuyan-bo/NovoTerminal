@@ -79,7 +79,7 @@
 import { store, findAsset, enabledMethods, openMethodAdvanced, connectAsset, connectionErrorMessage } from '../store';
 import { OS_SVG, OS_NAME, methodPillClass } from '../constants';
 import { protocolLabel } from '../protocols';
-import { groupName } from '../i18n';
+import { folderPathText } from '../assetTree';
 
 export default {
   name: 'AssetDetailView',
@@ -108,6 +108,11 @@ export default {
       const p = this.methods.find((m) => m.primary);
       return p ? this.$t(p.nameKey) : '';
     },
+    folderPath() {
+      const g = this.hit && this.hit.group;
+      if (!g) return '';
+      return folderPathText(store.snapshot.groups || [], g.id) || g.name || '';
+    },
     fields() {
       const a = this.asset;
       if (!a) return [];
@@ -115,7 +120,7 @@ export default {
         [this.$t('detail.osKind'), this.osName],
         [this.$t('asset.host'), a.host || '-'],
         [this.$t('asset.user'), a.user || '-'],
-        [this.$t('asset.group'), this.hit && this.hit.group ? groupName(this.hit.group) : '-'],
+        [this.$t('asset.group'), this.folderPath || '-'],
         [this.$t('detail.methodCount'), this.$t('detail.kindCount', { count: this.methods.length })],
       ];
     },

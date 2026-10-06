@@ -3,28 +3,17 @@ const path = require('path');
 const { app, safeStorage } = require('electron');
 const { AI_DEFAULTS } = require('../ai/aiSettings');
 
-const UNGROUPED_ID = 'g-ungrouped';
-const UNGROUPED_NAME = '未分组';
+const UNGROUPED_LEGACY_IDS = ['g-ungrouped', 'g-default'];
+const UNGROUPED_LEGACY_NAMES = ['未分组', 'Ungrouped'];
 
-function isUngroupedGroup(g) {
-  return !!(g && (g.id === UNGROUPED_ID || g.id === 'g-default'));
-}
-
-function ungroupedGroup() {
-  return {
-    id: UNGROUPED_ID,
-    name: UNGROUPED_NAME,
-    color: '#909399',
-    open: true,
-    nodes: [],
-    locked: true,
-  };
+function newId(prefix) {
+  return prefix + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 }
 
 function defaultData() {
   return {
-    version: 1,
-    groups: [ungroupedGroup()],
+    version: 2,
+    groups: [],
     recent: [],
     settings: {
       theme: 'system',
@@ -50,7 +39,8 @@ function pointerFile() {
 }
 
 class AssetStore {
-  constructor() {
+  constructor(log) {
+    this.log = log || null;
     this.file = this.resolveActiveFile();
     this.backupFile = this.file + '.bak';
     this.data = defaultData();
@@ -101,7 +91,6 @@ class AssetStore {
     try {
       if (!fs.existsSync(this.file)) {
         this.data = defaultData();
-        this.ensureUngrouped();
         this.persist();
         return;
       }
@@ -116,10 +105,7 @@ class AssetStore {
       }
       this.data = Object.assign(defaultData(), parsed);
       this.data.settings = Object.assign(defaultData().settings, parsed.settings || {});
-      if (!this.data.groups || !this.data.groups.length) {
-        this.data.groups = defaultData().groups;
-      }
-      this.ensureUngrouped();
+      this.normalizeTree();
       this.data.settings.dataPath = path.dirname(this.file);
     } catch (e) {
       console.error('[store] load failed', e);
@@ -130,32 +116,62 @@ class AssetStore {
       } catch (_) {
         this.data = defaultData();
       }
-      this.ensureUngrouped();
+      this.normalizeTree();
     }
   }
 
-  /** Keep a reserved ungrouped bucket in the tree; migrate legacy g-default */
-  ensureUngrouped() {
+  /**
+   * 把持久化的 groups[] 收敛成可用的分组树：groups 仍是扁平数组，层级由 pid 表达。
+   * 顺带完成「未分组」下线的迁移——保留桶转成普通根分组，空桶直接丢弃。
+   */
+  normalizeTree() {
     if (!Array.isArray(this.data.groups)) this.data.groups = [];
-    let ug = this.data.groups.find((g) => g.id === UNGROUPED_ID);
-    const legacy = this.data.groups.find((g) => g.id === 'g-default');
-    if (!ug && legacy) {
-      legacy.id = UNGROUPED_ID;
-      legacy.name = UNGROUPED_NAME;
-      legacy.locked = true;
-      ug = legacy;
-    }
-    if (!ug) {
-      ug = ungroupedGroup();
-      this.data.groups.push(ug);
-    } else {
-      ug.name = UNGROUPED_NAME;
-      ug.locked = true;
-      if (!ug.color) ug.color = '#909399';
-      if (!Array.isArray(ug.nodes)) ug.nodes = [];
-    }
-    // assets that somehow lost their group land here
-    return ug;
+    const ids = new Set();
+    this.data.groups.forEach((g) => {
+      if (!g || typeof g !== 'object') return;
+      if (!Array.isArray(g.nodes)) g.nodes = [];
+      if (typeof g.open !== 'boolean') g.open = true;
+      delete g.locked;
+      if (typeof g.pid !== 'string') g.pid = '';
+      if (g.pid && g.pid === g.id) g.pid = '';
+      ids.add(g.id);
+    });
+    // 父级不存在的节点回落到根，避免断链分支从界面上消失
+    this.data.groups.forEach((g) => {
+      if (g.pid && !ids.has(g.pid)) g.pid = '';
+    });
+    this.breakParentCycles();
+
+    // 「未分组」保留桶下线：空桶丢弃，有内容的转成一个普通根分组。
+    // 认定条件是「历史 id + 仍是遗留名称」，迁移过一次就不再干预，用户改空或改名都不会被悄悄处理。
+    this.data.groups
+      .filter((g) => UNGROUPED_LEGACY_IDS.includes(g.id) && UNGROUPED_LEGACY_NAMES.includes(g.name))
+      .forEach((g) => {
+        if (!g.nodes.length && !this.childFolders(g.id).length) {
+          this.data.groups = this.data.groups.filter((x) => x !== g);
+          return;
+        }
+        g.pid = '';
+        g.color = g.color || '#909399';
+        g.name = this.L('默认分组', 'Default group');
+      });
+  }
+
+  /** pid 链成环（手改数据或导入异常）时断掉成环的那一条 */
+  breakParentCycles() {
+    this.data.groups.forEach((g) => {
+      const seen = new Set([g.id]);
+      let cur = g;
+      while (cur.pid) {
+        if (seen.has(cur.pid)) {
+          g.pid = '';
+          break;
+        }
+        seen.add(cur.pid);
+        cur = this.data.groups.find((x) => x.id === cur.pid);
+        if (!cur) break;
+      }
+    });
   }
 
   persist() {
@@ -180,7 +196,6 @@ class AssetStore {
   }
 
   snapshot() {
-    this.ensureUngrouped();
     this.data.settings.dataPath = path.dirname(this.file);
     return JSON.parse(JSON.stringify(this.data));
   }
@@ -199,7 +214,31 @@ class AssetStore {
   }
 
   findGroup(gid) {
-    return this.data.groups.find((g) => g.id === gid);
+    return gid ? this.data.groups.find((g) => g.id === gid) : null;
+  }
+
+  childFolders(pid) {
+    const parent = pid || '';
+    return this.data.groups.filter((g) => (g.pid || '') === parent);
+  }
+
+  /** 从根到该节点父级的 id 列表，不含自己 */
+  ancestorsOf(gid) {
+    const out = [];
+    const seen = new Set([gid]);
+    let cur = this.findGroup(gid);
+    while (cur && cur.pid) {
+      if (seen.has(cur.pid)) break;
+      seen.add(cur.pid);
+      out.unshift(cur.pid);
+      cur = this.findGroup(cur.pid);
+    }
+    return out;
+  }
+
+  isDescendantOf(gid, ancestorId) {
+    if (!gid || !ancestorId) return false;
+    return this.ancestorsOf(gid).includes(ancestorId);
   }
 
   findAsset(aid) {
@@ -210,64 +249,118 @@ class AssetStore {
     return null;
   }
 
+  requireGroup(gid) {
+    const g = this.findGroup(gid);
+    if (!g) throw new Error(this.L('分组不存在', 'Group not found'));
+    return g;
+  }
+
+  logEvent(level, message, meta) {
+    if (this.log) this.log[level]('assets', message, meta);
+  }
+
+  /** 把分组放到同一父级的兄弟之后；根级则接到数组末尾 */
+  placeFolder(g) {
+    const cur = this.data.groups.indexOf(g);
+    if (cur >= 0) this.data.groups.splice(cur, 1);
+    const sibs = this.childFolders(g.pid);
+    const last = sibs[sibs.length - 1];
+    const parent = this.findGroup(g.pid);
+    let at = this.data.groups.length;
+    if (last) at = this.data.groups.indexOf(last) + 1;
+    else if (parent) at = this.data.groups.indexOf(parent) + 1;
+    this.data.groups.splice(at, 0, g);
+  }
+
   createGroup(payload) {
+    const input = payload || {};
+    const pid = input.pid || '';
+    if (pid) this.requireGroup(pid);
     const g = {
-      id: 'g-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
-      name: payload.name || this.L('未命名分组', 'Unnamed group'),
-      color: payload.color || '#409EFF',
+      id: newId('g'),
+      pid,
+      name: (input.name || '').trim() || this.L('未命名分组', 'Unnamed group'),
+      color: input.color || '#409EFF',
       open: true,
       nodes: [],
     };
-    this.data.groups.push(g);
+    this.placeFolder(g);
     this.persist();
+    this.logEvent('info', 'group created', { gid: g.id, pid, name: g.name });
     return this.snapshot();
   }
 
   updateGroup(gid, payload) {
-    const g = this.findGroup(gid);
-    if (!g) throw new Error('group not found');
-    if (isUngroupedGroup(g)) {
-      // default group: only color is mutable
-      if (payload.color) g.color = payload.color;
-      if (typeof payload.open === 'boolean') g.open = payload.open;
-      g.name = UNGROUPED_NAME;
-      this.persist();
-      return this.snapshot();
+    const g = this.requireGroup(gid);
+    const input = payload || {};
+    if ('pid' in input) {
+      const pid = input.pid || '';
+      if (pid === g.id) throw new Error(this.L('分组不能挂到自己下面', 'A group cannot contain itself'));
+      if (pid) {
+        this.requireGroup(pid);
+        if (this.isDescendantOf(pid, g.id)) {
+          throw new Error(this.L('不能把分组移动到它自己的子分组里', 'Cannot move a group into its own descendant'));
+        }
+      }
+      if (pid !== (g.pid || '')) {
+        g.pid = pid;
+        this.placeFolder(g);
+        this.logEvent('info', 'group moved', { gid: g.id, pid, name: g.name });
+      }
     }
-    if (payload.name) g.name = payload.name;
-    if (payload.color) g.color = payload.color;
-    if (typeof payload.open === 'boolean') g.open = payload.open;
-    this.persist();
-    return this.snapshot();
-  }
-
-  /** Drag-sort groups: move fromId to toId's position */
-  reorderGroups(fromId, toId) {
-    if (!fromId || !toId || fromId === toId) return this.snapshot();
-    const groups = this.data.groups;
-    const from = groups.findIndex((g) => g.id === fromId);
-    const to = groups.findIndex((g) => g.id === toId);
-    if (from < 0 || to < 0) throw new Error('group not found');
-    const [item] = groups.splice(from, 1);
-    groups.splice(to, 0, item);
+    if (input.name) g.name = input.name;
+    if (input.color) g.color = input.color;
+    if (typeof input.open === 'boolean') g.open = input.open;
     this.persist();
     return this.snapshot();
   }
 
   /**
-   * Drag-sort assets.
-   * @param {object} p { assetId, fromGid, toGid, beforeAssetId? }
+   * 拖动分组：改从属并排序。
+   * @param {object} p { fromId, toGid, beforeId? } — beforeId 为同级的参考分组，null 表示排到末尾
+   */
+  reorderGroups(p) {
+    const input = p || {};
+    const g = this.requireGroup(input.fromId);
+    const toGid = input.toGid || '';
+    if (toGid) {
+      this.requireGroup(toGid);
+      if (toGid === g.id || this.isDescendantOf(toGid, g.id)) {
+        throw new Error(this.L('不能把分组移动到它自己的子分组里', 'Cannot move a group into its own descendant'));
+      }
+    }
+    // 参考点是自己就没有排序意义，按「排到末尾」处理，否则摘掉自己后 indexOf 会指到数组末尾
+    const beforeId = input.beforeId && input.beforeId !== input.fromId ? input.beforeId : null;
+    const before = beforeId ? this.requireGroup(beforeId) : null;
+    if (before && (before.pid || '') !== toGid) {
+      throw new Error(this.L('参考分组不在同一层级', 'The reference group is not a sibling'));
+    }
+    g.pid = toGid;
+    if (before) {
+      this.data.groups.splice(this.data.groups.indexOf(g), 1);
+      this.data.groups.splice(this.data.groups.indexOf(before), 0, g);
+    } else {
+      this.placeFolder(g);
+    }
+    const parent = this.findGroup(toGid);
+    if (parent) parent.open = true;
+    this.persist();
+    this.logEvent('info', 'group moved', { gid: g.id, toGid, beforeId });
+    return this.snapshot();
+  }
+
+  /**
+   * Drag-sort assets, optionally across groups.
+   * @param {object} p { assetId, toGid, beforeAssetId? }
    *   beforeAssetId null/absent → append to end of target group
    */
   reorderAsset(p) {
     const assetId = p && p.assetId;
-    if (!assetId) throw new Error('asset not found');
-    const hit = this.findAsset(assetId);
-    if (!hit) throw new Error('asset not found');
+    const hit = assetId ? this.findAsset(assetId) : null;
+    if (!hit) throw new Error(this.L('资产不存在', 'Asset not found'));
     const fromG = hit.group;
     const asset = hit.asset;
-    const toG = (p.toGid && this.findGroup(p.toGid)) || fromG;
-    if (!toG) throw new Error('group not found');
+    const toG = p.toGid ? this.requireGroup(p.toGid) : fromG;
 
     fromG.nodes = fromG.nodes.filter((n) => n.id !== assetId);
     let insertAt = toG.nodes.length;
@@ -275,52 +368,50 @@ class AssetStore {
       const bi = toG.nodes.findIndex((n) => n.id === p.beforeAssetId);
       if (bi >= 0) insertAt = bi;
     }
-    // clamp when moving within same list after removal shifted indices
-    if (insertAt > toG.nodes.length) insertAt = toG.nodes.length;
     toG.nodes.splice(insertAt, 0, asset);
     toG.open = true;
     this.persist();
+    this.logEvent('info', 'asset moved', {
+      assetId,
+      fromGid: fromG.id,
+      toGid: toG.id,
+      beforeAssetId: p.beforeAssetId || null,
+    });
     return this.snapshot();
   }
 
   deleteGroup(gid) {
-    const i = this.data.groups.findIndex((g) => g.id === gid);
-    if (i < 0) throw new Error('group not found');
-    const g = this.data.groups[i];
-    if (isUngroupedGroup(g)) {
-      throw new Error(this.L('默认分组「未分组」不可删除', 'The default “Ungrouped” group cannot be deleted'));
+    const g = this.requireGroup(gid);
+    const kids = this.childFolders(gid);
+    if (kids.length) {
+      throw new Error(
+        this.L(
+          `分组「${g.name}」下还有 ${kids.length} 个子分组，请先移出或删除它们`,
+          `Group “${g.name}” still has ${kids.length} subgroup(s); move or delete them first`
+        )
+      );
     }
-    if (this.data.groups.length <= 1) {
-      throw new Error(this.L('至少保留一个分组', 'Keep at least one group'));
+    if (g.nodes.length) {
+      throw new Error(
+        this.L(
+          `分组「${g.name}」下还有 ${g.nodes.length} 个资产，请先移出或删除它们`,
+          `Group “${g.name}” still has ${g.nodes.length} asset(s); move or delete them first`
+        )
+      );
     }
-    const ug = this.ensureUngrouped();
-    // move assets into ungrouped instead of dropping them
-    if (ug && ug.id !== g.id && Array.isArray(g.nodes) && g.nodes.length) {
-      ug.nodes = ug.nodes.concat(g.nodes);
-      ug.open = true;
-    }
-    this.data.groups.splice(i, 1);
-    this.ensureUngrouped();
+    this.data.groups = this.data.groups.filter((x) => x.id !== gid);
     this.persist();
+    this.logEvent('info', 'group deleted', { gid, name: g.name });
     return this.snapshot();
   }
 
   createAsset(gid, payload) {
-    this.ensureUngrouped();
-    let g = null;
-    if (gid) g = this.findGroup(gid);
-    if (!g) {
-      g =
-        this.data.groups.find((x) => x.id === UNGROUPED_ID) ||
-        this.data.groups.find((x) => !isUngroupedGroup(x)) ||
-        this.data.groups[0];
+    if (!this.data.groups.length) {
+      throw new Error(this.L('还没有分组，请先新建一个分组', 'No group yet; create a group first'));
     }
-    if (!g) {
-      g = ungroupedGroup();
-      this.data.groups.push(g);
-    }
+    const g = this.requireGroup(gid);
     const asset = {
-      id: 'a-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+      id: newId('a'),
       name: payload.name || this.L('未命名资产', 'Unnamed asset'),
       os: payload.os || 'win',
       host: payload.host || '',
@@ -335,6 +426,7 @@ class AssetStore {
     };
     g.nodes.push(asset);
     this.persist();
+    this.logEvent('info', 'asset created', { assetId: asset.id, gid: g.id, name: asset.name, host: asset.host });
     return { snapshot: this.snapshot(), asset };
   }
 
@@ -355,13 +447,13 @@ class AssetStore {
       display: payload.display != null ? payload.display : asset.display,
     });
     if (targetGid && targetGid !== group.id) {
-      const ng = this.findGroup(targetGid);
-      if (ng) {
-        group.nodes = group.nodes.filter((n) => n.id !== aid);
-        ng.nodes.push(asset);
-        if (isUngroupedGroup(ng)) ng.open = true;
-        group = ng;
-      }
+      const ng = this.requireGroup(targetGid);
+      const fromGid = group.id;
+      group.nodes = group.nodes.filter((n) => n.id !== aid);
+      ng.nodes.push(asset);
+      ng.open = true;
+      group = ng;
+      this.logEvent('info', 'asset moved', { assetId: aid, fromGid, toGid: ng.id });
     }
     this.persist();
     return this.snapshot();
@@ -372,6 +464,7 @@ class AssetStore {
     if (!hit) throw new Error('asset not found');
     hit.group.nodes = hit.group.nodes.filter((n) => n.id !== aid);
     this.persist();
+    this.logEvent('info', 'asset deleted', { assetId: aid, gid: hit.group.id, name: hit.asset.name });
     return this.snapshot();
   }
 
@@ -431,8 +524,12 @@ class AssetStore {
 
   importGroups(jsonText) {
     const groups = JSON.parse(jsonText);
-    if (!Array.isArray(groups)) throw new Error('invalid format');
+    if (!Array.isArray(groups) || groups.some((g) => !g || typeof g !== 'object' || !g.id)) {
+      throw new Error(this.L('导入内容不是有效的分组列表', 'Not a valid group list'));
+    }
     this.data.groups = groups;
+    // 兼容旧的扁平导出：补 pid、断成环的父级、清掉「未分组」保留桶
+    this.normalizeTree();
     this.persist();
     return this.snapshot();
   }

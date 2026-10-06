@@ -17,13 +17,22 @@
       <el-form-item :label="$t('group.name')" prop="name">
         <el-input
           v-model="form.name"
-          :placeholder="isUngrouped ? $t('group.ungroupedLocked') : $t('group.namePh')"
+          :placeholder="$t('group.namePh')"
           maxlength="64"
           clearable
-          :disabled="isUngrouped"
           @keyup.enter.native="save"
         />
-        <div v-if="isUngrouped" class="hint" style="margin-top:4px">{{ $t('group.ungroupedHint') }}</div>
+      </el-form-item>
+      <el-form-item :label="$t('group.parent')">
+        <el-cascader
+          v-model="form.path"
+          :options="parentOptions"
+          :props="cascaderProps"
+          :placeholder="$t('group.parentRoot')"
+          clearable
+          style="width:100%"
+          @change="onParentChange"
+        />
       </el-form-item>
       <el-form-item :label="$t('group.color')" prop="color">
         <div class="color-row">
@@ -53,9 +62,9 @@
 </template>
 
 <script>
-import { store, api, unwrap, refresh } from '../store';
+import { store, createGroup, updateGroup } from '../store';
 import { t } from '../i18n';
-import { UNGROUPED_ID, isUngroupedGroup } from '../constants';
+import { cascaderOptions, folderIdPath, subtreeIds } from '../assetTree';
 
 const HEX_RE = /^#[0-9A-Fa-f]{6}$/;
 
@@ -67,6 +76,15 @@ export default {
       form: {
         name: '',
         color: '#409EFF',
+        pid: '',
+        path: [],
+      },
+      cascaderProps: {
+        checkStrictly: true,
+        emitPath: true,
+        value: 'value',
+        label: 'label',
+        children: 'children',
       },
       predefine: [
         '#409EFF',
@@ -134,12 +152,13 @@ export default {
     isEdit() {
       return !!store.groupDialog.editId;
     },
-    isUngrouped() {
-      const id = store.groupDialog.editId;
-      if (!id) return false;
-      if (id === UNGROUPED_ID || id === 'g-default') return true;
-      const g = (store.snapshot.groups || []).find((x) => x.id === id);
-      return isUngroupedGroup(g);
+    groups() {
+      return store.snapshot.groups || [];
+    },
+    /** 编辑时把自身连同子孙摘掉，否则父级可以选到自己内部形成环 */
+    parentOptions() {
+      const omit = this.isEdit ? subtreeIds(this.groups, store.groupDialog.editId) : [];
+      return cascaderOptions(this.groups, omit);
     },
   },
   watch: {
@@ -149,19 +168,25 @@ export default {
         if (this.$refs.form) this.$refs.form.clearValidate();
       });
       if (this.isEdit) {
-        const g = (store.snapshot.groups || []).find(
-          (x) => x.id === store.groupDialog.editId
-        );
+        const g = this.groups.find((x) => x.id === store.groupDialog.editId);
         this.form.name = g ? g.name : '';
         this.form.color = normalizeHex(g && g.color);
-        if (this.isUngrouped) this.form.name = this.form.name || t('sidebar.untitled');
+        this.form.pid = g ? g.pid || '' : '';
       } else {
         this.form.name = '';
         this.form.color = '#409EFF';
+        this.form.pid = store.groupDialog.pid || '';
       }
+      this.form.path = this.form.pid ? folderIdPath(this.groups, this.form.pid) : [];
     },
   },
   methods: {
+    onParentChange(val) {
+      this.form.pid = Array.isArray(val) && val.length ? val[val.length - 1] : '';
+      // Element 的选项是 aria-hidden 的 el-radio 原生 input，面板收起时焦点还在它上面，Chrome 会报 a11y 警告
+      const focused = document.activeElement;
+      if (focused && focused.closest('.el-cascader__dropdown')) focused.blur();
+    },
     onColorChange(val) {
       if (val) this.form.color = normalizeHex(val);
     },
@@ -175,19 +200,15 @@ export default {
       this.$refs.form.validate(async (valid) => {
         if (!valid) return;
         this.saving = true;
+        const payload = { name: this.form.name.trim(), color: normalizeHex(this.form.color), pid: this.form.pid };
         try {
-          const name = this.isUngrouped ? '未分组' : this.form.name.trim();
-          const color = normalizeHex(this.form.color);
           if (this.isEdit) {
-            unwrap(
-              await api.updateGroup(store.groupDialog.editId, { name, color })
-            );
+            await updateGroup(store.groupDialog.editId, payload);
             this.$message.success(t('msg.groupUpdated'));
           } else {
-            unwrap(await api.createGroup({ name, color }));
+            await createGroup(payload);
             this.$message.success(t('msg.groupCreated'));
           }
-          await refresh();
           this.visible = false;
         } catch (e) {
           this.$message.error(e.message);

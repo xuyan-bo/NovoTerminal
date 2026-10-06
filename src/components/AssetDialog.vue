@@ -37,22 +37,16 @@
       <el-form-item :label="$t('asset.name')" prop="name">
         <el-input v-model="form.name" :placeholder="$t('asset.namePh')" maxlength="128" clearable />
       </el-form-item>
-      <el-form-item :label="$t('asset.group')" prop="gid">
-        <el-select
-          v-model="form.gid"
-          style="width:100%"
-          clearable
+      <el-form-item :label="$t('asset.group')" prop="path">
+        <el-cascader
+          v-model="form.path"
+          :options="folderOptions"
+          :props="cascaderProps"
           :placeholder="$t('asset.groupPh')"
-        >
-          <el-option
-            v-for="g in groupOptions"
-            :key="g.id"
-            :label="g.name"
-            :value="g.id"
-            :disabled="!!g.disabled"
-          />
-        </el-select>
-        <div class="hint" style="margin-top:4px">{{ $t('asset.groupOptional') }}</div>
+          :clearable="false"
+          style="width:100%"
+          @change="onFolderChange"
+        />
       </el-form-item>
       <el-form-item :label="$t('asset.host')" prop="host">
         <el-input v-model="form.host" :placeholder="$t('asset.hostPh')" clearable />
@@ -119,7 +113,8 @@ import {
   openAssetDetail,
   openMethodAdvanced,
 } from '../store';
-import { OS_SVG, OS_NAME, CATALOG, UNGROUPED_ID, isUngroupedGroup } from '../constants';
+import { OS_SVG, OS_NAME, CATALOG } from '../constants';
+import { cascaderOptions, folderIdPath } from '../assetTree';
 import { t } from '../i18n';
 import MethodConfig from './MethodConfig.vue';
 
@@ -143,10 +138,18 @@ export default {
         name: '',
         os: 'win',
         gid: '',
+        path: [],
         host: '',
         user: '',
         pass: '',
         note: '',
+      },
+      cascaderProps: {
+        checkStrictly: true,
+        emitPath: true,
+        value: 'value',
+        label: 'label',
+        children: 'children',
       },
       draft: {
         rdp: { enabled: true, port: 3389, primary: true },
@@ -175,12 +178,13 @@ export default {
             trigger: 'blur',
           },
         ],
-        gid: [
+        // 校验级联自身绑定的 path，避免依赖 change 与表单校验的先后顺序
+        path: [
           {
-            required: false,
+            required: true,
             validator(rule, value, cb) {
-              // optional — empty means default ungrouped bucket
-              if (!value) cb();
+              // 资产必须挂在某个文件夹下，不再有「未分组」兜底桶
+              if (!Array.isArray(value) || !value.length) cb(new Error(t('msg.groupSelect')));
               else cb();
             },
             trigger: 'change',
@@ -257,24 +261,10 @@ export default {
       return this.isClone ? this.$t('asset.dialogClone') : this.$t('asset.dialogNew');
     },
     groups() {
-      return (store.snapshot.groups || []).filter((g) => !isUngroupedGroup(g));
+      return store.snapshot.groups || [];
     },
-    groupOptions() {
-      const list = this.groups.slice();
-      const onUngrouped =
-        this.form.gid === UNGROUPED_ID ||
-        this.form.gid === 'g-default' ||
-        (store.snapshot.groups || []).some(
-          (g) => g.id === this.form.gid && isUngroupedGroup(g)
-        );
-      if (onUngrouped) {
-        list.unshift({
-          id: this.form.gid || UNGROUPED_ID,
-          name: t('sidebar.untitled'),
-          disabled: true,
-        });
-      }
-      return list;
+    folderOptions() {
+      return cascaderOptions(this.groups);
     },
     catalog() {
       return CATALOG[this.form.os] || CATALOG.win;
@@ -424,12 +414,17 @@ export default {
         this.authChecking = false;
       }
     },
+    onFolderChange(val) {
+      this.form.gid = Array.isArray(val) && val.length ? val[val.length - 1] : '';
+      // Element 的选项是 aria-hidden 的 el-radio 原生 input，面板收起时焦点还在它上面，Chrome 会报 a11y 警告
+      const focused = document.activeElement;
+      if (focused && focused.closest('.el-cascader__dropdown')) focused.blur();
+    },
     async load() {
       this.passVisible = false;
       const editId = store.assetDialog.editId;
       const cloneId = store.assetDialog.cloneId;
       const sourceId = editId || cloneId;
-      // new assets: leave group empty by default → ungrouped on save
       const fallbackGid = store.assetDialog.gid || '';
       if (sourceId) {
         const hit = findAsset(sourceId);
@@ -439,6 +434,7 @@ export default {
           name: cloneId && !editId ? `${a.name} ${t('asset.cloneSuffix')}` : a.name,
           os: a.os,
           gid: hit.group.id,
+          path: folderIdPath(this.groups, hit.group.id),
           host: a.host,
           user: a.user,
           pass: a.pass || '',
@@ -454,6 +450,7 @@ export default {
           name: '',
           os: 'win',
           gid: fallbackGid,
+          path: fallbackGid ? folderIdPath(this.groups, fallbackGid) : [],
           host: '',
           user: '',
           pass: '',
@@ -564,8 +561,7 @@ export default {
             pass: this.form.pass,
             note: this.form.note,
             methods,
-            // empty → store layer puts the asset under 未分组
-            gid: this.form.gid || UNGROUPED_ID,
+            gid: this.form.gid,
           };
           if (this.isEdit) {
             unwrap(

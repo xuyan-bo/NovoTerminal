@@ -393,19 +393,6 @@ button {
   min-height: 0;
 }
 
-.side-toolbar {
-  padding: 10px 12px;
-  display: flex;
-  gap: 15px;
-  border-bottom: 1px solid var(--border);
-}
-.side-toolbar .el-button + .el-button {
-  margin-left: 0;
-}
-.side-toolbar .el-button {
-  flex: 1;
-}
-
 .side-search {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
@@ -421,78 +408,102 @@ button {
 }
 
 .tree {
-  padding: 6px;
+  padding: 4px 6px;
 }
 
-.group-h {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 8px;
-  border-radius: 4px;
-  color: var(--text-2);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
+/* ===== 资产树（el-tree）===== */
+.tree .el-tree-node__content {
+  height: auto;
+  min-height: 30px;
+  border-radius: 5px;
+  padding-right: 6px;
 }
 
-.group-h:hover {
+.tree .el-tree-node:focus > .el-tree-node__content {
   background: var(--bg-hover);
-  color: var(--text);
 }
 
-.group-h[draggable='true'],
-.node[draggable='true'] {
-  cursor: grab;
+.tree .el-tree--highlight-current .el-tree-node.is-current > .el-tree-node__content {
+  background: var(--accent-soft);
 }
 
-.group-block.dragging-group > .group-h,
-.node.dragging {
+.tree .el-tree-node__expand-icon {
+  color: var(--text-3);
+}
+
+.tree .el-tree-node__expand-icon.is-leaf {
+  color: transparent;
+}
+
+/* 拖放反馈：Element 的内联高亮是给浅色主题写的，暗色下几乎看不见 */
+.tree .el-tree-node.is-drop-inner > .el-tree-node__content {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+  background: var(--accent-soft) !important;
+  border-radius: 5px;
+}
+
+.tree .el-tree__drop-indicator {
+  background-color: var(--accent);
+}
+
+.tree .el-tree-node.is-drag-src > .el-tree-node__content {
   opacity: 0.45;
 }
 
-.group-h.drag-over,
-.node.drag-over,
-.group-block.drop-group > .group-h {
-  outline: 1px dashed var(--accent);
-  outline-offset: -1px;
-  background: var(--accent-soft);
-}
-
-.node {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 8px 8px 18px;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 12.5px;
-}
-
-.node:hover {
-  background: var(--bg-hover);
-}
-
-.node.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.node-meta {
+.tn {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 0;
 }
 
-.node-name {
+.tn-folder {
+  color: var(--text-2);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.tn-folder .tn-label {
+  color: var(--text);
+}
+
+.tn-asset {
+  font-size: 12.5px;
+}
+
+.cdot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+.tn-label {
+  flex: 0 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.node-host {
+.tn-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tn-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tn-host {
   font-size: 10px;
   color: var(--text-3);
   font-family: Consolas, monospace;
@@ -502,7 +513,7 @@ button {
 }
 
 /* 访问方式标签在自己的盒子里换行，标签再多也只占右侧宽度，不会挤掉名称和主机 */
-.node-pills {
+.tn-pills {
   flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
@@ -512,8 +523,16 @@ button {
   max-width: 104px;
 }
 
-.node-pills .pill {
+.tn-pills .pill {
   flex: 0 0 auto;
+}
+
+.tree-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 .os-icon {
@@ -1475,6 +1494,15 @@ button {
   text-align: center;
   font-size: 14px;
   color: var(--text-2);
+}
+
+.ctx-item.disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+
+.ctx-item.disabled:hover {
+  background: transparent;
 }
 
 .ctx-item.danger:hover {

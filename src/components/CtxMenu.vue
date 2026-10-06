@@ -13,7 +13,8 @@
         v-else
         :key="index"
         class="ctx-item"
-        :class="{ danger: item.danger }"
+        :class="{ danger: item.danger, disabled: item.disabled }"
+        :title="item.disabled ? item.hint || '' : ''"
         @click="select(item)"
       ><i v-if="item.icon" :class="['ctx-icon', item.icon]" aria-hidden="true"></i>{{ item.label }}</div>
     </template>
@@ -44,7 +45,7 @@ export default {
     },
     select(item) {
       this.visible = false;
-      this.$emit('select', item);
+      if (!item.disabled) this.$emit('select', item);
     },
   },
 };

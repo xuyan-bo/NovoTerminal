@@ -6,13 +6,9 @@ const hasBridge = typeof window !== 'undefined' && !!window.omniDesk;
 
 const mockState = {
   groups: [
-    {
-      id: 'g-default',
-      name: '未分组',
-      color: '#409EFF',
-      open: true,
-      nodes: [],
-    },
+    { id: 'g-prod', pid: '', name: '生产环境', color: '#409EFF', open: true, nodes: [] },
+    { id: 'g-east', pid: 'g-prod', name: '华东区', color: '#67C23A', open: true, nodes: [] },
+    { id: 'g-office', pid: '', name: '办公室', color: '#E6A23C', open: true, nodes: [] },
   ],
   recent: [],
 };
