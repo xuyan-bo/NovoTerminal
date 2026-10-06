@@ -92,11 +92,11 @@
 </template>
 
 <script>
-import CtxMenu from './CtxMenu.vue';
-import { store, closeTab, moveTab, refreshSessionTab, api, detachTab, setDockTarget, findAsset, enabledMethods, openSshSession } from '../store';
-import { t } from '../i18n';
-import { OS_SVG } from '../constants';
-import { getProtocol } from '../protocols';
+import CtxMenu from '../common/CtxMenu.vue';
+import { store, closeTab, moveTab, refreshSessionTab, api, detachTab, setDockTarget, findAsset, enabledMethods, openSshSession } from '../../store';
+import { t } from '../../i18n';
+import { OS_SVG } from '../../constants';
+import { getProtocol } from '../../protocols';
 
 const TAB_DRAG_TYPE = 'application/x-novoterminal-tab';
 /** How often the tab bar rect is re-published for the detached window's hit test. */

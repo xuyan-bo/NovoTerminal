@@ -62,9 +62,9 @@
 </template>
 
 <script>
-import { store, createGroup, updateGroup } from '../store';
-import { t } from '../i18n';
-import { cascaderOptions, folderIdPath, subtreeIds } from '../assetTree';
+import { store, createGroup, updateGroup } from '../../store';
+import { t } from '../../i18n';
+import { cascaderOptions, folderIdPath, subtreeIds } from '../../lib/assetTree';
 
 const HEX_RE = /^#[0-9A-Fa-f]{6}$/;
 

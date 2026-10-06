@@ -76,10 +76,10 @@
 </template>
 
 <script>
-import { store, findAsset, enabledMethods, openMethodAdvanced, connectAsset, connectionErrorMessage } from '../store';
-import { OS_SVG, OS_NAME, methodPillClass } from '../constants';
-import { protocolLabel } from '../protocols';
-import { folderPathText } from '../assetTree';
+import { store, findAsset, enabledMethods, openMethodAdvanced, connectAsset, connectionErrorMessage } from '../../store';
+import { OS_SVG, OS_NAME, methodPillClass } from '../../constants';
+import { protocolLabel } from '../../protocols';
+import { folderPathText } from '../../lib/assetTree';
 
 export default {
   name: 'AssetDetailView',

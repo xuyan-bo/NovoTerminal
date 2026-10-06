@@ -338,10 +338,10 @@
 </template>
 
 <script>
-import { api, unwrap, store } from '../store';
-import { t } from '../i18n';
-import { AI_PERMISSIONS } from '../constants';
-import AiMarkdown from './AiMarkdown.vue';
+import { api, unwrap, store } from '../../store';
+import { t } from '../../i18n';
+import { AI_PERMISSIONS } from '../../constants';
+import AiMarkdown from '../common/AiMarkdown.vue';
 
 let seq = 0;
 const nextKey = () => 'i' + (seq += 1);

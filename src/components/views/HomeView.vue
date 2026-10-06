@@ -78,9 +78,9 @@
 
 <script>
 import * as echarts from 'echarts';
-import { store, findAsset, connectAsset, connectionErrorMessage, removeRecent } from '../store';
-import { OS_SVG, RECENT_LIMIT_DEFAULT, RECENT_LIMIT_MAX } from '../constants';
-import { t, formatTime } from '../i18n';
+import { store, findAsset, connectAsset, connectionErrorMessage, removeRecent } from '../../store';
+import { OS_SVG, RECENT_LIMIT_DEFAULT, RECENT_LIMIT_MAX } from '../../constants';
+import { t, formatTime } from '../../i18n';
 
 export default {
   name: 'HomeView',

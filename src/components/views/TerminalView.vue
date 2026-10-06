@@ -122,11 +122,11 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { api, unwrap, refresh, findAsset, store, takeSessionHandover } from '../store';
-import { t } from '../i18n';
-import { sshThemeToXterm, resolveSshTheme, ADVANCED_DEFAULTS } from '../constants';
-import SshThemeDialog from './SshThemeDialog.vue';
-import createFullscreenMixin from './session/fullscreen';
+import { api, unwrap, refresh, findAsset, store, takeSessionHandover } from '../../store';
+import { t } from '../../i18n';
+import { sshThemeToXterm, resolveSshTheme, ADVANCED_DEFAULTS } from '../../constants';
+import SshThemeDialog from '../dialogs/SshThemeDialog.vue';
+import createFullscreenMixin from '../session/fullscreen';
 
 const FIT_DEBOUNCE_MS = 120;
 const REMOTE_RESIZE_DEBOUNCE_MS = 220;
@@ -137,8 +137,8 @@ export default {
   name: 'TerminalView',
   components: {
     SshThemeDialog,
-    SshMonitorPanel: () => import('./SshMonitorPanel.vue'),
-    AiAssistantPanel: () => import('./AiAssistantPanel.vue'),
+    SshMonitorPanel: () => import('../panels/SshMonitorPanel.vue'),
+    AiAssistantPanel: () => import('../panels/AiAssistantPanel.vue'),
   },
   mixins: [createFullscreenMixin({
     fallbackClass: 'is-terminal-fullscreen',

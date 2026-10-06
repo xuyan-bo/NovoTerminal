@@ -352,7 +352,7 @@
 
         <div v-show="activeMenu === 'about'" class="set-section">
           <div class="about-box">
-            <img class="logo-mark" src="../assets/logo.svg" alt="NovoTerminal" width="36" height="36" />
+            <img class="logo-mark" src="../../assets/logo.svg" alt="NovoTerminal" width="36" height="36" />
             <div>
               <div style="font-family:Consolas,monospace;font-weight:600">NovoTerminal v0.1.0</div>
               <div class="meta" v-html="$t('settings.aboutBody')"></div>
@@ -435,8 +435,8 @@
 </template>
 
 <script>
-import { store, api, unwrap, refresh } from '../store';
-import { applyTheme, applyFont, setLocale, t } from '../i18n';
+import { store, api, unwrap, refresh } from '../../store';
+import { applyTheme, applyFont, setLocale, t } from '../../i18n';
 import {
   UI_FONTS,
   AI_PERMISSIONS,
@@ -449,7 +449,7 @@ import {
   LOG_TOTAL_DEFAULT_MB,
   LOG_TOTAL_MIN_MB,
   LOG_TOTAL_MAX_MB,
-} from '../constants';
+} from '../../constants';
 import locale from 'element-ui/lib/locale';
 import zhLocale from 'element-ui/lib/locale/lang/zh-CN';
 import enLocale from 'element-ui/lib/locale/lang/en';

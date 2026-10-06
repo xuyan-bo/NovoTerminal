@@ -36,8 +36,8 @@
 </template>
 
 <script>
-import { api, unwrap, refresh, findAsset, store } from '../store';
-import { t } from '../i18n';
+import { api, unwrap, refresh, findAsset, store } from '../../store';
+import { t } from '../../i18n';
 import init, {
   SessionBuilder,
   DesktopSize,
@@ -46,7 +46,7 @@ import init, {
   ClipboardData,
   Extension,
 } from 'ironrdp-wasm';
-import createFullscreenMixin from './session/fullscreen';
+import createFullscreenMixin from '../session/fullscreen';
 
 // keyboard `e.code` → IronRDP scancode (set-top boxes style scancodes), ported
 // from the ironrdp-wasm example.

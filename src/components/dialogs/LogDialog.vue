@@ -86,9 +86,9 @@
 </template>
 
 <script>
-import { store, api } from '../store';
-import { t } from '../i18n';
-import CtxMenu from './CtxMenu.vue';
+import { store, api } from '../../store';
+import { t } from '../../i18n';
+import CtxMenu from '../common/CtxMenu.vue';
 
 const TWO = (n) => String(n).padStart(2, '0');
 

@@ -62,16 +62,16 @@
 </template>
 
 <script>
-import SideBar from './components/SideBar.vue';
-import TabBar from './components/TabBar.vue';
-import AssetDetailView from './components/AssetDetailView.vue';
-import SettingsDialog from './components/SettingsDialog.vue';
-import LogDialog from './components/LogDialog.vue';
-import AssetDialog from './components/AssetDialog.vue';
-import GroupDialog from './components/GroupDialog.vue';
-import MethodAdvancedDialog from './components/MethodAdvancedDialog.vue';
-import ClosePromptDialog from './components/ClosePromptDialog.vue';
-import SshAuthDialog from './components/SshAuthDialog.vue';
+import SideBar from './components/panels/SideBar.vue';
+import TabBar from './components/panels/TabBar.vue';
+import AssetDetailView from './components/views/AssetDetailView.vue';
+import SettingsDialog from './components/dialogs/SettingsDialog.vue';
+import LogDialog from './components/dialogs/LogDialog.vue';
+import AssetDialog from './components/dialogs/AssetDialog.vue';
+import GroupDialog from './components/dialogs/GroupDialog.vue';
+import MethodAdvancedDialog from './components/dialogs/MethodAdvancedDialog.vue';
+import ClosePromptDialog from './components/dialogs/ClosePromptDialog.vue';
+import SshAuthDialog from './components/dialogs/SshAuthDialog.vue';
 import { store, api, refresh, applyDetached, dropDetachedTab } from './store';
 import { t, applySettings } from './i18n';
 import { getProtocol } from './protocols';
@@ -113,7 +113,7 @@ export default {
   components: {
     SideBar,
     TabBar,
-    HomeView: () => import('./components/HomeView.vue'),
+    HomeView: () => import('./components/views/HomeView.vue'),
     AssetDetailView,
     SettingsDialog,
     LogDialog,
@@ -122,8 +122,8 @@ export default {
     MethodAdvancedDialog,
     ClosePromptDialog,
     SshAuthDialog,
-    SftpPage: () => import('./components/SftpPage.vue'),
-    SessionWindow: () => import('./components/SessionWindow.vue'),
+    SftpPage: () => import('./components/views/SftpPage.vue'),
+    SessionWindow: () => import('./components/views/SessionWindow.vue'),
   },
   data() {
     return {

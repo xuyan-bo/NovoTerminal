@@ -112,11 +112,11 @@ import {
   findAsset,
   openAssetDetail,
   openMethodAdvanced,
-} from '../store';
-import { OS_SVG, OS_NAME, CATALOG } from '../constants';
-import { cascaderOptions, folderIdPath } from '../assetTree';
-import { t } from '../i18n';
-import MethodConfig from './MethodConfig.vue';
+} from '../../store';
+import { OS_SVG, OS_NAME, CATALOG } from '../../constants';
+import { cascaderOptions, folderIdPath } from '../../lib/assetTree';
+import { t } from '../../i18n';
+import MethodConfig from '../common/MethodConfig.vue';
 
 const HOST_RE =
   /^(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*|\d{1,3}(\.\d{1,3}){3})(:\d{1,5})?$/;

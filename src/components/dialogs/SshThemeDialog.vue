@@ -67,9 +67,9 @@
 </template>
 
 <script>
-import { api, unwrap, findAsset, refresh } from '../store';
-import { resolveSshTheme } from '../constants';
-import { t } from '../i18n';
+import { api, unwrap, findAsset, refresh } from '../../store';
+import { resolveSshTheme } from '../../constants';
+import { t } from '../../i18n';
 
 const PRE = [
   '#000000', '#0f1419', '#1e1e1e', '#282c34', '#c0c0c0', '#d7dde8', '#ffffff',

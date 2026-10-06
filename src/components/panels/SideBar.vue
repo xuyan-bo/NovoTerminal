@@ -89,12 +89,12 @@ import {
   reorderAsset,
   deleteGroup,
   deleteAsset,
-} from '../store';
-import { OS_SVG, methodPillClass } from '../constants';
-import { protocolLabel } from '../protocols';
-import { buildAssetTree, filterTree, folderKeys, isDescendantOf } from '../assetTree';
-import CtxMenu from './CtxMenu.vue';
-import { t } from '../i18n';
+} from '../../store';
+import { OS_SVG, methodPillClass } from '../../constants';
+import { protocolLabel } from '../../protocols';
+import { buildAssetTree, filterTree, folderKeys, isDescendantOf } from '../../lib/assetTree';
+import CtxMenu from '../common/CtxMenu.vue';
+import { t } from '../../i18n';
 
 export default {
   name: 'SideBar',

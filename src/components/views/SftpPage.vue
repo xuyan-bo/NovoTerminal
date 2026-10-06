@@ -170,16 +170,16 @@
 </template>
 
 <script>
-import { api, unwrap } from '../store';
-import { t } from '../i18n';
-import CtxMenu from './CtxMenu.vue';
-import SftpFilePanel from './sftp/SftpFilePanel.vue';
-import SftpTransferQueue from './sftp/SftpTransferQueue.vue';
-import { PARENT_ROW, joinLocal, joinRemote, parentLocal, parentRemote, normalizeRemotePath, sortItems } from './sftp/utils';
-import taskMethods from './sftp/taskMethods';
-import transferMethods from './sftp/transferMethods';
-import dragDropMethods from './sftp/dragDropMethods';
-import selectionMethods from './sftp/selectionMethods';
+import { api, unwrap } from '../../store';
+import { t } from '../../i18n';
+import CtxMenu from '../common/CtxMenu.vue';
+import SftpFilePanel from '../sftp/SftpFilePanel.vue';
+import SftpTransferQueue from '../sftp/SftpTransferQueue.vue';
+import { PARENT_ROW, joinLocal, joinRemote, parentLocal, parentRemote, normalizeRemotePath, sortItems } from '../sftp/utils';
+import taskMethods from '../sftp/taskMethods';
+import transferMethods from '../sftp/transferMethods';
+import dragDropMethods from '../sftp/dragDropMethods';
+import selectionMethods from '../sftp/selectionMethods';
 
 const TAB_DRAG_TYPE = 'application/x-novoterminal-sftp-tab';
 

@@ -1,6 +1,6 @@
 <script>
-import { api } from '../store';
-import { parseMarkdown, safeHref } from '../markdown';
+import { api } from '../../store';
+import { parseMarkdown, safeHref } from '../../lib/markdown';
 
 /** 需要按块级元素渲染的 token，其余在列表项里当行内内容处理。 */
 const BLOCK_TYPES = ['paragraph', 'heading', 'code', 'blockquote', 'table', 'hr'];

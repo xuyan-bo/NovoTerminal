@@ -5,7 +5,7 @@ import enLocale from 'element-ui/lib/locale/lang/en';
 import locale from 'element-ui/lib/locale';
 import 'element-ui/lib/theme-chalk/index.css';
 import App from './App.vue';
-import SvgIcon from './components/SvgIcon.vue';
+import SvgIcon from './components/common/SvgIcon.vue';
 import { refresh, store, api } from './store';
 import { t, setLocale, applySettings } from './i18n';
 import './styles/main.css';

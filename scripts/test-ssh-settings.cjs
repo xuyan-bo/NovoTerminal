@@ -27,7 +27,7 @@ function loadModule(relative, bindings, extraExports) {
 }
 
 function readComponent(name) {
-  const filename = path.join(root, 'src/components', name);
+  const filename = path.join(root, 'src/components/dialogs', name);
   const descriptor = compiler.parse({ source: fs.readFileSync(filename, 'utf8'), filename });
   assert.deepEqual(descriptor.errors, []);
   const compiled = compiler.compileTemplate({ source: descriptor.template.content, filename });

@@ -30,7 +30,7 @@
 </template>
 
 <script>
-import { api, unwrap } from '../store';
+import { api, unwrap } from '../../store';
 
 export default {
   name: 'SshAuthDialog',

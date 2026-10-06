@@ -17,9 +17,9 @@
 </template>
 
 <script>
-import { api, markSessionHandover } from '../store';
-import { t } from '../i18n';
-import { getProtocol } from '../protocols';
+import { api, markSessionHandover } from '../../store';
+import { t } from '../../i18n';
+import { getProtocol } from '../../protocols';
 
 /**
  * Host of one session tab that was dragged out into its own window. The window keeps the native

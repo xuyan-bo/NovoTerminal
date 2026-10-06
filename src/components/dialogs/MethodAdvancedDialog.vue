@@ -131,7 +131,7 @@
 </template>
 
 <script>
-import { store, api, unwrap, refresh, findAsset } from '../store';
+import { store, api, unwrap, refresh, findAsset } from '../../store';
 import {
   ADVANCED_FIELDS,
   ADVANCED_DEFAULTS,
@@ -141,8 +141,8 @@ import {
   requiredRule,
   RDP_CLIENT_CATALOG,
   osKeyFromPlatform,
-} from '../constants';
-import { t } from '../i18n';
+} from '../../constants';
+import { t } from '../../i18n';
 
 export default {
   name: 'MethodAdvancedDialog',

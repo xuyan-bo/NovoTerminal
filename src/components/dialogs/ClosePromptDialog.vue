@@ -23,7 +23,7 @@
 </template>
 
 <script>
-import { api } from '../store';
+import { api } from '../../store';
 
 export default {
   name: 'ClosePromptDialog',

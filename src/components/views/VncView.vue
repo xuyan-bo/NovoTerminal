@@ -34,10 +34,10 @@
 </template>
 
 <script>
-import { api, unwrap, refresh, findAsset, store } from '../store';
-import { t } from '../i18n';
+import { api, unwrap, refresh, findAsset, store } from '../../store';
+import { t } from '../../i18n';
 import RFB from '@novnc/novnc';
-import createFullscreenMixin from './session/fullscreen';
+import createFullscreenMixin from '../session/fullscreen';
 
 /** 页签状态点：ended 与 idle 同样归为未连接的灰色。 */
 const DOT_STATE = { connecting: 'connecting', ready: 'ready', error: 'error' };
