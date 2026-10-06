@@ -9,6 +9,12 @@ function newId(prefix) {
   return prefix + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 }
 
+const RECENT_LIMIT_DEFAULT = 20;
+const RECENT_LIMIT_MAX = 100;
+const LOG_TOTAL_DEFAULT_MB = 20;
+const LOG_TOTAL_MIN_MB = 10;
+const LOG_TOTAL_MAX_MB = 200;
+
 function defaultData() {
   return {
     version: 2,
@@ -21,6 +27,9 @@ function defaultData() {
       zoom: 100,
       font: 'default',
       closeAction: 'ask', // 'ask' = 每次询问, 'minimize' = 直接最小化, 'quit' = 直接退出
+      homeWelcome: true,
+      recentLimit: RECENT_LIMIT_DEFAULT,
+      logTotalMb: LOG_TOTAL_DEFAULT_MB,
       // AI 助手配置：结构与取值范围由 electron/ai/aiSettings.js 收敛，这里只给持久化默认值
       ai: { ...AI_DEFAULTS, services: [], defaultRef: null },
     },
@@ -84,6 +93,33 @@ class AssetStore {
     }
     this.writePointer();
     return this.file;
+  }
+
+  /** 主动读回当前库（解密 + 解析），用于搬迁后确认新位置可用再清理旧副本 */
+  verifyActiveFile() {
+    try {
+      const raw = fs.readFileSync(this.file, 'utf8');
+      const plain = raw.startsWith(CIPHER_PREFIX)
+        ? safeStorage.decryptString(Buffer.from(raw.slice(CIPHER_PREFIX.length), 'base64'))
+        : raw;
+      return !!JSON.parse(plain);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** 数据已经写到新位置后，删掉原目录里遗留的库文件；只碰主库与它的备份 */
+  discardMovedFiles(fromDir) {
+    const removed = [];
+    for (const name of ['novoterminal.json', 'novoterminal.json.bak']) {
+      const p = path.join(fromDir, name);
+      if (path.resolve(p) === path.resolve(this.file) || path.resolve(p) === path.resolve(this.backupFile)) continue;
+      try {
+        fs.rmSync(p, { force: true });
+        removed.push(name);
+      } catch (_) {}
+    }
+    return removed;
   }
 
   load() {
@@ -452,6 +488,13 @@ class AssetStore {
     return this.snapshot();
   }
 
+  /** 最近连接上限：设置值越界或缺失都回落到默认 20。 */
+  recentCap() {
+    const n = Number(this.data.settings && this.data.settings.recentLimit);
+    if (!Number.isFinite(n) || n <= 0) return RECENT_LIMIT_DEFAULT;
+    return Math.min(RECENT_LIMIT_MAX, Math.floor(n));
+  }
+
   pushRecent(asset, method) {
     if (!asset || !asset.id) return this.snapshot();
     const mid = (method && (method.id || method.protocol)) || 'rdp';
@@ -474,7 +517,7 @@ class AssetStore {
       (r) => !(r.id === asset.id && r.method === item.method)
     );
     this.data.recent.unshift(item);
-    this.data.recent = this.data.recent.slice(0, 20);
+    this.data.recent = this.data.recent.slice(0, this.recentCap());
     this.persist();
     return this.snapshot();
   }
@@ -491,8 +534,14 @@ class AssetStore {
     return this.snapshot().settings;
   }
 
+  /** 日志跟随「存储位置」：与数据文件同级的 logs 目录 */
+  logsDir() {
+    return path.join(path.dirname(this.file), 'logs');
+  }
+
   updateSettings(patch) {
     this.data.settings = Object.assign({}, this.data.settings, patch);
+    if ('recentLimit' in patch) this.data.recent = (this.data.recent || []).slice(0, this.recentCap());
     if (patch.dataPath && patch.dataPath !== path.dirname(this.file)) {
       this.setCustomPath(patch.dataPath);
       this.persist();
@@ -519,4 +568,11 @@ class AssetStore {
   }
 }
 
-module.exports = { AssetStore };
+module.exports = {
+  AssetStore,
+  RECENT_LIMIT_DEFAULT,
+  RECENT_LIMIT_MAX,
+  LOG_TOTAL_DEFAULT_MB,
+  LOG_TOTAL_MIN_MB,
+  LOG_TOTAL_MAX_MB,
+};

@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 
 const LEVEL_ORDER = { error: 0, warn: 1, info: 2 };
+const LOG_MAX_BYTES = 5 * 1024 * 1024;
+const LOG_TOTAL_DEFAULT_BYTES = 20 * 1024 * 1024;
 const SENSITIVE_KEYS = new Set([
   'password',
   'pass',
@@ -38,45 +40,209 @@ function sanitizeMeta(meta) {
   return undefined;
 }
 
+/** 过滤判定按原始字节区间就地解析，语义与旧的内存过滤一致 */
+function makeTester(filter, needle) {
+  const level = filter.level && LEVEL_ORDER[filter.level] !== undefined ? filter.level : '';
+  const source = filter.source ? String(filter.source) : '';
+  return (buf, start, end) => {
+    let e;
+    try {
+      e = JSON.parse(buf.toString('utf8', start, end));
+    } catch (_) {
+      return false;
+    }
+    if (!e || typeof e.time !== 'number') return false;
+    if (level && e.level !== level) return false;
+    if (source && e.source !== source) return false;
+    if (
+      needle &&
+      !(
+        String(e.message).toLowerCase().includes(needle) ||
+        JSON.stringify(e.meta || {}).toLowerCase().includes(needle)
+      )
+    ) {
+      return false;
+    }
+    return true;
+  };
+}
+
 /**
- * Persistent log sink: in-memory ring buffer + append-only app.log with
- * size-based rotation. Single instance created in main; managers receive a
- * bound `log` callback so connection lifecycles can record key events.
+ * Persistent log sink: append-only app.log with size-based rotation. Single
+ * instance created in main; managers receive a bound `log` callback so connection
+ * lifecycles can record key events.
+ * Disk use is capped by totalBytes (current file + rotated copies), single file by maxBytes.
+ * Queries read the files instead of a memory ring, so the viewer can page through the
+ * whole retained history: unfiltered pages only count newlines and parse the shown lines,
+ * filtered queries cache matched byte ranges per file while its size/mtime are unchanged.
  */
 class LogStore {
-  constructor({ dir, maxBytes = 5 * 1024 * 1024, keepBackups = 2, inMemory = 1000, onNew } = {}) {
+  constructor({ dir, maxBytes = LOG_MAX_BYTES, totalBytes = LOG_TOTAL_DEFAULT_BYTES, onNew } = {}) {
     this.dir = dir;
     this.maxBytes = maxBytes;
-    this.keepBackups = keepBackups;
-    this.inMemoryLimit = inMemory;
+    this.totalBytes = totalBytes;
+    this.keepBackups = this._backupCount(totalBytes);
     this.onNew = onNew || (() => {});
-    this.buffer = [];
+    this._lines = new Map(); // file -> { sig, count }
+    this._matches = new Map(); // file -> { sig, key, ranges }
     this.logFile = path.join(dir, 'app.log');
     try {
       fs.mkdirSync(dir, { recursive: true });
     } catch (_) {}
-    this._loadExisting();
   }
 
-  /** Restore entries persisted in app.log so logs survive app restarts. */
-  _loadExisting() {
-    try {
-      if (!fs.existsSync(this.logFile)) return;
-      const lines = fs.readFileSync(this.logFile, 'utf8').split('\n');
-      const entries = [];
-      for (const line of lines) {
-        if (!line) continue;
-        try {
-          const e = JSON.parse(line);
-          if (e && typeof e.time === 'number') entries.push(e);
-        } catch (_) {}
+  _backupCount(totalBytes) {
+    return Math.max(1, Math.floor(totalBytes / this.maxBytes) - 1);
+  }
+
+  /** 日志总量改变后立即按新上限淘汰多余的历史文件 */
+  setTotalBytes(totalBytes) {
+    const n = Number(totalBytes);
+    if (!Number.isFinite(n) || n <= 0) return this.totalBytes;
+    this.totalBytes = n;
+    this.keepBackups = this._backupCount(n);
+    for (let i = this.keepBackups + 1; ; i++) {
+      const extra = this.logFile + '.' + i;
+      if (!fs.existsSync(extra)) break;
+      try {
+        fs.rmSync(extra, { force: true });
+      } catch (_) {
+        break;
       }
-      this.buffer = entries.length > this.inMemoryLimit
-        ? entries.slice(entries.length - this.inMemoryLimit)
-        : entries;
-    } catch (_) {
-      this.buffer = [];
     }
+    this._forget();
+    return this.totalBytes;
+  }
+
+  /** 日志目录跟随「存储位置」：后续写入与查询都指向新目录 */
+  setDir(dir) {
+    if (!dir || dir === this.dir) return this.dir;
+    this.dir = dir;
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (_) {}
+    this.logFile = path.join(dir, 'app.log');
+    this._forget();
+    return this.dir;
+  }
+
+  _forget() {
+    this._lines.clear();
+    this._matches.clear();
+  }
+
+  /** 从新到旧：app.log 最新，后缀越大越旧 */
+  _files() {
+    const out = [];
+    if (fs.existsSync(this.logFile)) out.push(this.logFile);
+    for (let i = 1; i <= this.keepBackups; i++) {
+      const f = this.logFile + '.' + i;
+      if (fs.existsSync(f)) out.push(f);
+    }
+    return out;
+  }
+
+  /** 日志只追加，签名不变则内容不变，缓存才可用 */
+  _sig(file) {
+    try {
+      const s = fs.statSync(file);
+      return s.size + ':' + Math.round(s.mtimeMs);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /** 逐字节数非空行，不碰 JSON：未过滤视图的 total 因此很便宜 */
+  _count(file) {
+    const sig = this._sig(file);
+    if (!sig) return 0;
+    const hit = this._lines.get(file);
+    if (hit && hit.sig === sig) return hit.count;
+    let count = 0;
+    try {
+      const buf = fs.readFileSync(file);
+      let start = 0;
+      for (let i = 0; i <= buf.length; i++) {
+        if (i === buf.length || buf[i] === 0x0a) {
+          if (i > start) count++;
+          start = i + 1;
+        }
+      }
+    } catch (_) {
+      return 0;
+    }
+    this._lines.set(file, { sig, count });
+    return count;
+  }
+
+  /** 取文件内 [from,to) 行（文件顺序，最旧在前），只把这些行转成字符串并解析 */
+  _slice(file, from, to) {
+    const out = [];
+    if (to <= from) return out;
+    let buf;
+    try {
+      buf = fs.readFileSync(file);
+    } catch (_) {
+      return out;
+    }
+    let idx = 0;
+    let start = 0;
+    for (let i = 0; i <= buf.length && idx < to; i++) {
+      if (i === buf.length || buf[i] === 0x0a) {
+        if (i > start) {
+          if (idx >= from) {
+            try {
+              const e = JSON.parse(buf.toString('utf8', start, i));
+              if (e && typeof e.time === 'number') out.push(e);
+            } catch (_) {}
+          }
+          idx++;
+        }
+        start = i + 1;
+      }
+    }
+    return out;
+  }
+
+  /** 过滤查询：记住匹配的字节区间，翻页时只解析当前页 */
+  _ranges(file, key, test) {
+    const sig = this._sig(file);
+    if (!sig) return [];
+    const hit = this._matches.get(file);
+    if (hit && hit.sig === sig && hit.key === key) return hit.ranges;
+    const ranges = [];
+    try {
+      const buf = fs.readFileSync(file);
+      let start = 0;
+      for (let i = 0; i <= buf.length; i++) {
+        if (i === buf.length || buf[i] === 0x0a) {
+          if (i > start && test(buf, start, i)) ranges.push(start, i);
+          start = i + 1;
+        }
+      }
+    } catch (_) {
+      return [];
+    }
+    this._matches.set(file, { sig, key, ranges });
+    return ranges;
+  }
+
+  /** 取匹配区间中的第 [from,to) 条（文件顺序，最旧在前） */
+  _readRanges(file, ranges, from, to) {
+    const out = [];
+    let buf;
+    try {
+      buf = fs.readFileSync(file);
+    } catch (_) {
+      return out;
+    }
+    for (let i = from; i < to; i++) {
+      try {
+        const e = JSON.parse(buf.toString('utf8', ranges[i * 2], ranges[i * 2 + 1]));
+        if (e && typeof e.time === 'number') out.push(e);
+      } catch (_) {}
+    }
+    return out;
   }
 
   log(level, source, message, meta) {
@@ -87,10 +253,6 @@ class LogStore {
       message: message == null ? '' : String(message),
       meta: sanitizeMeta(meta),
     };
-    this.buffer.push(entry);
-    if (this.buffer.length > this.inMemoryLimit) {
-      this.buffer.splice(0, this.buffer.length - this.inMemoryLimit);
-    }
     this.append(entry);
     try {
       this.onNew(entry);
@@ -110,33 +272,39 @@ class LogStore {
     return this.log('error', source, message, meta);
   }
 
+  /** 从磁盘按分页取样：跨文件从新到旧，文件内从尾到头，只解析当前页需要的行 */
   list(filter = {}) {
-    let arr = this.buffer;
-    if (filter.level && LEVEL_ORDER[filter.level] !== undefined) {
-      arr = arr.filter((e) => e.level === filter.level);
-    }
-    if (filter.source) {
-      arr = arr.filter((e) => e.source === filter.source);
-    }
-    const keyword = String(filter.keyword || '').trim().toLowerCase();
-    if (keyword) {
-      arr = arr.filter(
-        (e) =>
-          String(e.message).toLowerCase().includes(keyword) ||
-          JSON.stringify(e.meta || {}).toLowerCase().includes(keyword)
-      );
-    }
-    const total = arr.length;
     const limit = Math.max(1, Number(filter.limit) || 200);
     const offset = Math.max(0, Number(filter.offset) || 0);
-    const end = total - offset;
-    const start = Math.max(0, end - limit);
-    const page = start < end ? arr.slice(start, end).reverse() : [];
-    return { entries: page, total, offset, limit };
+    const files = this._files();
+    const needle = String(filter.keyword || '').trim().toLowerCase();
+    const hasFilter = Boolean((filter.level && LEVEL_ORDER[filter.level] !== undefined) || filter.source || needle);
+    const key = [filter.level || '', filter.source || '', needle].join('|');
+    const test = hasFilter ? makeTester(filter, needle) : null;
+    const matched = hasFilter ? files.map((f) => this._ranges(f, key, test)) : null;
+    const count = (i) => (matched ? matched[i].length / 2 : this._count(files[i]));
+
+    const total = files.reduce((n, f, i) => n + count(i), 0);
+    const entries = [];
+    let skip = offset;
+    for (let i = 0; i < files.length && entries.length < limit; i++) {
+      const c = count(i);
+      if (skip >= c) {
+        skip -= c;
+        continue;
+      }
+      const from = Math.max(0, c - skip - (limit - entries.length));
+      const part = matched
+        ? this._readRanges(files[i], matched[i], from, c - skip)
+        : this._slice(files[i], from, c - skip);
+      for (let j = part.length - 1; j >= 0; j--) entries.push(part[j]);
+      skip = 0;
+    }
+    return { entries, total, offset, limit };
   }
 
   clear() {
-    this.buffer = [];
+    this._forget();
     try {
       fs.rmSync(this.logFile, { force: true });
     } catch (_) {}

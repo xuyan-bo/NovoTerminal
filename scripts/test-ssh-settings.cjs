@@ -105,6 +105,9 @@ function harness({ methodId = 'ssh', advanced = {}, detail = false, update, refr
   const initial = {
     $message: { error: (message) => errors.push(message), success: (message) => successes.push(message) },
     $emit: (...args) => emissions.push(args),
+    // The dialog only reaches for $refs/$nextTick to drive el-form visuals; empty refs skips that path
+    $refs: {},
+    $nextTick: () => Promise.resolve(),
   };
   const dialog = instantiate(options, initial);
   dialog.loadForm();
@@ -127,9 +130,9 @@ function assertRejected(h) {
   assert.equal(h.errors.length, 1);
 }
 
-const originalKeys = ['charset', 'term', 'keepAlive', 'compression', 'authType', 'privateKeyPath', 'proxyJump', 'x11Forward', 'hostKeyPolicy'];
+const originalKeys = ['charset', 'term', 'scrollback', 'keepAlive', 'compression', 'authType', 'privateKeyPath', 'proxyJump', 'x11Forward', 'hostKeyPolicy'];
 
-test('SSH defaults and schema retain all nine fields and add conditional passphrase/display', () => {
+test('SSH defaults and schema retain every field and add conditional passphrase/display', () => {
   const keys = [...originalKeys, 'privateKeyPassphrase', 'x11Display'].sort();
   assert.deepEqual(Object.keys(constants.ADVANCED_DEFAULTS.ssh).sort(), keys);
   assert.deepEqual(plain(constants.ADVANCED_FIELDS.ssh.map((f) => f.key).sort()), keys);
@@ -144,8 +147,13 @@ test('SSH defaults and schema retain all nine fields and add conditional passphr
   assert.equal(fields.keepAlive.integer, true);
   assert.equal(fields.keepAlive.min, 0);
   assert.equal(fields.keepAlive.max, 3600);
+  assert.equal(constants.ADVANCED_DEFAULTS.ssh.scrollback, 2000);
+  assert.equal(fields.scrollback.integer, true);
+  assert.equal(fields.scrollback.min, 100);
+  assert.equal(fields.scrollback.max, 20000);
   const saved = { privateKeyPassphrase: '  synthetic passphrase  ', x11Display: ':9' };
   const resolved = constants.resolveAdvanced('ssh', saved);
+  assert.equal(resolved.scrollback, 2000);
   assert.equal(resolved.privateKeyPassphrase, saved.privateKeyPassphrase);
   assert.equal(resolved.x11Display, ':9');
 });
@@ -157,7 +165,7 @@ test('showWhen changes visibility without losing hidden values on save', async (
   for (const key of ['privateKeyPath', 'privateKeyPassphrase', 'x11Display']) assert.ok(!visibleKeys().includes(key));
   h.dialog.form.authType = 'publickey';
   h.dialog.form.x11Forward = true;
-  assert.equal(visibleKeys().length, 11);
+  assert.equal(visibleKeys().length, 12);
   h.dialog.form.authType = 'password';
   h.dialog.form.x11Forward = false;
   await h.dialog.confirm();

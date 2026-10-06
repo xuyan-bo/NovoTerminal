@@ -21,6 +21,9 @@ function mockSettings() {
     zoom: 100,
     font: 'default',
     closeAction: 'ask',
+    homeWelcome: true,
+    recentLimit: 20,
+    logTotalMb: 20,
     ai: { ...AI_DEFAULTS, services: [], defaultRef: null },
   };
 }

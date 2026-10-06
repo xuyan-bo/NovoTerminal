@@ -124,7 +124,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { api, unwrap, refresh, findAsset, store, takeSessionHandover } from '../store';
 import { t } from '../i18n';
-import { sshThemeToXterm, resolveSshTheme } from '../constants';
+import { sshThemeToXterm, resolveSshTheme, ADVANCED_DEFAULTS } from '../constants';
 import SshThemeDialog from './SshThemeDialog.vue';
 import createFullscreenMixin from './session/fullscreen';
 
@@ -331,11 +331,14 @@ export default {
     this.teardownTerm();
   },
   methods: {
+    /** This asset's saved SSH advanced parameters (empty object when the method row predates them) */
+    sshAdvanced() {
+      const hit = findAsset(this.assetId);
+      return (hit && hit.asset.methods && hit.asset.methods.ssh && hit.asset.methods.ssh.advanced) || {};
+    },
     /** Read this asset's saved SSH color scheme (or defaults if unset) */
     getAssetTheme() {
-      const hit = findAsset(this.assetId);
-      const adv = hit && hit.asset.methods && hit.asset.methods.ssh && hit.asset.methods.ssh.advanced;
-      return resolveSshTheme((adv && adv.colors) || null);
+      return resolveSshTheme(this.sshAdvanced().colors || null);
     },
     /** Sync CSS background + xterm theme so both render surfaces match */
     syncSurface(colors) {
@@ -367,8 +370,8 @@ export default {
         fontFamily: 'Consolas, "Courier New", monospace',
         cursorBlink: true,
         convertEol: false,
-        // Avoid scrollback thrash during resize reflow
-        scrollback: 2000,
+        // A big buffer makes every resize reflow expensive; the saved default stays modest on purpose
+        scrollback: Number(this.sshAdvanced().scrollback) || ADVANCED_DEFAULTS.ssh.scrollback,
         theme: sshThemeToXterm(this.getAssetTheme()),
       });
       const fit = new FitAddon();

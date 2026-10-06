@@ -5,7 +5,15 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 /** Bump when shipping renderer changes — shown in every window title */
 const APP_BUILD = 'rd2-1647';
-const { AssetStore } = require('./store/assetStore');
+const {
+  AssetStore,
+  RECENT_LIMIT_DEFAULT,
+  RECENT_LIMIT_MAX,
+  LOG_TOTAL_DEFAULT_MB,
+  LOG_TOTAL_MIN_MB,
+  LOG_TOTAL_MAX_MB,
+} = require('./store/assetStore');
+const { migrateSideData } = require('./store/dataMigration');
 const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
 const { SshMonitorManager } = require('./ssh/SshMonitorManager');
@@ -105,6 +113,47 @@ const logger = {
   warn: (source, message, meta) => logStore && logStore.warn(source, message, meta),
   error: (source, message, meta) => logStore && logStore.error(source, message, meta),
 };
+const MB = 1024 * 1024;
+/** 日志总量设置以 MB 表示，越界或非数字都回落到默认值 */
+function clampedLogTotalMb(v) {
+  return Math.min(LOG_TOTAL_MAX_MB, Math.max(LOG_TOTAL_MIN_MB, Math.floor(Number(v)) || LOG_TOTAL_DEFAULT_MB));
+}
+
+/**
+ * 切换「存储位置」：数据文件由 AssetStore 落位，附带数据（AI 会话记录、日志）随之搬走。
+ * 目标目录原本就有数据文件时属于「切到另一个库」，此时不搬附带数据，免得把两套数据混在一起。
+ */
+async function switchDataPath(dir) {
+  const fromDir = store.dataDir();
+  const switchedLibrary = fs.existsSync(path.join(dir, 'novoterminal.json'));
+  store.setCustomPath(dir);
+  const toDir = store.dataDir();
+  logStore.setDir(store.logsDir());
+  const moved = { aiSessions: null, logs: null };
+  const moving = !switchedLibrary && path.resolve(fromDir) !== path.resolve(toDir);
+  if (moving) {
+    try {
+      Object.assign(moved, await migrateSideData({ fromDir, toDir, logFiles: 1 + logStore.keepBackups, log: logger }));
+    } catch (e) {
+      logger.error('settings', 'side data migration failed', { from: fromDir, to: toDir, message: e.message });
+    }
+  }
+  // 新库确实能读回才清掉原目录的库文件；读不回就全部保留，宁可留残留也不能丢数据
+  let discarded = [];
+  if (moving) {
+    if (store.verifyActiveFile()) discarded = store.discardMovedFiles(fromDir);
+    else logger.warn('settings', 'kept old data files, new copy unreadable', { from: fromDir, to: toDir });
+  }
+  logger.info('settings', 'data path changed', {
+    dataPath: store.getSettings().dataPath,
+    logDir: logStore.dir,
+    switchedLibrary,
+    aiFiles: moved.aiSessions ? moved.aiSessions.files : 0,
+    logFiles: moved.logs ? moved.logs.files : 0,
+    discarded,
+  });
+  return moved;
+}
 const detachedWindows = new Map(); // tabId -> { window, kind, reason }
 /** SFTP 面板是单实例窗口，多个远端会话作为面板内页签共存。 */
 let sftpPanel = null;
@@ -402,10 +451,20 @@ function applyZoom() {
   }
 }
 
+/** 默认窗口尺寸取工作区比例；floor 只在小屏上兜底，不会超出工作区。workAreaSize 是 DIP，已含系统缩放。 */
+function sizedToWorkArea(ratioW, ratioH, floorW, floorH, area) {
+  const a = area || screen.getPrimaryDisplay().workAreaSize;
+  return {
+    width: Math.min(a.width, Math.max(floorW, Math.round(a.width * ratioW))),
+    height: Math.min(a.height, Math.max(floorH, Math.round(a.height * ratioH))),
+  };
+}
+
 function createWindow() {
+  const size = sizedToWorkArea(0.7, 0.78, 1100, 700);
   win = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: size.width,
+    height: size.height,
     minWidth: 960,
     minHeight: 600,
     title: `NovoTerminal ${APP_BUILD}`,
@@ -556,11 +615,26 @@ function registerIpc() {
     const s = store.getSettings();
     return isMainWindow(sender) ? s : withoutAiKeys(s);
   }, true);
-  handle('store:update-settings', (patch) => {
+  handle('store:update-settings', async (patch) => {
     const clean = patch && typeof patch === 'object' ? { ...patch } : {};
     // AI 配置由主进程收敛类型与取值范围，渲染端递来的对象不直接落盘
     if ('ai' in clean) clean.ai = normalizeAi(clean.ai);
+    if ('recentLimit' in clean) {
+      clean.recentLimit = Math.min(
+        RECENT_LIMIT_MAX,
+        Math.max(1, Math.floor(Number(clean.recentLimit)) || RECENT_LIMIT_DEFAULT)
+      );
+    }
+    if ('logTotalMb' in clean) clean.logTotalMb = clampedLogTotalMb(clean.logTotalMb);
+    // 存储位置变更走统一入口，附带数据（AI 会话、日志）才能一起搬
+    const desiredPath = clean.dataPath ? String(clean.dataPath) : '';
+    if (desiredPath) delete clean.dataPath;
+    if (desiredPath) await switchDataPath(desiredPath);
     const s = unwrap(store.updateSettings(clean));
+    if ('logTotalMb' in clean) {
+      logStore.setTotalBytes(clean.logTotalMb * MB);
+      logStore.info('settings', 'log total changed', { logTotalMb: clean.logTotalMb, logDir: logStore.dir });
+    }
     applyZoom();
     rebuildTrayMenu();
     return s;
@@ -625,13 +699,11 @@ function registerIpc() {
     const en = store.getSettings().lang === 'en';
     const r = await dialog.showOpenDialog(win, {
       properties: ['openDirectory', 'createDirectory'],
-      title: en ? 'Select storage location' : '选择存储位置',
+      title: en ? 'Select application data path' : '选择应用数据存储路径',
     });
     if (r.canceled || !r.filePaths[0]) return null;
-    store.setCustomPath(r.filePaths[0]);
-    const s = store.snapshot().settings;
-    logger.info('settings', 'data path changed', { dataPath: s.dataPath });
-    return s;
+    await switchDataPath(r.filePaths[0]);
+    return store.snapshot().settings;
   });
 
   // ---- Logs ----
@@ -953,6 +1025,7 @@ function registerIpc() {
     // usable coordinates once the pointer has left the window, but dragend still reaches the
     // renderer. A release over the tab bar row is a reorder/cancel gesture, never a detach.
     let dropAt = null;
+    let dropArea = null;
     if (req && req.fromDrag) {
       const point = screen.getCursorScreenPoint();
       const bar = tabbarScreenRect();
@@ -964,12 +1037,13 @@ function registerIpc() {
         point.y <= bar.y + bar.height;
       if (overBar) return { ok: true, cancelled: true };
       dropAt = point;
+      // getDisplayMatching requires a full rect (x/y/width/height) in Electron 33.
+      dropArea = screen.getDisplayMatching({ x: point.x, y: point.y, width: 1, height: 1 }).workArea;
     }
-    const DETACHED_W = 1000;
-    const DETACHED_H = 660;
+    const { width: detachedW, height: detachedH } = sizedToWorkArea(0.55, 0.65, 900, 560, dropArea);
     const detachedOptions = {
-      width: DETACHED_W,
-      height: DETACHED_H,
+      width: detachedW,
+      height: detachedH,
       minWidth: 520,
       minHeight: 320,
       title,
@@ -984,10 +1058,8 @@ function registerIpc() {
       },
     };
     if (dropAt) {
-      // getDisplayMatching requires a full rect (x/y/width/height) in Electron 33.
-      const area = screen.getDisplayMatching({ x: dropAt.x, y: dropAt.y, width: 1, height: 1 }).workArea;
-      detachedOptions.x = Math.max(area.x, Math.min(dropAt.x - DETACHED_W / 2, area.x + area.width - DETACHED_W));
-      detachedOptions.y = Math.max(area.y, Math.min(dropAt.y - DETACHED_H / 2, area.y + area.height - DETACHED_H));
+      detachedOptions.x = Math.max(dropArea.x, Math.min(dropAt.x - detachedW / 2, dropArea.x + dropArea.width - detachedW));
+      detachedOptions.y = Math.max(dropArea.y, Math.min(dropAt.y - detachedH / 2, dropArea.y + dropArea.height - detachedH));
     }
     const detached = new BrowserWindow(detachedOptions);
     const entry = { window: detached, kind };
@@ -1165,10 +1237,10 @@ function registerIpc() {
 
     sftpPanelReady = false;
     sftpPendingSessions.length = 0;
+    const panelSize = sizedToWorkArea(0.6, 0.7, 1000, 640);
     const panel = new BrowserWindow({
-      // 与主窗口默认尺寸（1280x800）保持一致，略小 20px 以便和主窗口错开
-      width: 1260,
-      height: 780,
+      width: panelSize.width,
+      height: panelSize.height,
       minWidth: 800,
       minHeight: 520,
       title: 'SFTP',
@@ -1405,11 +1477,13 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
+  // 日志目录跟随「存储位置」，因此数据仓库必须先于 LogStore 建立
+  store = new AssetStore(logger);
   logStore = new LogStore({
-    dir: path.join(app.getPath('userData'), 'logs'),
+    dir: store.logsDir(),
+    totalBytes: clampedLogTotalMb(store.getSettings().logTotalMb) * MB,
     onNew: (entry) => send('log:new', entry),
   });
-  store = new AssetStore(logger);
   sessions = new SessionManager({ store, send, log: logger });
   sshSessions = new SshSessionManager({
     log: logger,

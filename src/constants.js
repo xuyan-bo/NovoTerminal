@@ -9,6 +9,15 @@ export const OS_SVG = {
 
 export const OS_NAME = { win: 'Windows', mac: 'macOS', linux: 'Linux' };
 
+/** 最近连接保存数量上限，与 electron/store/assetStore.js 的 RECENT_LIMIT_* 保持一致 */
+export const RECENT_LIMIT_DEFAULT = 20;
+export const RECENT_LIMIT_MAX = 100;
+
+/** 日志总量（MB）范围，与 electron/store/assetStore.js 的 LOG_TOTAL_* 保持一致 */
+export const LOG_TOTAL_DEFAULT_MB = 20;
+export const LOG_TOTAL_MIN_MB = 10;
+export const LOG_TOTAL_MAX_MB = 200;
+
 /** UI font choices for the settings dialog; 'default' keeps the built-in stack */
 export const UI_FONTS = [
   { id: 'default', family: '' },
@@ -94,6 +103,7 @@ export const ADVANCED_DEFAULTS = {
   ssh: {
     charset: 'UTF-8',
     term: 'xterm-256color',
+    scrollback: 2000,
     keepAlive: 30,
     compression: false,
     authType: 'password',
@@ -232,6 +242,16 @@ export const ADVANCED_FIELDS = {
         { value: 'linux', label: 'linux' },
         { value: 'ansi', label: 'ansi' },
       ],
+    },
+    {
+      key: 'scrollback',
+      type: 'number',
+      labelKey: 'adv.ssh.scrollback',
+      hintKey: 'adv.ssh.scrollbackHint',
+      min: 100,
+      max: 20000,
+      integer: true,
+      placeholderKey: 'adv.ssh.scrollbackPh',
     },
     { key: 'keepAlive', type: 'number', labelKey: 'adv.ssh.keepAlive', min: 0, max: 3600, integer: true, placeholderKey: 'adv.ssh.keepAlivePh' },
     { key: 'compression', type: 'switch', labelKey: 'adv.ssh.compression' },

@@ -79,6 +79,14 @@ import { getProtocol } from './protocols';
 const MIN_SIDEBAR_W = 180;
 const MAX_SIDEBAR_W = 640;
 const SIDEBAR_W_KEY = 'novoterminal.sidebarWidth';
+const DEFAULT_SIDEBAR_RATIO = 0.18;
+const DEFAULT_SIDEBAR_MIN = 220;
+const DEFAULT_SIDEBAR_MAX = 400;
+
+function defaultSidebarWidth() {
+  const w = Math.round(window.innerWidth * DEFAULT_SIDEBAR_RATIO);
+  return Math.min(DEFAULT_SIDEBAR_MAX, Math.max(DEFAULT_SIDEBAR_MIN, w));
+}
 // 适配器 id → 客户端可执行文件名，用于会话结束提示；专有名词，不翻译
 const RDP_CLIENT_NAMES = {
   'rdp-windows-mstsc': 'mstsc',
@@ -119,7 +127,7 @@ export default {
   },
   data() {
     return {
-      sidebarWidth: 268,
+      sidebarWidth: defaultSidebarWidth(),
       resizing: false,
       treeHidden: false,
       isSftpRoute: !!parseHashRoute('sftp'),

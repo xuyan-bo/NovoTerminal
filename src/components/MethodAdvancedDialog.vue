@@ -312,7 +312,7 @@ export default {
           const n = blank ? defaults[f.key] : Number(v);
           if (!Number.isFinite(n) || (f.integer && !Number.isInteger(n)) || n < f.min || n > f.max) {
             error =
-              this.schemaKey === 'ssh'
+              this.schemaKey === 'ssh' && f.key === 'keepAlive'
                 ? t('adv.ssh.keepAliveInvalid')
                 : t('adv.sftp.rangeInvalid', { name: t(f.labelKey), min: f.min, max: f.max });
           }

@@ -26,11 +26,14 @@
           ref="form"
           :model="form"
           :rules="rules"
-          label-width="110px"
+          label-width="150px"
           size="small"
           @submit.native.prevent
         >
         <div v-show="activeMenu === 'general'" class="set-section">
+          <el-form-item :label="$t('settings.homeWelcome')">
+            <el-switch v-model="form.homeWelcome" />
+          </el-form-item>
           <el-form-item :label="$t('settings.theme')" prop="theme">
             <div class="theme-picks">
               <button
@@ -58,17 +61,15 @@
                 @click="onLang('en')"
               >English</button>
             </div>
-            <span class="hint" style="margin-left:8px">{{ $t('settings.previewLang') }}</span>
           </el-form-item>
           <el-form-item :label="$t('settings.zoom')">
             <div class="zoom-row">
               <el-slider v-model="form.zoom" :min="50" :max="200" :step="10" />
               <span class="zoom-val">{{ form.zoom }}%</span>
             </div>
-            <span class="hint">{{ $t('settings.zoomApply') }}</span>
           </el-form-item>
           <el-form-item :label="$t('settings.font')">
-            <el-select v-model="form.font" style="width:100%" @change="onFont">
+            <el-select v-model="form.font" style="width: 100%; max-width: 240px" @change="onFont">
               <el-option
                 v-for="f in fonts"
                 :key="f.id"
@@ -87,6 +88,36 @@
         </div>
 
         <div v-show="activeMenu === 'data'" class="set-section">
+          <el-form-item>
+            <template slot="label">
+              {{ $t('settings.recentLimit') }}
+              <el-tooltip :content="$t('settings.recentLimitTip')" placement="top">
+                <i class="el-icon-info"></i>
+              </el-tooltip>
+            </template>
+            <el-input-number
+              v-model="form.recentLimit"
+              size="mini"
+              :min="1"
+              :max="RECENT_LIMIT_MAX"
+              :step="1"
+            />
+          </el-form-item>
+          <el-form-item>
+            <template slot="label">
+              {{ $t('settings.logTotal') }}
+              <el-tooltip :content="$t('settings.logTotalTip')" placement="top">
+                <i class="el-icon-info"></i>
+              </el-tooltip>
+            </template>
+            <el-input-number
+              v-model="form.logTotalMb"
+              size="mini"
+              :min="LOG_TOTAL_MIN_MB"
+              :max="LOG_TOTAL_MAX_MB"
+              :step="5"
+            />
+          </el-form-item>
           <el-form-item prop="dataPath">
             <template slot="label">
               {{ $t('settings.dataPath') }}
@@ -406,7 +437,19 @@
 <script>
 import { store, api, unwrap, refresh } from '../store';
 import { applyTheme, applyFont, setLocale, t } from '../i18n';
-import { UI_FONTS, AI_PERMISSIONS, AI_DEFAULTS, AI_LIMITS, AI_CONTEXT_DEFAULT_K, AI_CONTEXT_PRESETS } from '../constants';
+import {
+  UI_FONTS,
+  AI_PERMISSIONS,
+  AI_DEFAULTS,
+  AI_LIMITS,
+  AI_CONTEXT_DEFAULT_K,
+  AI_CONTEXT_PRESETS,
+  RECENT_LIMIT_DEFAULT,
+  RECENT_LIMIT_MAX,
+  LOG_TOTAL_DEFAULT_MB,
+  LOG_TOTAL_MIN_MB,
+  LOG_TOTAL_MAX_MB,
+} from '../constants';
 import locale from 'element-ui/lib/locale';
 import zhLocale from 'element-ui/lib/locale/lang/zh-CN';
 import enLocale from 'element-ui/lib/locale/lang/en';
@@ -465,6 +508,9 @@ export default {
       activeMenu: 'general',
       permissions: AI_PERMISSIONS,
       AI_LIMITS,
+      RECENT_LIMIT_MAX,
+      LOG_TOTAL_MIN_MB,
+      LOG_TOTAL_MAX_MB,
       draft: {},
       manual: {},
       editing: {},
@@ -482,7 +528,17 @@ export default {
       ],
       themes: [{ id: 'dark' }, { id: 'light' }, { id: 'system' }],
       fonts: UI_FONTS,
-      form: { theme: 'system', lang: 'zh', dataPath: '', zoom: 100, font: 'default', closeAction: 'ask' },
+      form: {
+        theme: 'system',
+        lang: 'zh',
+        dataPath: '',
+        zoom: 100,
+        font: 'default',
+        closeAction: 'ask',
+        homeWelcome: true,
+        recentLimit: RECENT_LIMIT_DEFAULT,
+        logTotalMb: LOG_TOTAL_DEFAULT_MB,
+      },
       rules: {
         theme: [
           {
@@ -541,6 +597,14 @@ export default {
     },
   },
   methods: {
+    // 最近连接数量始终落在 1–100，与主进程 recentCap 的收敛一致
+    clampedRecentLimit(v) {
+      return Math.min(RECENT_LIMIT_MAX, Math.max(1, Number(v) || RECENT_LIMIT_DEFAULT));
+    },
+    // 日志总量以 MB 表示，主进程按 5MB 单文件折算保留份数
+    clampedLogTotalMb(v) {
+      return Math.min(LOG_TOTAL_MAX_MB, Math.max(LOG_TOTAL_MIN_MB, Math.floor(Number(v)) || LOG_TOTAL_DEFAULT_MB));
+    },
     openUrl(url) {
       if (window.novoTerminal && window.novoTerminal.openExternal) {
         window.novoTerminal.openExternal(url);
@@ -567,6 +631,9 @@ export default {
         zoom: Math.min(200, Math.max(50, Number(s.zoom) || 100)),
         font: s.font || 'default',
         closeAction: s.closeAction || 'ask',
+        homeWelcome: s.homeWelcome !== false,
+        recentLimit: this.clampedRecentLimit(s.recentLimit),
+        logTotalMb: this.clampedLogTotalMb(s.logTotalMb),
       };
       const ai = s.ai || {};
       const services = (Array.isArray(ai.services) ? ai.services : []).map(cleanService);
@@ -934,6 +1001,9 @@ export default {
               zoom: this.form.zoom,
               font: this.form.font,
               closeAction: this.form.closeAction,
+              homeWelcome: !!this.form.homeWelcome,
+              recentLimit: this.clampedRecentLimit(this.form.recentLimit),
+              logTotalMb: this.clampedLogTotalMb(this.form.logTotalMb),
               ai: this.aiPayload(),
             })
           );
@@ -1014,6 +1084,7 @@ export default {
   display: flex;
   gap: 8px;
   width: 100%;
+  max-width: 560px;
 }
 .path-row .el-input {
   flex: 1;
@@ -1022,6 +1093,7 @@ export default {
   display: flex;
   align-items: center;
   gap: 12px;
+  max-width: 360px;
 }
 .mono { font-family: Consolas, "Courier New", monospace; }
 .svc-list { display: flex; flex-direction: column; gap: 10px; }
