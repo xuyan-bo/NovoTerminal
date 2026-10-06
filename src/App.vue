@@ -51,6 +51,7 @@
     </div>
 
     <settings-dialog />
+    <backup-dialog />
     <log-dialog />
     <asset-dialog />
     <group-dialog />
@@ -66,6 +67,7 @@ import SideBar from './components/panels/SideBar.vue';
 import TabBar from './components/panels/TabBar.vue';
 import AssetDetailView from './components/views/AssetDetailView.vue';
 import SettingsDialog from './components/dialogs/SettingsDialog.vue';
+import BackupDialog from './components/dialogs/BackupDialog.vue';
 import LogDialog from './components/dialogs/LogDialog.vue';
 import AssetDialog from './components/dialogs/AssetDialog.vue';
 import GroupDialog from './components/dialogs/GroupDialog.vue';
@@ -116,6 +118,7 @@ export default {
     HomeView: () => import('./components/views/HomeView.vue'),
     AssetDetailView,
     SettingsDialog,
+    BackupDialog,
     LogDialog,
     AssetDialog,
     GroupDialog,

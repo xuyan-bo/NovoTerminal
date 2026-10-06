@@ -131,8 +131,8 @@
             </div>
           </el-form-item>
           <el-form-item :label="$t('settings.backup')">
-            <el-button size="mini" icon="el-icon-download" @click="exportJson">{{ $t('settings.exportCfg') }}</el-button>
-            <el-button size="mini" icon="el-icon-upload2" @click="importJson">{{ $t('settings.importCfg') }}</el-button>
+            <el-button size="mini" icon="el-icon-download" @click="openBackup('export')">{{ $t('settings.exportCfg') }}</el-button>
+            <el-button size="mini" icon="el-icon-upload2" @click="openBackup('import')">{{ $t('settings.importCfg') }}</el-button>
           </el-form-item>
         </div>
 
@@ -587,6 +587,10 @@ export default {
     pickedCount() {
       return this.picker.rows.filter((r) => r.picked && !r.added).length;
     },
+    /** 备份弹窗开着时设置表单会停在旧值；备份关掉后按最新设置重载，避免用户随手保存又覆盖回去。 */
+    backupMode() {
+      return store.backupDialog;
+    },
   },
   watch: {
     visible(v) {
@@ -594,6 +598,9 @@ export default {
         this.activeMenu = 'general';
         this.load();
       }
+    },
+    backupMode(v) {
+      if (!v && this.visible) this.load();
     },
   },
   methods: {
@@ -906,52 +913,33 @@ export default {
       };
     },
 
-    async exportJson() {
+    /** 备份交给独立弹窗；系统身份验证先于弹窗，未通过则不打开导出/导入弹窗。 */
+    async openBackup(mode) {
+      if (!api.verifySystemAuth) {
+        this.$message.error(t('auth.needElectron'));
+        return;
+      }
       try {
-        // OS identity is enforced in main (store:export); surface friendly errors here
-        const text = unwrap(await api.exportGroups());
-        const blob = new Blob([text], { type: 'application/json' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'novoterminal-groups.json';
-        a.click();
-        URL.revokeObjectURL(a.href);
+        const r = unwrap(await api.verifySystemAuth(t(mode === 'import' ? 'auth.importReason' : 'auth.exportReason')));
+        if (!r || !r.ok) {
+          this.authFriendlyError(r);
+          return;
+        }
       } catch (e) {
         this.authFriendlyError(e);
+        return;
       }
+      store.backupDialog = mode;
     },
-    importJson() {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'application/json,.json';
-      input.onchange = async () => {
-        const file = input.files && input.files[0];
-        if (!file) return;
-        try {
-          const text = await file.text();
-          if (api.importGroups) {
-            // OS identity is enforced in main (store:import); surface friendly errors here
-            unwrap(await api.importGroups(text));
-          } else {
-            throw new Error(t('msg.needElectron'));
-          }
-          await refresh();
-          this.$message.success(t('settings.importDone'));
-        } catch (e) {
-          this.authFriendlyError(e);
-        }
-      };
-      input.click();
-    },
+    /** 身份验证错误码优先翻成产品文案，没有对应译文时回退原始 message。 */
     authFriendlyError(e) {
       const code = (e && e.code) || '';
-      let msg = e.message || String(e);
-      if (/Canceled|UserCanceled/i.test(code) || /已取消|Canceled/i.test(msg)) {
-        msg = t('auth.canceled');
-      } else if (/NotConfigured/i.test(code) || /未配置身份验证|Hello/i.test(msg)) {
-        msg = t('auth.notConfigured');
-      }
-      this.$message.error(msg);
+      const msg = (e && e.message) || '';
+      let text;
+      if (/Canceled|UserCanceled/i.test(code) || /已取消|Canceled/i.test(msg)) text = t('auth.canceled');
+      else if (/NotConfigured/i.test(code) || /未配置身份验证|Hello/i.test(msg)) text = t('auth.notConfigured');
+      else text = msg || t('auth.failed');
+      this.$message.error(text);
     },
     /** 保存前收尾：编辑框里的别名与窗口就地提交，手输框里残留的模型 ID 必须先生效或清空。 */
     commitPendingAi() {

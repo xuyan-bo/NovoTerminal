@@ -32,8 +32,8 @@ const api = {
     ipcRenderer.on('app:close-prompt', handler);
     return () => ipcRenderer.removeListener('app:close-prompt', handler);
   },
-  exportGroups: () => ipcRenderer.invoke('store:export'),
-  importGroups: (json) => ipcRenderer.invoke('store:import', json),
+  backupExport: (req) => ipcRenderer.invoke('backup:export', req),
+  backupImport: (req) => ipcRenderer.invoke('backup:import', req),
   verifySystemAuth: (reason) => ipcRenderer.invoke('app:verify-system-auth', reason),
   browseDataPath: () => ipcRenderer.invoke('app:browse-data-path'),
   clipboardReadText: () => ipcRenderer.invoke('clipboard:read-text'),

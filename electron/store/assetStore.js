@@ -551,10 +551,6 @@ class AssetStore {
     return this.snapshot().settings;
   }
 
-  exportJson() {
-    return JSON.stringify(this.snapshot().groups, null, 2);
-  }
-
   importGroups(jsonText) {
     const groups = JSON.parse(jsonText);
     if (!Array.isArray(groups) || groups.some((g) => !g || typeof g !== 'object' || !g.id)) {

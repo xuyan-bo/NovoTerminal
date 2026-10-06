@@ -12,6 +12,8 @@ export const store = Vue.observable({
   activeGroupId: null,
   sessionMap: {},
   settingsDialog: false,
+  /** 备份弹窗模式：'' 关闭，'export' 导出，'import' 导入 */
+  backupDialog: '',
   logDialog: false,
   assetDialog: { visible: false, editId: null, gid: null, cloneId: null },
   groupDialog: { visible: false, editId: null },

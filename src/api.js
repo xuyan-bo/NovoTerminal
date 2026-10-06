@@ -53,13 +53,13 @@ export const api = hasBridge
       async getSettings() {
         return mockSettings();
       },
-      async exportGroups() {
-        return JSON.stringify(mockState.groups, null, 2);
+      async backupExport() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       async verifySystemAuth() {
         return { ok: false, code: 'NO_BRIDGE', message: t('auth.needElectron') };
       },
-      async importGroups() {
+      async backupImport() {
         return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       async reorderGroups() {

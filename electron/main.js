@@ -14,6 +14,7 @@ const {
   LOG_TOTAL_MAX_MB,
 } = require('./store/assetStore');
 const { migrateSideData } = require('./store/dataMigration');
+const { packBackup, unpackBackup, restoreBackup, MIN_PASSWORD, MAX_PASSWORD } = require('./store/backup');
 const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
 const { SshMonitorManager } = require('./ssh/SshMonitorManager');
@@ -669,9 +670,9 @@ function registerIpc() {
     }
     return true;
   });
-  handle('store:export', async () => {
+  /** 备份操作前的本机身份验证；导出与导入沿用同一道门槛。 */
+  async function requireSystemAuth(reason) {
     const lang = store.getSettings().lang;
-    const reason = lang === 'en' ? 'Export NovoTerminal settings (includes sensitive information)' : '导出 NovoTerminal 配置（包含敏感信息）';
     const auth = await verifySystemAuth(reason, mainWindowHwnd(), {
       force: process.platform === 'darwin', lang, log: logger,
     });
@@ -680,20 +681,75 @@ function registerIpc() {
       e.code = auth.code || 'AUTH_FAILED';
       throw e;
     }
-    return store.exportJson();
+  }
+
+  /** 密码长度是主进程边界：渲染端表单校验不构成安全保证。 */
+  function checkBackupPassword(password) {
+    const pw = typeof password === 'string' ? password : '';
+    if (pw.length < MIN_PASSWORD || pw.length > MAX_PASSWORD) {
+      const en = store.getSettings().lang === 'en';
+      throw Object.assign(
+        new Error(en ? `Backup password must be ${MIN_PASSWORD}-${MAX_PASSWORD} characters` : `备份密码长度需为 ${MIN_PASSWORD}-${MAX_PASSWORD} 位`),
+        { code: 'BACKUP_PASSWORD_LEN' }
+      );
+    }
+    return pw;
+  }
+
+  handle('backup:export', async (payload) => {
+    const en = store.getSettings().lang === 'en';
+    const include = payload && Array.isArray(payload.include) ? payload.include : [];
+    const password = checkBackupPassword(payload && payload.password);
+    await requireSystemAuth(en ? 'Export NovoTerminal backup (includes sensitive information)' : '导出 NovoTerminal 备份（包含敏感信息）');
+    let buffer;
+    try {
+      buffer = packBackup({ store, include, password, appVersion: app.getVersion() });
+    } catch (e) {
+      logger.error('backup', 'backup pack failed', { include, code: e.code, message: e.message });
+      throw e;
+    }
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const parent = win && !win.isDestroyed() ? win : BrowserWindow.getFocusedWindow();
+    const r = await dialog.showSaveDialog(parent, {
+      title: en ? 'Save backup file' : '保存备份文件',
+      defaultPath: path.join(app.getPath('documents'), 'novoterminal-backup-' + stamp + '.ntbak'),
+      filters: [{ name: 'NovoTerminal Backup', extensions: ['ntbak'] }],
+    });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    try {
+      fs.writeFileSync(r.filePath, buffer);
+    } catch (e) {
+      logger.error('backup', 'backup write failed', { file: path.basename(r.filePath), code: e.code, message: e.message });
+      throw e;
+    }
+    logger.info('backup', 'backup exported', { include, bytes: buffer.length, file: path.basename(r.filePath) });
+    return { ok: true, path: r.filePath, bytes: buffer.length };
   });
-  handle('store:import', async (text) => {
-    const lang = store.getSettings().lang;
-    const reason = lang === 'en' ? 'Import NovoTerminal settings (replaces current data)' : '导入 NovoTerminal 配置（将覆盖当前数据）';
-    const auth = await verifySystemAuth(reason, mainWindowHwnd(), {
-      force: process.platform === 'darwin', lang, log: logger,
-    });
-    if (!auth.ok) {
-      const e = new Error(auth.message || (lang === 'en' ? 'System identity verification failed' : '系统身份验证失败'));
-      e.code = auth.code || 'AUTH_FAILED';
+
+  handle('backup:import', async (payload) => {
+    const en = store.getSettings().lang === 'en';
+    const password = checkBackupPassword(payload && payload.password);
+    // 先解密校验密码，再要求身份验证：密码错时不必先过一道生物识别
+    let parsed;
+    try {
+      parsed = unpackBackup({ data: payload && payload.data, password });
+    } catch (e) {
+      logger.warn('backup', 'backup open failed', { code: e.code, message: e.message });
       throw e;
     }
-    return unwrap(store.importGroups(text));
+    await requireSystemAuth(en ? 'Import NovoTerminal backup (replaces current data)' : '导入 NovoTerminal 备份（将覆盖当前数据）');
+    const summary = restoreBackup({ store, entries: parsed.entries });
+    logStore.setTotalBytes(clampedLogTotalMb(store.getSettings().logTotalMb) * MB);
+    applyZoom();
+    rebuildTrayMenu();
+    send('store:changed', { reason: 'backup-import' });
+    logger.info('backup', 'backup imported', {
+      categories: (parsed.manifest && parsed.manifest.categories) || [],
+      settings: summary.settings,
+      assets: summary.assets,
+      aiSessions: summary.aiSessions,
+    });
+    return { ok: true, summary, manifest: parsed.manifest };
   });
   handle('app:browse-data-path', async () => {
     const en = store.getSettings().lang === 'en';
