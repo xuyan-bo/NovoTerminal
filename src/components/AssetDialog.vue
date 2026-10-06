@@ -183,7 +183,6 @@ export default {
           {
             required: true,
             validator(rule, value, cb) {
-              // 资产必须挂在某个文件夹下，不再有「未分组」兜底桶
               if (!Array.isArray(value) || !value.length) cb(new Error(t('msg.groupSelect')));
               else cb();
             },

@@ -3,9 +3,6 @@ const path = require('path');
 const { app, safeStorage } = require('electron');
 const { AI_DEFAULTS } = require('../ai/aiSettings');
 
-const UNGROUPED_LEGACY_IDS = ['g-ungrouped', 'g-default'];
-const UNGROUPED_LEGACY_NAMES = ['未分组', 'Ungrouped'];
-
 function newId(prefix) {
   return prefix + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 }
@@ -122,7 +119,6 @@ class AssetStore {
 
   /**
    * 把持久化的 groups[] 收敛成可用的分组树：groups 仍是扁平数组，层级由 pid 表达。
-   * 顺带完成「未分组」下线的迁移——保留桶转成普通根分组，空桶直接丢弃。
    */
   normalizeTree() {
     if (!Array.isArray(this.data.groups)) this.data.groups = [];
@@ -141,20 +137,6 @@ class AssetStore {
       if (g.pid && !ids.has(g.pid)) g.pid = '';
     });
     this.breakParentCycles();
-
-    // 「未分组」保留桶下线：空桶丢弃，有内容的转成一个普通根分组。
-    // 认定条件是「历史 id + 仍是遗留名称」，迁移过一次就不再干预，用户改空或改名都不会被悄悄处理。
-    this.data.groups
-      .filter((g) => UNGROUPED_LEGACY_IDS.includes(g.id) && UNGROUPED_LEGACY_NAMES.includes(g.name))
-      .forEach((g) => {
-        if (!g.nodes.length && !this.childFolders(g.id).length) {
-          this.data.groups = this.data.groups.filter((x) => x !== g);
-          return;
-        }
-        g.pid = '';
-        g.color = g.color || '#909399';
-        g.name = this.L('默认分组', 'Default group');
-      });
   }
 
   /** pid 链成环（手改数据或导入异常）时断掉成环的那一条 */
@@ -528,7 +510,7 @@ class AssetStore {
       throw new Error(this.L('导入内容不是有效的分组列表', 'Not a valid group list'));
     }
     this.data.groups = groups;
-    // 兼容旧的扁平导出：补 pid、断成环的父级、清掉「未分组」保留桶
+    // 导出的扁平分组可能没有 pid，重新补默认值并修断链/成环
     this.normalizeTree();
     this.persist();
     return this.snapshot();
