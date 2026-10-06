@@ -119,7 +119,7 @@
               {{ $t('settings.ai.permission') }}
               <el-tooltip :content="$t('settings.ai.permissionTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
             </template>
-            <el-radio-group v-model="ai.permission">
+            <el-radio-group :value="ai.permission" @input="setAiPermission">
               <el-radio v-for="p in permissions" :key="p.id" :label="p.id">
                 {{ $t('ai.perm.' + p.id) }}
                 <el-tooltip :content="$t('ai.permDesc.' + p.id)" placement="top"><i class="el-icon-info"></i></el-tooltip>
@@ -132,6 +132,13 @@
               <el-tooltip :content="$t('settings.ai.readScreenTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
             </template>
             <el-switch v-model="ai.readScreen" />
+          </el-form-item>
+          <el-form-item>
+            <template slot="label">
+              {{ $t('settings.ai.temperature') }}
+              <el-tooltip :content="$t('settings.ai.temperatureTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+            </template>
+            <el-input-number v-model="ai.temperature" size="mini" :min="AI_LIMITS.temperature[0]" :max="AI_LIMITS.temperature[1]" :step="0.1" :precision="1" />
           </el-form-item>
           <el-form-item>
             <template slot="label">
@@ -156,7 +163,7 @@
             <div class="svc-list">
               <div v-for="(svc, i) in ai.services" :key="svc.id" class="svc-card">
                 <div class="svc-top">
-                  <el-input v-model="svc.name" size="mini" class="svc-name" :placeholder="$t('settings.ai.serviceName')" />
+                  <el-input v-model="svc.name" size="mini" class="svc-name" maxlength="60" :placeholder="$t('settings.ai.serviceName')" />
                   <el-tooltip v-if="svc.test" :content="svc.test.text" placement="top">
                     <span class="svc-tag" :class="svc.test.ok ? 'ok' : 'bad'">{{ svc.test.text }}</span>
                   </el-tooltip>
@@ -170,17 +177,18 @@
                 <div class="svc-grid">
                   <label class="svc-field">
                     <span>{{ $t('settings.ai.baseUrl') }}</span>
-                    <el-input v-model="svc.baseUrl" size="mini" class="mono" placeholder="https://api.example.com/v1" />
+                    <el-input v-model="svc.baseUrl" size="mini" class="mono" maxlength="300" placeholder="https://api.example.com/v1" />
+                    <span v-if="isInsecureUrl(svc.baseUrl)" class="svc-warn">{{ $t('settings.ai.baseUrlInsecure') }}</span>
                   </label>
                   <label class="svc-field">
                     <span>{{ $t('settings.ai.apiKey') }}</span>
-                    <el-input v-model="svc.apiKey" size="mini" class="mono" show-password autocomplete="off" />
+                    <el-input v-model="svc.apiKey" size="mini" class="mono" maxlength="400" show-password autocomplete="off" />
                   </label>
                 </div>
                 <div class="svc-models">
                   <div class="svc-models-head">
                     {{ $t('settings.ai.models') }}
-                    <el-tooltip :content="$t('settings.ai.modelsEmpty')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+                    <el-tooltip :content="$t('settings.ai.modelsTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
                     <el-button
                       class="head-plus"
                       size="mini"
@@ -222,6 +230,7 @@
                         v-model="editing[svc.id + '#' + m.id].alias"
                         size="mini"
                         class="model-alias-input"
+                        maxlength="60"
                         :placeholder="m.id"
                         @keyup.enter.native="commitModelEdit(svc, m)"
                       />
@@ -282,8 +291,8 @@
                   <div v-if="!svc.models.length" class="model-empty">{{ $t('settings.ai.modelsEmpty') }}</div>
                   <div v-if="manual[svc.id]" class="model-row model-add">
                     <span></span>
-                    <el-input v-model="draft[svc.id].id" size="mini" class="mono" :placeholder="$t('settings.ai.modelId')" @input="onDraftId(svc)" @keyup.enter.native="addModel(svc)" />
-                    <el-input v-model="draft[svc.id].alias" size="mini" :placeholder="$t('settings.ai.modelAlias')" @keyup.enter.native="addModel(svc)" />
+                    <el-input v-model="draft[svc.id].id" size="mini" class="mono" maxlength="120" :placeholder="$t('settings.ai.modelId')" @input="onDraftId(svc)" @keyup.enter.native="addModel(svc)" />
+                    <el-input v-model="draft[svc.id].alias" size="mini" maxlength="60" :placeholder="$t('settings.ai.modelAlias')" @keyup.enter.native="addModel(svc)" />
                     <el-input-number
                       v-model="draft[svc.id].contextK"
                       size="mini"
@@ -359,7 +368,7 @@
             <span class="pick-id mono" :title="row.id">{{ row.id }}</span>
             <span v-if="row.added" class="pick-added">{{ $t('settings.ai.pickAdded') }}</span>
           </span>
-          <el-input v-model="row.alias" size="mini" :placeholder="row.id" :disabled="row.added" />
+          <el-input v-model="row.alias" size="mini" maxlength="60" :placeholder="row.id" :disabled="row.added" />
           <el-input-number
             v-model="row.contextK"
             size="mini"
@@ -441,6 +450,12 @@ function cleanService(svc) {
 /** 手输的模型 ID：非空、不含空白、长度受主进程 normalize 的 120 上限约束。 */
 const MODEL_ID_RE = /^[^\s]{1,120}$/;
 
+/** 什么都没填的服务商是误点「添加」留下的，保存时直接丢掉，不该拦住整次保存。 */
+function isEmptyService(svc) {
+  return !String(svc.name || '').trim() && !String(svc.baseUrl || '').trim()
+    && !String(svc.apiKey || '').trim() && !(svc.models || []).length;
+}
+
 export default {
   name: 'SettingsDialog',
   data() {
@@ -499,6 +514,8 @@ export default {
         store.settingsDialog = v;
         if (!v) {
           this.picker.visible = false;
+          // 没保存就不该留下预览效果：按已落盘的设置重新应用一遍（保存路径里 snapshot 已刷新，等于保持新外观）
+          this.applyAppearance((store.snapshot && store.snapshot.settings) || {});
           if (this.$refs.form) this.$nextTick(() => this.$refs.form.clearValidate());
         }
       },
@@ -529,6 +546,18 @@ export default {
         window.omniDesk.openExternal(url);
       }
     },
+    /** 「完全访问」跳过所有审批，与面板内切换共用同一条风险确认；取消就不改级别。 */
+    setAiPermission(id) {
+      if (id !== 'full' || this.ai.permission === 'full') {
+        this.ai.permission = id;
+        return;
+      }
+      this.$confirm(t('ai.fullWarn'), t('ai.fullTitle'), {
+        confirmButtonText: t('ai.fullOk'),
+        cancelButtonText: t('msg.cancel'),
+        type: 'warning',
+      }).then(() => { this.ai.permission = 'full'; }).catch(() => {});
+    },
     async load() {
       const s = (await api.getSettings()) || store.snapshot.settings || {};
       this.form = {
@@ -554,29 +583,31 @@ export default {
         defaultRef: refOk ? { serviceId: ref.serviceId, modelId: ref.modelId } : null,
       };
       this.ensureDrafts();
-      applyTheme(this.form.theme);
-      applyFont(this.form.font);
-      setLocale(this.form.lang);
-      locale.use(this.form.lang === 'en' ? enLocale : zhLocale);
-      store.localeTick++;
+      this.applyAppearance(this.form);
       this.$nextTick(() => {
         if (this.$refs.form) this.$refs.form.clearValidate();
       });
     },
+    /** 主题、字体、语言是「先预览、保存才落盘」，所以生效与回退都走同一条路径。 */
+    applyAppearance(s) {
+      const lang = s.lang || 'zh';
+      applyTheme(s.theme || 'system');
+      applyFont(s.font || 'default');
+      setLocale(lang);
+      locale.use(lang === 'en' ? enLocale : zhLocale);
+      store.localeTick++;
+    },
     onFont(id) {
-      applyFont(id);
+      this.applyAppearance(this.form);
     },
     onTheme(id) {
       this.form.theme = id;
-      applyTheme(id);
-      store.localeTick++;
+      this.applyAppearance(this.form);
       if (this.$refs.form) this.$refs.form.validateField('theme');
     },
     onLang(lang) {
       this.form.lang = lang;
-      setLocale(lang);
-      locale.use(lang === 'en' ? enLocale : zhLocale);
-      store.localeTick++;
+      this.applyAppearance(this.form);
       if (this.$refs.form) this.$refs.form.validateField('lang');
     },
     async browse() {
@@ -739,7 +770,10 @@ export default {
       this.picker = { visible: true, service: svc, loading: true, error: '', filter: '', rows: [] };
       try {
         const r = unwrap(await api.aiModels({ baseUrl: svc.baseUrl, apiKey: svc.apiKey }));
-        this.picker.rows = (r.models || []).map((id) => ({ id, alias: id, contextK: presetContextK(id), added: existing.has(id), picked: false }));
+        // 网关回什么 ID 都有可能：含空格或超长的 ID 主进程收不下，别让用户勾一个存不进去的
+        this.picker.rows = (r.models || [])
+          .filter((id) => MODEL_ID_RE.test(String(id)))
+          .map((id) => ({ id, alias: id, contextK: presetContextK(id), added: existing.has(id), picked: false }));
       } catch (e) {
         this.picker.error = this.aiErrorText(e);
       } finally {
@@ -789,16 +823,19 @@ export default {
     },
     aiPayload() {
       const temp = Number(this.ai.temperature);
+      const services = this.ai.services.filter((svc) => !isEmptyService(svc)).map(cleanService);
+      const ref = this.ai.defaultRef;
+      // 默认模型必须指向仍然存在的模型，删掉服务商后留下的悬空引用在这里断掉
+      const refOk = !!(ref && services.some((sv) => sv.id === ref.serviceId && sv.models.some((m) => m.id === ref.modelId)));
       return {
         enabled: !!this.ai.enabled,
         permission: this.ai.permission,
         readScreen: !!this.ai.readScreen,
         commandTimeoutSec: Number(this.ai.commandTimeoutSec) || AI_DEFAULTS.commandTimeoutSec,
         maxTurns: Number(this.ai.maxTurns) || AI_DEFAULTS.maxTurns,
-        maxTokens: Number(this.ai.maxTokens) || AI_DEFAULTS.maxTokens,
         temperature: Number.isFinite(temp) ? temp : AI_DEFAULTS.temperature,
-        services: this.ai.services.map(cleanService),
-        defaultRef: this.ai.defaultRef || null,
+        services,
+        defaultRef: refOk ? { serviceId: ref.serviceId, modelId: ref.modelId } : null,
       };
     },
 
@@ -865,10 +902,29 @@ export default {
       if (stale) this.$message.warning(t('settings.ai.pendingModel'));
       return !stale;
     },
+    /** 主进程 normalize 会整条丢掉没有 http(s) 前缀的服务，连带它下面的模型一起消失；
+     *  不前端拦一下，用户看到的是「保存成功」，重开设置却发现服务没了。 */
+    checkAiServices() {
+      const bad = this.ai.services.find((svc) => {
+        const url = String(svc.baseUrl || '').trim();
+        return !isEmptyService(svc) && !/^https?:\/\//i.test(url);
+      });
+      if (!bad) return true;
+      const name = String(bad.name || '').trim();
+      this.$message.error(name
+        ? t('settings.ai.baseUrlInvalid', { name })
+        : t('settings.ai.baseUrlMissing', { name: t('settings.ai.serviceUnnamed') }));
+      return false;
+    },
+    /** 明文 HTTP 不拦（内网网关确实这么部署），但要提醒 Key 和命令内容会被窃听。 */
+    isInsecureUrl(url) {
+      return /^http:\/\//i.test(String(url || '').trim());
+    },
     save() {
       this.$refs.form.validate(async (valid) => {
         if (!valid) return;
         if (!this.commitPendingAi()) return;
+        if (!this.checkAiServices()) return;
         this.saving = true;
         try {
           unwrap(
@@ -882,10 +938,7 @@ export default {
             })
           );
           await refresh();
-          applyTheme(this.form.theme);
-          setLocale(this.form.lang);
-          locale.use(this.form.lang === 'en' ? enLocale : zhLocale);
-          store.localeTick++;
+          this.applyAppearance(this.form);
           this.$message.success(t('msg.settingsSaved'));
           this.visible = false;
         } catch (e) {
@@ -985,6 +1038,7 @@ export default {
 .svc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
 .svc-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .svc-field > span { font-size: 11px; color: var(--text-3); }
+.svc-warn { color: var(--warning); }
 .svc-models { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .svc-models-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); margin-bottom: 2px; }
 .svc-models-head .el-button.head-plus { padding: 0; height: 18px; font-size: 13px; color: var(--accent); }

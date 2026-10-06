@@ -170,6 +170,8 @@ button {
 .home-scroll::-webkit-scrollbar,
 .file-list::-webkit-scrollbar,
 .ai-log::-webkit-scrollbar,
+.ai-pin::-webkit-scrollbar,
+.hist-list::-webkit-scrollbar,
 .cmd-out::-webkit-scrollbar,
 .think-text::-webkit-scrollbar {
   width: 6px;
@@ -180,6 +182,8 @@ button {
 .home-scroll::-webkit-scrollbar-thumb,
 .file-list::-webkit-scrollbar-thumb,
 .ai-log::-webkit-scrollbar-thumb,
+.ai-pin::-webkit-scrollbar-thumb,
+.hist-list::-webkit-scrollbar-thumb,
 .cmd-out::-webkit-scrollbar-thumb,
 .think-text::-webkit-scrollbar-thumb {
   background: var(--border);
@@ -190,6 +194,8 @@ button {
 .home-scroll::-webkit-scrollbar-thumb:hover,
 .file-list::-webkit-scrollbar-thumb:hover,
 .ai-log::-webkit-scrollbar-thumb:hover,
+.ai-pin::-webkit-scrollbar-thumb:hover,
+.hist-list::-webkit-scrollbar-thumb:hover,
 .cmd-out::-webkit-scrollbar-thumb:hover,
 .think-text::-webkit-scrollbar-thumb:hover {
   background: var(--text-3);
@@ -202,6 +208,10 @@ button {
 .file-list::-webkit-scrollbar-corner,
 .ai-log::-webkit-scrollbar-track,
 .ai-log::-webkit-scrollbar-corner,
+.ai-pin::-webkit-scrollbar-track,
+.ai-pin::-webkit-scrollbar-corner,
+.hist-list::-webkit-scrollbar-track,
+.hist-list::-webkit-scrollbar-corner,
 .cmd-out::-webkit-scrollbar-track,
 .cmd-out::-webkit-scrollbar-corner,
 .think-text::-webkit-scrollbar-track,

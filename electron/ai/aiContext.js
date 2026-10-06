@@ -13,6 +13,9 @@
  */
 
 /** 水位到这个比例就触发压缩。 */
+/** 窗口缺失时的兜底，与设置侧的默认值同源，避免「预算按 A、显示按 B」。 */
+const { CONTEXT_DEFAULT } = require('./aiSettings');
+
 const TRIGGER_RATIO = 0.85;
 /** 压缩要把水位降到的目标比例。 */
 const TARGET_RATIO = 0.35;
@@ -73,7 +76,7 @@ function fixedTokens({ system, tools }, ratio) {
  * 水位分母是整个窗口，所以预留与安全余量算「占着但没在用」，永远不会显示成 100%。
  */
 function budget({ window, maxTokens, system, tools, messages }, ratio) {
-  const win = Number.isFinite(window) && window > 0 ? window : 128000;
+  const win = Number.isFinite(window) && window > 0 ? window : CONTEXT_DEFAULT;
   const reserve = Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 0;
   const guard = Math.max(MIN_GUARD_TOKENS, Math.round(win * GUARD_RATIO));
   const fixed = fixedTokens({ system, tools }, ratio);

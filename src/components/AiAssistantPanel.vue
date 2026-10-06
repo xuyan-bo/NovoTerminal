@@ -45,73 +45,68 @@
         </div>
         <div v-for="row in items" :key="row.key" class="ai-item">
           <div v-if="row.kind === 'user'" class="msg-user">{{ row.text }}</div>
-          <div v-else-if="row.kind === 'answer'" class="answer">
-            <ai-markdown :text="row.text" /><span v-if="row.typing" class="msg-ai-cursor"></span>
-          </div>
           <div v-else-if="row.kind === 'note'" class="step-note is-center">{{ row.text }}</div>
-          <div v-else class="turn" :class="row.running ? 'is-live' : 'is-done'">
-            <button type="button" class="turn-head" @click="toggleTurn(row)">
-              <i class="h-ico" :class="row.running ? 'el-icon-loading' : 'el-icon-circle-check'"></i>
-              <span class="h-title">{{ $t(row.running ? 'ai.turnRunning' : 'ai.turnDone') }}</span>
-              <span class="h-stat mono">{{ headStat(row) }}</span>
-              <span class="h-count">{{ headCount(row) }}</span>
-              <i class="h-caret" :class="turnOpen(row) ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i>
-            </button>
-            <div v-show="turnOpen(row)" class="turn-body">
-              <div v-for="n in row.nodes" :key="n.key" class="act" :class="actClass(n)">
-                <div v-if="n.nk === 'say'" class="say">
-                  <ai-markdown :text="n.text" /><span v-if="n.typing" class="msg-ai-cursor"></span>
-                </div>
-                <div v-else-if="n.nk === 'zip'" class="zip-line mono">
-                  <i class="el-icon-scissors"></i>{{ $t('ai.zipLine', { moved: n.moved, from: fmtTok(n.from), to: fmtTok(n.to) }) }}
-                </div>
-                <template v-else>
-                  <button type="button" class="act-head" @click="toggleNode(n)">
-                    <i class="a-ico" :class="nodeIcon(n)"></i>
-                    <span class="a-title" :class="{ mono: n.nk === 'cmd' || n.nk === 'ask' }">{{ nodeTitle(n) }}</span>
-                    <span class="a-stat mono">{{ nodeStat(n) }}</span>
-                    <i class="a-caret" :class="n.open ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i>
-                  </button>
-                  <div v-show="n.open" class="act-detail">
-                    <div v-if="n.nk === 'think'" class="think-text mono" :class="{ typing: n.running }" :style="capStyle">{{ n.text }}</div>
-                    <template v-else>
-                      <div class="cmd-line mono">{{ n.nk === 'ask' ? n.command : n.command || n.name }}</div>
-                      <div v-if="n.nk === 'cmd' && n.auto" class="step-note">{{ $t('ai.autoRanNote') }}</div>
-                      <div v-if="n.reason" class="step-note">{{ n.reason }}</div>
-                      <div v-if="n.nk === 'cmd' && n.output" class="cmd-out mono" :style="capStyle">{{ n.output }}</div>
-                      <div v-if="n.nk === 'ask' && !n.decided" class="ask-btns">
-                        <el-button size="mini" type="primary" @click="decide(n, 'allow')">
-                          {{ $t('ai.approveAllow') }}
-                        </el-button>
-                        <el-button size="mini" @click="decide(n, 'deny')">
-                          {{ $t('ai.approveDeny') }}
-                        </el-button>
-                      </div>
-                      <div v-if="n.nk === 'choice'" class="choice-list">
-                        <p class="step-note">{{ $t('ai.choiceTip') }}</p>
-                        <button
-                          v-for="(o, i) in n.options"
-                          :key="o"
-                          type="button"
-                          class="choice"
-                          :class="{ 'is-picked': n.picked === o, 'is-dim': n.state !== 'waiting' && n.picked !== o }"
-                          :disabled="n.state !== 'waiting'"
-                          @click="pick(n, o)"
-                        >
-                          <span class="k">{{ i + 1 }}</span>{{ o }}
-                        </button>
-                      </div>
-                    </template>
+          <!-- 一次提问不再是一座卡片：思考/命令按正文打断成若干过程段，正文始终留在时间线上 -->
+          <div v-else class="turn">
+            <template v-for="seg in segments(row)">
+              <div v-if="seg.t === 'say'" :key="seg.k" class="answer">
+                <ai-markdown :text="seg.node.text" /><span v-if="seg.node.typing" class="msg-ai-cursor"></span>
+              </div>
+              <div v-else-if="seg.t === 'zip'" :key="seg.k" class="zip-line mono">
+                <i class="el-icon-scissors"></i>{{ $t('ai.zipLine', { moved: seg.node.moved, from: fmtTok(seg.node.from), to: fmtTok(seg.node.to) }) }}
+              </div>
+              <div v-else :key="seg.k" class="blk" :class="blkLive(row, seg) ? 'is-live' : 'is-done'">
+                <button type="button" class="turn-head" @click="toggleBlk(row, seg)">
+                  <i class="h-ico" :class="blkLive(row, seg) ? 'el-icon-loading' : 'el-icon-circle-check'"></i>
+                  <span class="h-title">{{ $t(blkLive(row, seg) ? 'ai.turnRunning' : 'ai.turnDone') }}</span>
+                  <span class="h-stat mono">{{ blkStat(seg) }}</span>
+                  <span class="h-count">{{ blkCount(seg) }}</span>
+                  <i class="h-caret" :class="blkOpen(row, seg) ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i>
+                </button>
+                <div v-show="blkOpen(row, seg)" class="turn-body">
+                  <div v-for="n in seg.nodes" :key="n.key" class="act" :class="actClass(n)">
+                    <button type="button" class="act-head" @click="toggleNode(n)">
+                      <i class="a-ico" :class="nodeIcon(n)"></i>
+                      <span class="a-title" :class="{ mono: n.nk === 'cmd' || n.nk === 'ask' }">{{ nodeTitle(n) }}</span>
+                      <span class="a-stat mono">{{ nodeStat(n) }}</span>
+                      <i class="a-caret" :class="n.open ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i>
+                    </button>
+                    <div v-show="n.open" class="act-detail">
+                      <div v-if="n.nk === 'think'" class="think-text mono" :class="{ typing: n.running }" :style="capStyle">{{ n.text }}</div>
+                      <template v-else>
+                        <div v-if="n.nk !== 'choice'" class="cmd-line mono">{{ n.nk === 'ask' ? n.command : n.command || toolName(n.name) }}</div>
+                        <div v-if="n.nk === 'cmd' && n.auto" class="step-note">{{ $t('ai.autoRanNote') }}</div>
+                        <div v-if="n.reason" class="step-note">{{ n.reason }}</div>
+                        <div v-if="n.nk === 'cmd' && n.output" class="cmd-out mono" :style="capStyle">{{ n.output }}</div>
+                        <div v-if="n.nk === 'choice'" class="choice-list">
+                          <div class="choice-q">{{ n.question }}</div>
+                          <div
+                            v-for="(o, i) in n.options"
+                            :key="o"
+                            class="choice is-static"
+                            :class="{ 'is-picked': n.picked === o, 'is-dim': !!n.picked && n.picked !== o }"
+                          >
+                            <span class="k">{{ i + 1 }}</span>{{ o }}
+                          </div>
+                          <div v-if="n.picked && !n.options.includes(n.picked)" class="choice-custom mono">
+                            {{ $t('ai.choiceCustom') }}{{ n.picked }}
+                          </div>
+                        </div>
+                      </template>
+                    </div>
                   </div>
-                </template>
+                </div>
               </div>
-              <div v-if="row.live" class="turn-live">
-                <span class="dots"><b></b><b></b><b></b></span>
-                <span class="txt">{{ row.live }}</span>
-                <span class="lbl mono">{{ elapsed(row.liveStart) }}</span>
-              </div>
-              <div v-if="usageText(row)" class="turn-usage mono">{{ usageText(row) }}</div>
+            </template>
+            <div v-if="row.live" class="turn-live">
+              <span class="dots"><b></b><b></b><b></b></span>
+              <span class="txt">{{ row.live }}</span>
+              <span class="lbl mono">{{ elapsed(row.liveStart) }}</span>
             </div>
+            <div v-if="row.truncated" class="turn-truncated">
+              <i class="el-icon-warning-outline"></i>{{ $t('ai.truncatedTip') }}
+            </div>
+            <div v-if="turnFoot(row)" class="turn-usage mono">{{ turnFoot(row) }}</div>
           </div>
         </div>
       </div>
@@ -138,7 +133,7 @@
         </el-select>
         <span class="hist-count">{{ $t('ai.histCount', { n: historyCount }) }}</span>
       </div>
-      <div v-loading="historyLoading" class="hist-list scroll">
+      <div v-loading="historyLoading" class="hist-list">
         <div v-if="!historyGroups.length && !historyLoading" class="hist-empty">
           {{ $t(historyRows.length ? 'ai.histNoMatch' : 'ai.histEmpty') }}
         </div>
@@ -177,7 +172,7 @@
                 </span>
               </div>
               <div class="hist-meta mono">
-                <span>{{ s.timeText }}</span>
+                <span>{{ fmtTime(s.updatedAt) }}</span>
                 <span>{{ $t('ai.histMsgs', { n: s.messages }) }}</span>
                 <span v-if="s.steps">{{ $t('ai.histSteps', { n: s.steps }) }}</span>
                 <span class="hist-preview">{{ s.preview }}</span>
@@ -207,6 +202,48 @@
       </div>
     </el-dialog>
 
+    <!-- 等审批/等选择是「必须看见」的：置顶在输入框上方，不埋在折叠的过程段里 -->
+    <div v-if="pending" class="ai-pin">
+      <div class="pin-head">
+        <i :class="pending.nk === 'ask' ? 'el-icon-warning' : 'el-icon-question'"></i>
+        <span class="pin-title">{{ $t(pending.nk === 'ask' ? 'ai.needApproval' : 'ai.needChoice') }}</span>
+        <span class="pin-wait mono">{{ elapsed(pending.askedAt) }}</span>
+      </div>
+      <div v-if="pending.nk === 'ask'" class="cmd-line mono">{{ pending.command }}</div>
+      <div v-if="pending.reason" class="step-note">{{ pending.reason }}</div>
+      <div v-if="pending.nk === 'ask'" class="ask-btns">
+        <el-button size="mini" type="primary" @click="decide(pending, 'allow')">
+          {{ $t('ai.approveAllow') }}
+        </el-button>
+        <el-button size="mini" @click="decide(pending, 'deny')">
+          {{ $t('ai.approveDeny') }}
+        </el-button>
+      </div>
+      <div v-else class="choice-list">
+        <div class="choice-q">{{ pending.question }}</div>
+        <button
+          v-for="(o, i) in pending.options"
+          :key="o"
+          type="button"
+          class="choice"
+          @click="pick(pending, o)"
+        >
+          <span class="k">{{ i + 1 }}</span>{{ o }}
+        </button>
+        <div class="choice-other">
+          <el-input
+            v-model="pending.other"
+            size="mini"
+            :placeholder="$t('ai.choiceOtherPh')"
+            @keyup.enter.native="submitOther(pending)"
+          />
+          <el-button size="mini" type="primary" :disabled="!String(pending.other || '').trim()" @click="submitOther(pending)">
+            {{ $t('ai.choiceOtherSend') }}
+          </el-button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="available" class="ai-input">
       <div class="ai-box" :class="{ 'is-focus': boxFocused }">
         <div
@@ -232,6 +269,12 @@
               <i :class="permissionIcon"></i>{{ $t('ai.perm.' + permission) }}<i class="el-icon-arrow-down bar-caret"></i>
             </button>
             <el-dropdown-menu slot="dropdown" class="ai-drop">
+              <el-dropdown-item command="default" :disabled="savingPermission || !sessionPermission">
+                <div class="drop-item" :class="{ on: !sessionPermission }">
+                  <i class="el-icon-back"></i>
+                  <span>{{ $t('ai.permFollow', { perm: $t('ai.perm.' + (ai.permission || 'auto')) }) }}</span>
+                </div>
+              </el-dropdown-item>
               <el-dropdown-item v-for="p in permissions" :key="p.id" :command="p.id" :disabled="savingPermission">
                 <div class="drop-item" :class="{ on: p.id === permission }">
                   <i :class="p.icon"></i>
@@ -260,6 +303,7 @@
             <div slot="content" class="ctx-pop">
               <div class="ctx-line is-head"><span>{{ $t('ai.ctxTip') }}</span><b class="mono">{{ ctx.pct }}%</b></div>
               <div class="ctx-line"><span>{{ $t('ai.ctxWindow') }}</span><b class="mono">{{ fmtTok(ctx.window) }}</b></div>
+              <div class="ctx-line is-sub"><span>{{ $t('ai.ctxOutput') }}</span><b class="mono">{{ fmtTok(ctx.reserve) }}</b></div>
               <div class="ctx-line"><span>{{ $t('ai.ctxUsed') }}</span><b class="mono">{{ fmtTok(ctx.used) }}</b></div>
               <template v-if="ctx.parts">
                 <div class="ctx-line is-sub"><span>{{ $t('ai.ctxTools') }}</span><b class="mono">{{ fmtTok(ctx.parts.tools) }}</b></div>
@@ -312,40 +356,59 @@ const pad2 = (n) => (n < 10 ? '0' + n : String(n));
 const clip = (text, n) => (text.length > n ? text.slice(0, n) + '…' : text);
 const fmtS = (ms) => (Math.max(0, ms) / 1000).toFixed(1) + 's';
 const fmtK = (n) => (n >= 1000 ? Math.round(n / 100) / 10 + 'k' : String(n || 0));
+/** 圆环水位的空值：形状与主进程 context 事件一致，五处清零共用一份，避免漏掉某个字段。 */
+const EMPTY_CTX = Object.freeze({ window: 0, used: 0, pct: 0, parts: null, reserve: 0 });
 
 function newTurn(turnId) {
   return {
-    key: nextKey(), kind: 'turn', turnId, nodes: [],
-    running: true, open: true, started: Date.now(), ms: null, usage: null, label: '', live: '', liveStart: 0,
+    key: nextKey(), kind: 'turn', turnId, nodes: [], blk: {},
+    running: true, ms: null, usage: null, label: '', live: '', liveStart: 0, truncated: false,
   };
 }
 
 /**
- * 回合收尾：正文是答复，必须整段搬到回合外面（回合折叠后照样要能看见）。
- * 被命令或审批打断过就会留下多段 say，只搬最后一段等于把前半截答案永久藏进回合里。
- * 搬完空下来的回合整行去掉，只剩提问与答复，不留空回合。
+ * 按时间顺序把节点切成过程段：连续的思考/命令/审批聚成一段可折叠块，正文与压缩提示把它打断。
+ * 分段只是视图派生，节点始终留在 turn.nodes 里按原序排列，落盘格式不受影响。
  */
-function settleTurn(turn) {
-  const answer = turn.nodes
-    .filter((n) => n.nk === 'say')
-    .map((n) => n.text)
-    .filter((s) => String(s || '').trim())
-    .join('\n\n');
-  turn.nodes = turn.nodes.filter((n) => n.nk !== 'say');
-  turn.running = false;
-  turn.live = '';
-  if (!turn.nodes.length) return { dropped: true, answer };
-  turn.open = false;
-  return { dropped: false, answer };
+function splitSegments(turn) {
+  const segs = [];
+  for (const n of turn.nodes) {
+    // 压缩提示与正文一样是「用户要直接看到」的信息，不收进折叠块
+    if (n.nk === 'zip') { segs.push({ k: n.key, t: 'zip', node: n }); continue; }
+    if (n.nk === 'say') {
+      if (!n.typing && !String(n.text || '').trim()) continue;
+      segs.push({ k: n.key, t: 'say', node: n });
+      continue;
+    }
+    const last = segs[segs.length - 1];
+    if (last && last.t === 'steps') last.nodes.push(n);
+    else segs.push({ k: n.key, t: 'steps', nodes: [n] });
+  }
+  for (const s of segs) s.tail = false;
+  if (segs.length) segs[segs.length - 1].tail = true;
+  return segs;
 }
 
-/** 落盘记录 → 面板行：与实时事件走同一套「逻辑回合 + 末段答复」规则。 */
+/** 命令失败/非零退出/被拒、用户点了拒绝，才算这一段的失败；整轮被停止不算失败。 */
+const isBadStep = (n) => (n.nk === 'cmd' && (n.state === 'denied' || n.state === 'failed'
+  || (n.exitCode != null && n.exitCode !== 0)))
+  || (n.nk === 'ask' && n.decided === 'deny');
+
+/** 回合收尾：正文已经留在时间线上，只需收掉进行中的状态；整轮没有任何可见内容就删掉这一行。 */
+function closeTurn(turn) {
+  turn.running = false;
+  turn.live = '';
+  // 判空看分段而不是节点数：取消得早会留下只有空白的 say，那种回合照样不该留在面板上
+  return !splitSegments(turn).length;
+}
+
+/** 落盘记录 → 面板行：与实时事件走同一套节点序列，回放出的分段和实时排版一致。 */
 function rowsFromRecord(record) {
   const rows = [];
   let turn = null;
   const useTurn = () => {
     if (!turn) {
-      turn = { ...newTurn(''), running: false, open: false, started: 0 };
+      turn = { ...newTurn(''), running: false };
       rows.push(turn);
     }
     return turn;
@@ -357,6 +420,7 @@ function rowsFromRecord(record) {
     } else if (e.role === 'turn') {
       if (turn) {
         turn.ms = e.ms;
+        turn.truncated = !!e.truncated;
         turn.usage = e.promptTokens || e.completionTokens
           ? { promptTokens: e.promptTokens || 0, completionTokens: e.completionTokens || 0 }
           : null;
@@ -374,7 +438,7 @@ function rowsFromRecord(record) {
     } else if (e.role === 'approval') {
       useTurn().nodes.push({
         key: nextKey(), nk: 'ask', requestId: '', name: e.name, command: e.command || '', reason: e.reason || '',
-        readOnly: !!e.readOnly, decided: e.decision || 'allow', askedAt: 0, open: false,
+        readOnly: !!e.readOnly, decided: e.decision || 'deny', askedAt: 0, open: false,
       });
     } else if (e.role === 'choice') {
       useTurn().nodes.push({
@@ -385,14 +449,7 @@ function rowsFromRecord(record) {
       useTurn().nodes.push({ key: nextKey(), nk: 'zip', moved: e.moved, from: e.from, to: e.to });
     }
   }
-  const out = [];
-  for (const row of rows) {
-    if (row.kind !== 'turn') { out.push(row); continue; }
-    const settled = settleTurn(row);
-    if (!settled.dropped) out.push(row);
-    if (settled.answer) out.push({ key: nextKey(), kind: 'answer', text: settled.answer, typing: false });
-  }
-  return out;
+  return rows;
 }
 
 export default {
@@ -433,7 +490,7 @@ export default {
       sessionModel: null,
       modelKey: '',
       /** 圆环水位：窗口跟着本会话当前模型，用量是主进程真正要发给模型的那份估算。 */
-      ctx: { window: 0, used: 0, pct: 0, parts: null },
+      ctx: { ...EMPTY_CTX },
       permissions: AI_PERMISSIONS,
       /** 历史会话弹框：列表来自磁盘上的会话记录，当前会话未归档时以「live」虚拟行插在最前。 */
       historyOpen: false,
@@ -453,6 +510,19 @@ export default {
   computed: {
     available() {
       return !!(this.connected && this.sessionId);
+    },
+    /** 唯一还在等人的节点（审批或反问）。回放的记录早已带结论，不会命中这里。 */
+    pending() {
+      for (let i = this.items.length - 1; i >= 0; i--) {
+        const row = this.items[i];
+        if (row.kind !== 'turn') continue;
+        for (let j = row.nodes.length - 1; j >= 0; j--) {
+          const n = row.nodes[j];
+          if (n.nk === 'ask' && !n.decided) return n;
+          if (n.nk === 'choice' && n.state === 'waiting') return n;
+        }
+      }
+      return null;
     },
     capStyle() {
       return { maxHeight: this.actCap + 'px' };
@@ -541,7 +611,8 @@ export default {
       return this.ctx.pct >= 60 ? '#e6a23c' : '#409eff';
     },
     ctxLeft() {
-      return Math.max(0, (this.ctx.window || 0) - (this.ctx.used || 0));
+      // 减掉单次输出预留：否则「剩余」把同一块空间数了两遍，圆环与明细对不上
+      return Math.max(0, (this.ctx.window || 0) - (this.ctx.used || 0) - (this.ctx.reserve || 0));
     },
   },
   watch: {
@@ -618,7 +689,7 @@ export default {
       this.items = [];
       this.error = null;
       this.follow = true;
-      this.ctx = { window: 0, used: 0, pct: 0, parts: null };
+      this.ctx = { ...EMPTY_CTX };
       this.sessionPermission = '';
       this.sessionModel = null;
       this.sessionTitle = '';
@@ -646,13 +717,37 @@ export default {
         this.sessionTitle = r.title || '';
         this.recordId = r.recordId || '';
         this.items = rowsFromRecord(r.record);
-        this.ctx = r.context || { window: 0, used: 0, pct: 0, parts: null };
+        this.ctx = r.context || { ...EMPTY_CTX };
         // 上一轮还在跑（例如会话换了宿主）：记录里那条是已归档的片段，新事件另起一个进行中的回合
         this.running = !!r.running;
-        if (this.running) this.startTurn('');
+        if (this.running) this.hydratePending(this.startTurn(''), r.pending);
         this.follow = true;
         this.scrollToEnd();
       } catch (_) { /* 面板早于会话创建时拿不到历史，属正常 */ }
+    },
+
+    /**
+     * 待审批/待选择随历史一起交回：结论要到用户点完才落进 record，
+     * 所以面板重建（拆窗、重连、重开面板）后必须按主进程还在等的登记把卡片补回来，
+     * 否则输入框被 running 锁死，用户只能点停止。
+     */
+    hydratePending(turn, list) {
+      for (const p of list || []) {
+        if (!p || !p.requestId || this.findNode((n) => n.requestId === p.requestId)) continue;
+        const askedAt = Number(p.askedAt) || Date.now();
+        if (p.kind === 'choice') {
+          turn.nodes.push({
+            key: nextKey(), nk: 'choice', requestId: p.requestId, question: p.question || '',
+            options: p.options || [], picked: '', other: '', state: 'waiting', askedAt, open: false,
+          });
+        } else {
+          turn.nodes.push({
+            key: nextKey(), nk: 'ask', requestId: p.requestId, name: p.name || '', command: p.command || '',
+            reason: p.reason || '', readOnly: !!p.readOnly, decided: '', askedAt, open: false,
+          });
+        }
+        turn.live = '';
+      }
     },
 
     /**
@@ -711,7 +806,7 @@ export default {
         return;
       }
       if (ev.type === 'context') {
-        this.ctx = { window: ev.window, used: ev.used, pct: ev.pct, parts: ev.parts || null };
+        this.ctx = { window: ev.window, used: ev.used, pct: ev.pct, parts: ev.parts || null, reserve: ev.reserve || 0 };
         return;
       }
       if (ev.type === 'compress') {
@@ -727,7 +822,7 @@ export default {
         this.endThink(turn);
         turn.live = '';
         // 同一段正文要一直并在一行里追加：中间插进来的思考不能把答复切成两行。
-        // 命令/审批用 closeSay 收掉真正的段落边界，跨边界的几段在收尾时拼成一条答复搬出回合。
+        // 命令/审批用 closeSay 收掉真正的段落边界，边界之后的正文另起一行留在时间线上。
         const say = turn.nodes.filter((n) => n.nk === 'say' && n.typing).pop();
         if (say) say.text += ev.text || '';
         else turn.nodes.push({ key: nextKey(), nk: 'say', text: ev.text || '', typing: true });
@@ -789,10 +884,9 @@ export default {
         this.endThink(turn);
         this.closeSay(turn);
         turn.live = '';
-        turn.open = true;
         turn.nodes.push({
           key: nextKey(), nk: 'ask', requestId: ev.requestId, name: ev.name, command: ev.command || '',
-          reason: ev.reason || '', readOnly: !!ev.readOnly, decided: '', askedAt: Date.now(), open: true,
+          reason: ev.reason || '', readOnly: !!ev.readOnly, decided: '', askedAt: Number(ev.askedAt) || Date.now(), open: false,
         });
         this.needInput(this.$t('ai.needApproval'));
         this.stick();
@@ -800,10 +894,9 @@ export default {
       }
       if (ev.type === 'approval-resolved') {
         const node = this.findNode((n) => n.nk === 'ask' && n.requestId === ev.requestId);
-        if (node) {
-          node.decided = ev.reason === 'timeout' ? 'timeout' : 'deny';
-          node.open = false;
-        }
+        // 能走到这里只有「整轮被停止」或「会话结束」：审批不再有超时，没人点就一直挂着。
+        // 用户点过允许/拒绝就不会收到这条广播，所以已定结论不能被覆盖成「未执行」。
+        if (node && !node.decided) node.decided = ev.reason === 'canceled' ? 'canceled' : 'ended';
         return;
       }
       if (ev.type === 'ask') {
@@ -811,10 +904,9 @@ export default {
         this.endThink(turn);
         this.closeSay(turn);
         turn.live = '';
-        turn.open = true;
         turn.nodes.push({
           key: nextKey(), nk: 'choice', requestId: ev.requestId, question: ev.question || '',
-          options: ev.options || [], picked: '', state: 'waiting', askedAt: Date.now(), open: true,
+          options: ev.options || [], picked: '', other: '', state: 'waiting', askedAt: Number(ev.askedAt) || Date.now(), open: false,
         });
         this.needInput(this.$t('ai.needChoice'));
         this.stick();
@@ -822,10 +914,8 @@ export default {
       }
       if (ev.type === 'ask-resolved') {
         const node = this.findNode((n) => n.nk === 'choice' && n.requestId === ev.requestId);
-        if (node) {
-          node.state = 'skipped';
-          node.open = false;
-        }
+        // 用户已经答过就不会有这条广播；晚到的广播不能把「你的选择」擦成「未做选择」
+        if (node && node.state === 'waiting') node.state = 'skipped';
         return;
       }
       if (ev.type === 'screen-request') {
@@ -839,12 +929,9 @@ export default {
         this.closeSay(turn);
         turn.ms = ev.ms;
         turn.usage = ev.usage || null;
-        turn.label = ev.error
-          ? this.$t(ev.error.code === 'AI_MAX_TURNS' ? 'ai.turnUnfinished' : 'ai.turnStopped')
-          : '';
-        const settled = settleTurn(turn);
-        if (settled.dropped) this.removeTurn(turn);
-        if (settled.answer) this.items.push({ key: nextKey(), kind: 'answer', text: settled.answer, typing: false });
+        turn.truncated = !!ev.truncated;
+        turn.label = ev.error ? this.$t(this.turnLabelKey(ev.error.code)) : '';
+        if (closeTurn(turn)) this.removeTurn(turn);
         // 第一轮提问起记录就存在，主进程把 id 带回来，面板立刻知道自己是「哪一条历史」
         if (ev.recordId) this.recordId = ev.recordId;
         this.error = ev.error && ev.error.code !== 'AI_CANCELED' ? ev.error : null;
@@ -868,36 +955,58 @@ export default {
       this.$emit('need-input', why);
     },
 
-    toggleTurn(turn) {
-      turn.open = !turn.open;
-      if (turn.open) this.stick();
-    },
-    turnOpen(turn) {
-      return !!turn.open;
-    },
     toggleNode(node) {
       node.open = !node.open;
       if (node.open) this.stick();
     },
 
-    headStat(turn) {
-      const ms = turn.running ? this.tickNow - turn.started : turn.ms;
-      if (ms == null) return turn.label || '';
-      return fmtS(ms) + (turn.label ? ' · ' + turn.label : '');
+    segments(turn) {
+      return splitSegments(turn);
     },
-    headCount(turn) {
-      // 中间正文不算「步」，否则一段长答复会被数成几十步；压缩行同理，它不是模型的动作
-      const steps = turn.nodes.filter((n) => n.nk !== 'say' && n.nk !== 'zip');
+    /** 只有还在进行中的末段算「live」：正文一出现或整轮结束，上一段过程就自动收起。 */
+    blkLive(turn, seg) {
+      return turn.running && !!seg.tail;
+    },
+    blkOpen(turn, seg) {
+      const st = turn.blk[seg.k];
+      return st == null ? this.blkLive(turn, seg) : !!st;
+    },
+    toggleBlk(turn, seg) {
+      this.$set(turn.blk, seg.k, !this.blkOpen(turn, seg));
+      if (turn.blk[seg.k]) this.stick();
+    },
+    blkStat(seg) {
+      // 段内耗时只累计思考与命令本身，网络等待不计；没有可计的时间就不显示
+      let ms = 0;
+      for (const n of seg.nodes) {
+        if (n.nk === 'think') ms += n.running ? this.tickNow - n.startedAt : n.ms || 0;
+        else if (n.nk === 'cmd') ms += n.ms || 0;
+      }
+      return ms > 0 ? fmtS(ms) : '';
+    },
+    blkCount(seg) {
       const parts = [];
-      if (steps.length) parts.push(this.$t('ai.turnSteps', { n: steps.length }));
-      const cmds = steps.filter((n) => n.nk === 'cmd').length;
+      if (seg.nodes.length) parts.push(this.$t('ai.turnSteps', { n: seg.nodes.length }));
+      const cmds = seg.nodes.filter((n) => n.nk === 'cmd').length;
       if (cmds) parts.push(this.$t('ai.turnCmds', { n: cmds }));
+      const bad = seg.nodes.filter(isBadStep).length;
+      if (bad) parts.push(this.$t('ai.turnFailed', { n: bad }));
       return parts.join(' · ');
     },
-    usageText(turn) {
+    turnFoot(turn) {
+      const parts = [];
+      if (turn.label) parts.push(turn.label);
+      if (turn.ms != null) parts.push(fmtS(turn.ms));
       const u = turn.usage;
-      if (!u || !(u.promptTokens || u.completionTokens)) return '';
-      return this.$t('ai.turnUsage', { in: fmtK(u.promptTokens), out: fmtK(u.completionTokens) });
+      if (u && (u.promptTokens || u.completionTokens)) {
+        parts.push(this.$t('ai.turnUsage', { in: fmtK(u.promptTokens), out: fmtK(u.completionTokens) }));
+      }
+      return parts.join(' · ');
+    },
+    /** 收尾标注要跟着结束原因变：网关报错、鉴权失败说成「已停止」会把故障伪装成用户点了停止。 */
+    turnLabelKey(code) {
+      if (code === 'AI_MAX_TURNS') return 'ai.turnUnfinished';
+      return code === 'AI_CANCELED' ? 'ai.turnStopped' : 'ai.turnError';
     },
     elapsed(from) {
       return from ? fmtS(this.tickNow - from) : '';
@@ -911,37 +1020,56 @@ export default {
       if (!this.available || !api.aiHistory) return;
       try {
         const r = unwrap(await api.aiHistory({ sessionId: this.sessionId, modelRef: this.modelRef }));
-        if (!this._disposed && r) this.ctx = r.context || { window: 0, used: 0, pct: 0, parts: null };
+        if (!this._disposed && r) this.ctx = r.context || { ...EMPTY_CTX };
       } catch (_) { /* 拿不到水位不影响提问 */ }
+    },
+
+    /** 工具名是模型侧的稳定标识，界面要显示本地化的说法。 */
+    toolName(name) {
+      return name === 'read_terminal_screen' ? this.$t('ai.toolReadScreen') : name;
     },
 
     actClass(node) {
       if (node.nk === 'think') return node.running ? 'is-think is-live' : 'is-think';
-      if (node.nk === 'cmd') return node.state === 'running' ? 'is-live' : node.state === 'denied' ? 'is-deny' : 'is-ok';
-      if (node.nk === 'ask') return node.decided ? (node.decided === 'allow' ? 'is-ok' : 'is-deny') : 'is-ask';
+      if (node.nk === 'cmd') {
+        if (node.state === 'running') return 'is-live';
+        if (node.state === 'stopped') return 'is-ask';
+        return node.state === 'denied' || node.state === 'failed' ? 'is-deny' : 'is-ok';
+      }
+      if (node.nk === 'ask') {
+        if (!node.decided) return 'is-ask';
+        if (node.decided === 'allow') return 'is-ok';
+        return node.decided === 'deny' ? 'is-deny' : 'is-ask';
+      }
       if (node.nk === 'choice') return node.state === 'waiting' ? 'is-ask' : node.picked ? 'is-ok' : 'is-deny';
       return '';
     },
     nodeIcon(node) {
       if (node.nk === 'think') return 'el-icon-magic-stick';
-      if (node.nk === 'cmd') return node.state === 'denied' ? 'el-icon-circle-close' : 'el-icon-monitor';
+      if (node.nk === 'cmd') {
+        if (node.state === 'denied' || node.state === 'failed') return 'el-icon-circle-close';
+        if (node.state === 'stopped') return 'el-icon-warning-outline';
+        return 'el-icon-monitor';
+      }
       if (node.nk === 'ask') {
         if (!node.decided) return 'el-icon-warning';
-        return node.decided === 'allow' ? 'el-icon-circle-check' : 'el-icon-circle-close';
+        if (node.decided === 'allow') return 'el-icon-circle-check';
+        return node.decided === 'deny' ? 'el-icon-circle-close' : 'el-icon-warning-outline';
       }
       if (node.state === 'waiting') return 'el-icon-question';
       return node.picked ? 'el-icon-circle-check' : 'el-icon-circle-close';
     },
     nodeTitle(node) {
       if (node.nk === 'think') return this.$t(node.running ? 'ai.thinkRunning' : 'ai.thinkDone');
-      if (node.nk === 'cmd') return node.command || (node.name === 'read_terminal_screen' ? this.$t('ai.toolReadScreen') : node.name);
+      if (node.nk === 'cmd') return node.command || this.toolName(node.name);
       const cmd = node.command || node.name;
       if (node.nk === 'ask') {
         if (!node.decided) return this.$t('ai.askTitle', { cmd });
-        if (node.decided === 'timeout') return this.$t('ai.askTimeout', { cmd });
-        return this.$t(node.decided === 'allow' ? 'ai.askAllowed' : 'ai.askDenied', { cmd });
+        if (node.decided === 'allow' || node.decided === 'deny') return this.$t(node.decided === 'allow' ? 'ai.askAllowed' : 'ai.askDenied', { cmd });
+        return this.$t('ai.askTimeout', { cmd });
       }
-      if (node.state === 'waiting') return node.question;
+      // 等待时问题在卡片正文里，标题只标状态，否则长问题会被头部裁成半句话
+      if (node.state === 'waiting') return this.$t('ai.choiceAsk');
       return node.picked ? this.$t('ai.choicePicked') : this.$t('ai.choiceSkipped');
     },
     nodeStat(node) {
@@ -949,10 +1077,11 @@ export default {
       if (node.nk === 'cmd') {
         if (node.state === 'running') return this.$t('ai.stateRunning');
         if (node.state === 'denied') return this.$t('ai.stateDenied');
+        if (node.state === 'stopped') return this.$t('ai.stateStopped');
         const secs = node.ms ? ' · ' + fmtS(node.ms) : '';
-        return node.exitCode === null || node.exitCode === undefined
-          ? this.$t('ai.stateDone') + secs
-          : this.$t('ai.stateExit', { code: node.exitCode }) + secs;
+        const exit = node.exitCode == null || node.exitCode === 0 ? '' : ' · ' + this.$t('ai.stateExit', { code: node.exitCode });
+        if (node.state === 'failed') return this.$t('ai.stateFailed') + exit + secs;
+        return this.$t('ai.stateDone') + secs;
       }
       if (node.nk === 'ask') return node.decided ? this.$t('ai.decided.' + node.decided) : this.$t('ai.approveWait') + ' ' + this.elapsed(node.askedAt);
       if (node.state === 'waiting') return this.$t('ai.choiceWait') + ' ' + this.elapsed(node.askedAt);
@@ -1022,7 +1151,7 @@ export default {
       this.sessionTitle = '';
       this.recordId = '';
       this.editingId = '';
-      this.ctx = { window: 0, used: 0, pct: 0, parts: null };
+      this.ctx = { ...EMPTY_CTX };
       this.refreshContext();
     },
 
@@ -1051,19 +1180,22 @@ export default {
     /** 未归档的当前对话也占一行，否则用户看不到「正在写的这条」在哪。 */
     liveRow() {
       if (!this.items.length || this.recordId) return null;
-      const texts = this.items.filter((i) => i.kind === 'user' || i.kind === 'answer');
-      const last = texts[texts.length - 1];
-      // 与落盘记录的 steps 同口径：只数命令、审批与反问，正文和思考不算
+      const texts = [];
+      // 列表摘要只关心看得见的内容：提问与正文算消息，命令、审批算步骤
       let nodes = 0;
       for (const i of this.items) {
+        if (i.kind === 'user') { texts.push(i.text); continue; }
         if (i.kind !== 'turn') continue;
-        nodes += i.nodes.filter((n) => n.nk === 'cmd' || n.nk === 'ask' || n.nk === 'choice').length;
+        for (const n of i.nodes) {
+          if (n.nk === 'say' && String(n.text || '').trim()) texts.push(n.text);
+          if (n.nk === 'cmd' || n.nk === 'ask' || n.nk === 'choice') nodes += 1;
+        }
       }
       const at = Date.now();
       return {
-        id: 'live', isLive: true, title: this.sessionTitle, updatedAt: at, timeText: this.fmtTime(at),
+        id: 'live', isLive: true, title: this.sessionTitle, updatedAt: at,
         messages: texts.length, steps: nodes,
-        preview: clip(String((last && last.text) || ''), 160),
+        preview: clip(String(texts[texts.length - 1] || ''), 160),
       };
     },
 
@@ -1166,37 +1298,44 @@ export default {
 
     async decide(node, decision) {
       node.decided = decision;
-      node.open = false;
       if (!api.aiApprove) return;
       try {
         const r = unwrap(await api.aiApprove({ sessionId: this.sessionId, requestId: node.requestId, decision }));
-        if (r && r.ok === false) { node.decided = ''; node.open = true; }
+        // stale 说明主进程早已把这条审批结掉（整轮被停止或会话结束）。把卡片恢复成可点只会永远点不动，
+        // 所以按「未执行」收场，命令本身确定没有跑过。
+        if (r && r.ok === false) node.decided = 'canceled';
       } catch (e) {
         node.decided = '';
-        node.open = true;
         this.error = { code: e.code || 'AI_REQUEST', message: e.message };
       }
     },
 
     /** 反问的答复同样走 ai:approve，只是 decision 换成选中的那一项文本；不选就什么都不发。 */
-    async pick(node, option) {
+    async pick(node, option, freeform) {
       node.picked = option;
       node.state = 'picked';
-      node.open = false;
       if (!api.aiApprove) return;
       try {
-        const r = unwrap(await api.aiApprove({ sessionId: this.sessionId, requestId: node.requestId, choice: option }));
-        if (r && r.ok === false) { node.picked = ''; node.state = 'waiting'; node.open = true; }
+        const r = unwrap(await api.aiApprove({ sessionId: this.sessionId, requestId: node.requestId, choice: option, freeform: !!freeform }));
+        if (r && r.ok === false) { node.picked = ''; node.state = 'skipped'; }
       } catch (e) {
         node.picked = '';
         node.state = 'waiting';
-        node.open = true;
         this.error = { code: e.code || 'AI_REQUEST', message: e.message };
       }
     },
 
+    /** 「其他」的自由文本：提问期间输入框是锁的，只能在卡片里回答。 */
+    submitOther(node) {
+      const text = String(node.other || '').trim().slice(0, 200);
+      if (!text || node.state !== 'waiting') return;
+      node.other = '';
+      this.pick(node, text, true);
+    },
+
     async setPermission(id) {
-      if (id === this.permission || this.savingPermission) return;
+      const follow = id === 'default';
+      if (this.savingPermission || (follow ? !this.sessionPermission : id === this.permission)) return;
       if (id === 'full') {
         try {
           await this.$confirm(t('ai.fullWarn'), t('ai.fullTitle'), {
@@ -1209,8 +1348,8 @@ export default {
       if (!api.aiSetPermission) { this.error = { code: 'NO_BRIDGE', message: t('msg.needElectron') }; return; }
       this.savingPermission = true;
       try {
-        unwrap(await api.aiSetPermission({ sessionId: this.sessionId, permission: id }));
-        this.sessionPermission = id;
+        unwrap(await api.aiSetPermission({ sessionId: this.sessionId, permission: follow ? '' : id }));
+        this.sessionPermission = follow ? '' : id;
       } catch (e) {
         this.error = { code: e.code || 'AI_REQUEST', message: e.message };
       } finally {
@@ -1416,17 +1555,21 @@ export default {
   animation: ai-blink 1s steps(1) infinite;
 }
 @keyframes ai-blink { 50% { opacity: 0; } }
-/* 一次提问 = 一个逻辑回合，但视觉上不是一座卡片：头部一行灰字，步骤缩进在左侧细线里逐行排列 */
+/* 一次提问 = 一个逻辑回合，但视觉上不是一座卡片：正文平铺在时间线上，过程按段折叠并缩进在左侧细线里 */
+.turn {
+  display: flex; flex-direction: column; gap: 5px;
+}
+.blk { display: flex; flex-direction: column; }
 .turn-head {
   display: flex; align-items: center; gap: 6px; width: 100%; padding: 2px 0;
   border: none; background: none; color: var(--text-3); cursor: pointer; font-size: 11.5px; text-align: left;
 }
 .turn-head:hover { color: var(--text-2); }
 .turn-head .h-ico { font-size: 12px; color: var(--text-3); flex: none; }
-.turn.is-live .turn-head .h-ico { color: var(--accent); }
-.turn.is-done .turn-head .h-ico { color: var(--success); }
+.blk.is-live .h-ico { color: var(--accent); }
+.blk.is-done .h-ico { color: var(--success); }
 .h-title { font-weight: 600; color: var(--text-2); white-space: nowrap; }
-.turn.is-done .h-title { color: var(--text-3); font-weight: 500; }
+.blk.is-done .h-title { color: var(--text-3); font-weight: 500; }
 .h-stat { color: var(--text-3); white-space: nowrap; }
 .h-count { margin-left: auto; color: var(--text-3); font-size: 10.5px; white-space: nowrap; }
 .h-caret { font-size: 11px; color: var(--text-3); flex: none; }
@@ -1470,7 +1613,6 @@ export default {
   content: ''; display: inline-block; width: 5px; height: 11px; margin-left: 2px;
   background: var(--think); vertical-align: -1px; animation: ai-blink 1s steps(1) infinite;
 }
-.say { color: var(--text); line-height: 1.7; padding: 2px 0; }
 .zip-line {
   display: flex;
   align-items: center;
@@ -1503,17 +1645,38 @@ export default {
   text-align: left; padding: 6px 9px; border-radius: 6px; cursor: pointer; font-size: 11.5px;
   border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text);
 }
-.choice:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.choice:hover:not(.is-static) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .choice .k { color: var(--text-3); margin-right: 7px; font-family: Consolas, "Courier New", monospace; }
 .choice.is-picked { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); cursor: default; }
 .choice.is-dim { opacity: 0.45; cursor: default; }
-.choice:disabled { cursor: not-allowed; }
+.choice.is-static { cursor: default; }
+.choice-q { font-size: 11.5px; color: var(--text-2); line-height: 1.6; }
+.choice-other { display: flex; align-items: center; gap: 6px; }
+.choice-other .el-input { flex: 1; min-width: 0; }
+.choice-custom { font-size: 11px; color: var(--text-2); line-height: 1.6; word-break: break-all; }
+.turn-truncated {
+  display: flex; align-items: flex-start; gap: 5px; padding: 2px 4px;
+  font-size: 10.5px; line-height: 1.6; color: var(--warning);
+}
+.turn-truncated i { font-size: 12px; line-height: 1.5; }
 .back-tail {
   position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 2;
   padding: 3px 11px; border-radius: 999px; cursor: pointer; font-size: 10.5px;
   background: var(--bg-elevated); border: 1px solid var(--accent); color: var(--accent);
 }
 .back-tail:hover { background: var(--accent-soft); }
+.ai-pin {
+  flex: 0 0 auto;
+  max-height: 42%;
+  overflow-y: auto;
+  padding: 8px 9px 9px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--accent);
+}
+.pin-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text); }
+.pin-head i { font-size: 13px; color: var(--warning); }
+.pin-title { flex: 1; min-width: 0; font-weight: 600; }
+.pin-wait { font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
 .ai-input { flex: 0 0 auto; border-top: 1px solid var(--border); background: var(--bg-panel); padding: 7px 9px 9px; }
 .ai-box {
   border: 1px solid var(--border);

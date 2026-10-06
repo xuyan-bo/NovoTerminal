@@ -6,14 +6,16 @@ function execError(code, message) {
   return Object.assign(new Error(message), { code });
 }
 
-/** Run one command over an ssh2 client and collect its decoded output. */
-function exec(client, command, charset, timeoutMs, timeoutCode) {
+/** Run one command over an ssh2 client and collect its decoded output.
+ *  signal 可选：外部中止与超时走同一条销毁路径，都带上已经收到的输出。 */
+function exec(client, command, charset, timeoutMs, timeoutCode, signal) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let channel;
     let stdout = '';
     let stderr = '';
     let decoder;
+    let onAbort;
     try {
       decoder = iconv.getDecoder(charset || 'UTF-8');
     } catch (_) {
@@ -23,14 +25,24 @@ function exec(client, command, charset, timeoutMs, timeoutCode) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
       fn(arg);
     };
-    const timer = setTimeout(() => {
+    const kill = (code, message) => {
       try { if (channel) channel.close(); } catch (_) {}
       try { if (channel) channel.destroy(); } catch (_) {}
-      // 超时也带上已收到的输出：调用方要靠它判断命令跑到哪一步
-      finish(reject, Object.assign(execError(timeoutCode || DEFAULT_TIMEOUT_CODE, 'remote command timed out'), { stdout, stderr }));
-    }, timeoutMs);
+      // 超时与中止都带上已收到的输出：调用方要靠它判断命令跑到哪一步
+      finish(reject, Object.assign(execError(code, message), { stdout, stderr }));
+    };
+    const timer = setTimeout(() => kill(timeoutCode || DEFAULT_TIMEOUT_CODE, 'remote command timed out'), timeoutMs);
+    if (signal) {
+      if (signal.aborted) {
+        finish(reject, execError('SSH_EXEC_CANCELED', 'remote command canceled'));
+        return;
+      }
+      onAbort = () => kill('SSH_EXEC_CANCELED', 'remote command canceled');
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
     try {
       client.exec(command, (err, chan) => {
         if (err) return finish(reject, err);
@@ -41,13 +53,14 @@ function exec(client, command, charset, timeoutMs, timeoutCode) {
         channel = chan;
         chan.on('data', (data) => { stdout += decoder.write(Buffer.from(data)); });
         if (chan.stderr) chan.stderr.on('data', (data) => { stderr += decoder.write(Buffer.from(data)); });
-        chan.on('close', () => {
+        chan.on('close', (code) => {
           if (settled) return;
           try {
             stdout += decoder.end();
             stderr += decoder.end();
           } catch (_) {}
-          finish(resolve, { stdout, stderr });
+          // ssh2 在进程被信号杀死时给出 code=null，归一成 null 让调用方不必区分两种「拿不到退出码」
+          finish(resolve, { stdout, stderr, code: Number.isInteger(code) ? code : null });
         });
         chan.on('error', (e) => finish(reject, e));
       });

@@ -762,7 +762,7 @@ const DEFINITIONS = [
     type: 'function',
     function: {
       name: 'ask_user',
-      description: '向用户提一个带候选项的问题。只在「信息不足以决定下一步，且选错方向代价明显」时使用，例如要清理哪些目录、重启哪个服务；用户可以选择某一项，也可以直接在输入框里自由回答。不要用它的结果代替命令执行结果。',
+      description: '向用户提一个带候选项的问题。只在「信息不足以决定下一步，且选错方向代价明显」时使用，例如要清理哪些目录、重启哪个服务；用户可以选择某一项，也可以在候选项下面的输入框里自由回答。不要用它的结果代替命令执行结果。',
       parameters: {
         type: 'object',
         properties: {
@@ -776,10 +776,10 @@ const DEFINITIONS = [
 ];
 
 /**
- * @param {object} ctx { sessionId, target, cwd, settings, requestApproval, requestChoice, readScreen, log }
+ * @param {object} ctx { sessionId, target, cwd, settings, requestApproval, requestChoice, readScreen, signal, log }
  */
 function createTools(ctx) {
-  const { sessionId, target, cwd, settings, requestApproval, requestChoice, readScreen, log } = ctx;
+  const { sessionId, target, cwd, settings, requestApproval, requestChoice, readScreen, signal, log } = ctx;
   let family = 'posix';
   let shell = 'posix';
   let probed = false;
@@ -801,10 +801,13 @@ function createTools(ctx) {
   async function runCommand(command, opts = {}) {
     await resolveShell();
     const readOnly = isReadOnly(command, family);
-    if (!readOnly && settings.permission !== 'full') {
+    // ask 档连只读命令也要过目（与设置文案、系统提示一致），只有 full 档彻底不问
+    if (settings.permission !== 'full' && (settings.permission === 'ask' || !readOnly)) {
       const decision = await requestApproval({ name: 'run_command', command, readOnly, reason: opts.rationale || '' });
-      if (decision === 'deny') {
-        return { channel: 'exec', denied: true, text: '用户拒绝执行这条命令。不要重试同一条命令，改用只读方式获取信息或直接说明无法完成。' };
+      if (decision !== 'allow') {
+        return decision === 'deny'
+          ? { channel: 'exec', denied: 'deny', text: '用户拒绝执行这条命令。不要重试同一条命令，改用只读方式获取信息或直接说明无法完成。' }
+          : { channel: 'exec', denied: decision, text: '这一轮已经结束，这条命令没有执行。' };
       }
     }
     // 审批可能等上很久，只有过了这道门才算真正开始执行
@@ -820,14 +823,22 @@ function createTools(ctx) {
     const started = Date.now();
     let out;
     try {
-      out = await exec(target.client, line, target.charset, settings.commandTimeoutSec * 1000, 'AI_EXEC_TIMEOUT');
+      out = await exec(target.client, line, target.charset, settings.commandTimeoutSec * 1000, 'AI_EXEC_TIMEOUT', signal);
     } catch (error) {
-      log && log.warn('ai', 'ai exec command failed', { sessionId, host: target.host, message: error.message, code: error.code });
       const partial = String(error.stdout || '') + (error.stderr ? '\n[stderr]\n' + error.stderr : '');
-      return { channel: 'exec', text: '命令执行失败：' + error.message + (partial.trim() ? '\n已取得的输出：\n' + clip(partial) : '') };
+      // 用户点了停止：命令通道被销毁，把这一条当成「没跑成」如实回报，而不是失败报错
+      if (error.code === 'SSH_EXEC_CANCELED') {
+        log && log.info('ai', 'ai exec command canceled', { sessionId, host: target.host, ms: Date.now() - started, command: command.slice(0, 200) });
+        return { channel: 'exec', canceled: true, text: '用户已停止这一轮，命令通道被销毁。' + (partial.trim() ? '已取得的输出：\n' + clip(partial) : '') };
+      }
+      log && log.warn('ai', 'ai exec command failed', { sessionId, host: target.host, message: error.message, code: error.code });
+      return { channel: 'exec', failed: true, text: '命令执行失败：' + error.message + (partial.trim() ? '\n已取得的输出：\n' + clip(partial) : '') };
     }
-    log && log.info('ai', 'ai exec command finished', { sessionId, host: target.host, ms: Date.now() - started, command: command.slice(0, 200) });
-    return { channel: 'exec', text: clip(out.stdout) + (out.stderr ? '\n[stderr]\n' + clip(out.stderr, 2000) : '') };
+    // 非零退出必须让模型看见：过去只回正文，`'(no output)'` 把失败伪装成成功
+    const code = Number.isInteger(out.code) ? out.code : null;
+    log && log.info('ai', 'ai exec command finished', { sessionId, host: target.host, ms: Date.now() - started, exitCode: code, command: command.slice(0, 200) });
+    const body = clip(out.stdout) + (out.stderr ? '\n[stderr]\n' + clip(out.stderr, 2000) : '');
+    return { channel: 'exec', exitCode: code, text: code && code !== 0 ? body + (body ? '\n' : '') + '[exit ' + code + ']' : body };
   }
 
   async function invoke(call, onStart) {
@@ -857,14 +868,18 @@ function createTools(ctx) {
       if (!options.length) throw aiToolError('AI_ARGS', 'options required');
       const picked = await requestChoice({ question, options });
       if (!picked) {
-        return { channel: 'ask', text: '用户没有做出选择（超时或本轮已停止）。不要重复同一个问题，按已知信息给出结论，或直接说明还缺什么。' };
+        return { channel: 'ask', text: '用户没有做出选择（这一轮已被停止）。不要重复同一个问题，按已知信息给出结论，或直接说明还缺什么。' };
       }
       return { channel: 'ask', text: '用户选择：' + picked };
     }
     throw aiToolError('AI_UNKNOWN_TOOL', 'unknown tool: ' + String(call.name).slice(0, 60));
   }
 
-  return { definitions: DEFINITIONS, invoke };
+  // 关了读屏就别把 read_terminal_screen 报给模型：它既占上下文，又骗模型花一整轮去调一个注定拿不到内容的工具
+  const definitions = settings.readScreen
+    ? DEFINITIONS
+    : DEFINITIONS.filter((d) => d.function.name !== 'read_terminal_screen');
+  return { definitions, invoke };
 }
 
 module.exports = { createTools };

@@ -504,8 +504,24 @@ function unwrap(result) {
   return result;
 }
 
+/** 去掉 AI 服务里的 API Key，其余字段原样保留。 */
+function withoutAiKeys(settings) {
+  const ai = settings && settings.ai;
+  if (!ai || !Array.isArray(ai.services)) return settings;
+  return { ...settings, ai: { ...ai, services: ai.services.map((s) => ({ ...s, apiKey: '' })) } };
+}
+
+/** Key 只有设置页用得上，所以只交给宿主窗口；拆分窗与 SFTP 窗拿到的副本一律去掉 Key。 */
+function isMainWindow(sender) {
+  return !!win && !win.isDestroyed() && BrowserWindow.fromWebContents(sender) === win;
+}
+
 function registerIpc() {
-  handle('store:snapshot', () => store.snapshot());
+  // 快照会进每个窗口的 store，AI 配置里的凭据不能跟着扩散
+  handle('store:snapshot', () => {
+    const snap = store.snapshot();
+    return snap && snap.settings ? { ...snap, settings: withoutAiKeys(snap.settings) } : snap;
+  });
   handle('clipboard:read-text', () => {
     try {
       return clipboard.readText() || '';
@@ -536,7 +552,10 @@ function registerIpc() {
   handle('store:update-asset', (aid, p) => unwrap(store.updateAsset(aid, p)));
   handle('store:delete-asset', (aid) => unwrap(store.deleteAsset(aid)));
   handle('store:remove-recent', (p) => unwrap(store.removeRecent(p && p.id, p && p.method)));
-  handle('store:settings', () => store.getSettings());
+  handle('store:settings', (sender) => {
+    const s = store.getSettings();
+    return isMainWindow(sender) ? s : withoutAiKeys(s);
+  }, true);
   handle('store:update-settings', (patch) => {
     const clean = patch && typeof patch === 'object' ? { ...patch } : {};
     // AI 配置由主进程收敛类型与取值范围，渲染端递来的对象不直接落盘
@@ -774,28 +793,42 @@ function registerIpc() {
     const model = typeof (req && req.model) === 'string' ? req.model.slice(0, 120) : '';
     return { baseUrl, apiKey, model };
   }
-  handle('ai:test', async (req) => {
+  /** 日志只留协议+主机+端口+路径：有人把凭据写进 URL（userinfo 或 query）时不能跟着进日志文件。 */
+  function safeBaseUrl(baseUrl) {
+    try {
+      const u = new URL(baseUrl);
+      u.username = '';
+      u.password = '';
+      u.search = '';
+      u.hash = '';
+      return u.toString();
+    } catch (_) {
+      return '';
+    }
+  }
+  // 这两条通道带着用户填的 baseUrl 与 Key 出网，和其他 AI 通道一样只接受可信渲染来源
+  handle('ai:test', async (sender, req) => {
     const probe = aiProbe(req);
     try {
       const r = await testConnection(probe);
-      logger.info('ai', 'ai service test ok', { baseUrl: probe.baseUrl, via: r.via, ms: r.ms });
+      logger.info('ai', 'ai service test ok', { baseUrl: safeBaseUrl(probe.baseUrl), via: r.via, ms: r.ms });
       return r;
     } catch (e) {
-      logger.warn('ai', 'ai service test failed', { baseUrl: probe.baseUrl, code: e.code || 'AI_REQUEST', message: e.message });
+      logger.warn('ai', 'ai service test failed', { baseUrl: safeBaseUrl(probe.baseUrl), code: e.code || 'AI_REQUEST', message: e.message });
       throw e;
     }
-  });
-  handle('ai:models', async (req) => {
+  }, true);
+  handle('ai:models', async (sender, req) => {
     const probe = aiProbe(req);
     try {
       const r = await listModels(probe);
-      logger.info('ai', 'ai model list fetched', { baseUrl: probe.baseUrl, ms: r.ms, models: r.models.length });
+      logger.info('ai', 'ai model list fetched', { baseUrl: safeBaseUrl(probe.baseUrl), ms: r.ms, models: r.models.length });
       return r;
     } catch (e) {
-      logger.warn('ai', 'ai model list failed', { baseUrl: probe.baseUrl, code: e.code || 'AI_REQUEST', message: e.message });
+      logger.warn('ai', 'ai model list failed', { baseUrl: safeBaseUrl(probe.baseUrl), code: e.code || 'AI_REQUEST', message: e.message });
       throw e;
     }
-  });
+  }, true);
 
   /**
    * Re-host an existing SSH session in the window that currently owns the tab, without

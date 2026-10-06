@@ -19,14 +19,42 @@ const {
   trimToFit, splitForDigest, digestMessage, digestSource,
 } = require('./aiContext');
 
-const APPROVAL_TIMEOUT_MS = 120000;
 const SCREEN_TIMEOUT_MS = 3000;
 const TITLE_CHARS = 40;
-/** 网关常在正文之后补一两个字符的 reasoning 尾巴，凑不出一次思考，达不到这个长度就当没发生。 */
+/** 思考增量攒够这个长度才开播，避免把网关的收尾噪声显示成一次思考。 */
 const MIN_REASON_CHARS = 12;
+/**
+ * 单次输出上限按模型窗口推：窗口的 1/8，夹在 [1024, 8192]。
+ * 窗口大不代表能吐得多——输出上限在真实模型上是独立的一条线（128k 窗口的 GLM-4 只给 4k，
+ * DeepSeek-V3 给 8k），所以这里取「几乎所有模型都接受」的 8192 当天花板，超出的部分靠逐档降载。
+ */
+const OUTPUT_RATIO = 0.125;
+const OUTPUT_MIN = 1024;
+const OUTPUT_MAX = 8192;
+/** 降载的下限：再低就写不完整段答复，不如把网关的报错如实抛给用户。 */
+const OUTPUT_FLOOR = 512;
+/** 只有「这次要的输出太多」这一类拒绝才值得砍 max_tokens；模型名、鉴权错砍了也没用。 */
+const OUTPUT_REJECT = /max[_ ]?tokens?|maximum context|context length|too long|exceed|output length/i;
+/**
+ * 但「光输入就超窗口」砍输出没有意义——prompt 是固定的，砍到底还是 400，
+ * 只是白跑五趟。这种报错里没提输出/max_tokens 时直接把网关原文抛给用户。
+ */
+const INPUT_OVERFLOW = /\b(input|prompt)[\s\S]{0,40}(length|tokens?|too long|too large|exceed)/i;
 
 function aiError(code, message) {
   return Object.assign(new Error(message), { code });
+}
+
+/**
+ * 工具这一步的真实结果：被拒、被停止、失败与成功必须区分开，
+ * 否则一条报错的命令在折叠头上也显示「已完成」。
+ */
+function stepState(outcome, exitCode) {
+  // 审批在等待中被停止或会话结束：命令没跑，但不是用户点了拒绝，状态要和审批卡片讲同一个故事
+  if (outcome.canceled || (outcome.denied && outcome.denied !== 'deny')) return 'stopped';
+  if (outcome.denied) return 'denied';
+  if (outcome.channel === 'error' || outcome.failed || (exitCode != null && exitCode !== 0)) return 'failed';
+  return 'done';
 }
 
 /** 没改名时用首条用户提问当会话名；留空由界面按「未命名会话」显示。 */
@@ -46,7 +74,7 @@ class AiManager {
     this.conversations = new Map(); // sessionId -> conversation
     /** 会话内的偏好覆盖（审批级别、模型）；没有覆盖的项跟随设置里的默认值，随会话一起销毁。 */
     this.overrides = new Map(); // sessionId -> { permission?, modelRef? }
-    this.pendingScreens = new Map(); // requestId -> { resolve, timer }
+    this.pendingScreens = new Map(); // requestId -> { sessionId, resolve, timer }
   }
 
   settings() {
@@ -62,6 +90,8 @@ class AiManager {
         turnSeq: 0, turnId: '',
         /** 估算系数：真实 usage.prompt_tokens / 上一轮估算，让没有 tokenizer 的估算越跑越准。 */
         tokenRatio: 1,
+        /** 按模型记的降载结果（model id -> token 数）：网关嫌输出太大时学到一次就够用一整场会话。 */
+        outputCaps: {},
         /** 最近一次的预算快照，面板圆环与落盘都读它。 */
         context: null,
         /** 一次提问里最多压缩一次，避免多轮工具调用把压缩请求刷成后台任务。 */
@@ -216,7 +246,7 @@ class AiManager {
     conv.tokenRatio = ratio >= 0.4 && ratio <= 3 ? ratio : 1;
     const win = Number(rec.context && rec.context.window) || 0;
     const used = Number(rec.context && rec.context.used) || 0;
-    conv.context = win ? { window: win, used, pct: Math.min(100, Math.round((used / win) * 100)), parts: null, room: 0 } : null;
+    conv.context = win ? { window: win, used, pct: Math.min(100, Math.round((used / win) * 100)), parts: null, reserve: 0 } : null;
     this.log && this.log.info('ai', 'ai session loaded', { sessionId: conv.sessionId, recordId: rec.id, messages: conv.record.length, contextMessages: conv.messages.length });
     return { ok: true, session: rec };
   }
@@ -267,10 +297,16 @@ class AiManager {
     return out;
   }
 
-  /** 审批级别只影响这一条会话，设置里的默认值不动。 */
+  /** 审批级别只影响这一条会话，设置里的默认值不动；空值表示取消覆盖、跟随设置。 */
   setPermission(req) {
     const sessionId = req && req.sessionId;
     const value = req && req.permission;
+    const ov = this.overrides.get(sessionId);
+    if (value === '' || value == null) {
+      if (ov) delete ov.permission;
+      this.log && this.log.info('ai', 'ai permission override cleared', { sessionId });
+      return { ok: true };
+    }
     if (!PERMISSIONS.includes(value)) throw aiError('AI_REQUEST', 'invalid permission');
     this._override(sessionId).permission = value;
     this.log && this.log.info('ai', 'ai permission changed', { sessionId, permission: value });
@@ -317,8 +353,13 @@ class AiManager {
       title: conv ? conv.title : '',
       recordId: conv ? conv.recordId : '',
       record: conv ? conv.record : [],
+      // 还在等人的审批/反问：结论要等用户点完才写进 record，所以必须单独交出，
+      // 否则重建面板后卡片消失，而这一轮仍然 running 把输入框锁死。
+      pending: conv
+        ? [...conv.approvals.entries()].map(([requestId, p]) => ({ requestId, kind: p.kind, askedAt: p.askedAt, ...p.info }))
+        : [],
       context: window
-        ? { window, used, pct: Math.min(100, Math.round((used / window) * 100)), parts: ctx ? ctx.parts : null }
+        ? { window, used, pct: Math.min(100, Math.round((used / window) * 100)), parts: ctx ? ctx.parts : null, reserve: ctx ? ctx.reserve : 0 }
         : null,
     };
   }
@@ -327,16 +368,21 @@ class AiManager {
     const conv = this.conversations.get(payload && payload.sessionId);
     const pending = conv && conv.approvals.get(payload.requestId);
     if (!pending) return { ok: false, reason: 'stale' };
-    clearTimeout(pending.timer);
     conv.approvals.delete(payload.requestId);
+    const host = conv.meta ? conv.meta.host : '';
     if (pending.kind === 'choice') {
-      // 只接受这次提问里真实存在的选项，避免渲染端送来任意文本被当成用户答复
-      const wanted = typeof payload.choice === 'string' ? payload.choice : '';
-      const choice = (pending.options || []).includes(wanted) ? wanted : '';
+      const wanted = typeof payload.choice === 'string' ? payload.choice.trim().slice(0, 200) : '';
+      // 点选仍按本次提问的选项白名单；只有卡片里「其他」那条自由文本才允许任意内容，
+      // 因为它本来就是用户自己组织的回答，会话执行期间下面的输入框是锁着的。
+      const choice = ((pending.info.options || []).includes(wanted) || payload.freeform === true) ? wanted : '';
       pending.resolve(choice);
+      this.log && this.log.info('ai', 'ai choice answered', { sessionId: conv.sessionId, host, choice: choice || '(none)' });
       return { ok: true, choice };
     }
     const decision = payload && payload.decision === 'allow' ? 'allow' : 'deny';
+    this.log && this.log.info('ai', 'ai approval answered', {
+      sessionId: conv.sessionId, host, decision, command: String((pending.info && pending.info.command) || '').slice(0, 200),
+    });
     pending.resolve(decision);
     return { ok: true, decision };
   }
@@ -345,60 +391,62 @@ class AiManager {
     const id = payload && payload.requestId;
     const pending = id && this.pendingScreens.get(id);
     if (!pending) return { ok: false };
+    // 回包必须来自发起取屏的那条会话：ownSsh 只证明发送方拥有 payload 里的会话，
+    // 单看全局 requestId 是挡不住「A 会话的面板替 B 会话作答」的。
+    if (pending.sessionId !== payload.sessionId) return { ok: false };
     clearTimeout(pending.timer);
     this.pendingScreens.delete(id);
     pending.resolve(typeof payload.text === 'string' ? payload.text : '');
     return { ok: true };
   }
 
+  /**
+   * 命令审批：没有超时。用户可能走开，这一轮就一直等在卡片上，只有他点了允许/拒绝
+   * （或整轮被停止、会话结束）才继续；等待期间这条会话是 running，不会重复起新一轮。
+   */
   async _requestApproval(conv, info) {
     const requestId = 'ap-' + crypto.randomUUID();
+    const askedAt = Date.now();
     const answer = await new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        conv.approvals.delete(requestId);
-        this.log && this.log.warn('ai', 'ai approval timed out', { sessionId: conv.sessionId });
-        this.emitTurn(conv, { type: 'approval-resolved', requestId, decision: 'deny', reason: 'timeout' });
-        resolve('timeout');
-      }, APPROVAL_TIMEOUT_MS);
-      // 必须先登记再广播：渲染端可能在同一帧就把答复送回来
-      conv.approvals.set(requestId, { kind: 'approval', resolve, timer });
-      this.emitTurn(conv, { type: 'approval', requestId, ...info });
+      // 必须先登记再广播：渲染端可能在同一帧就把答复送回来。登记的 info 供 history() 重建卡片，
+      // 否则面板换了宿主（拆分/合并、重连、重开面板）就看不见还在等的审批，这一轮只能被停止。
+      conv.approvals.set(requestId, { kind: 'approval', resolve, info, askedAt });
+      this.emitTurn(conv, { type: 'approval', requestId, askedAt, ...info });
     });
     this._record(conv, { role: 'approval', ...info, decision: answer });
-    // 记录要区分「超时」与「用户点了拒绝」，但工具只认 allow/deny
-    return answer === 'allow' ? 'allow' : 'deny';
+    // 把「用户点了拒绝」与「整轮被停止/会话结束」原样带回工具，命令行的状态才能和审批卡片一致
+    return answer;
   }
 
   /**
-   * 模型反问（ask_user）：走与审批相同的「先登记再广播」链路，但超时按「用户没选」处理，
-   * 不能像审批那样默认拒绝——这里没有要拦的动作，只是拿不到答案。
+   * 模型反问（ask_user）：与审批同样一直等，不选就什么都不发；
+   * 只有整轮被停止或会话结束时才按「用户没选」收场，不能像审批那样当成拒绝。
    */
   async _requestChoice(conv, info) {
     const requestId = 'ch-' + crypto.randomUUID();
+    const askedAt = Date.now();
     const picked = await new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        conv.approvals.delete(requestId);
-        this.log && this.log.warn('ai', 'ai ask_user timed out', { sessionId: conv.sessionId });
-        this.emitTurn(conv, { type: 'ask-resolved', requestId, choice: '', reason: 'timeout' });
-        resolve('');
-      }, APPROVAL_TIMEOUT_MS);
-      conv.approvals.set(requestId, { kind: 'choice', resolve, timer, options: info.options });
-      this.emitTurn(conv, { type: 'ask', requestId, ...info });
+      conv.approvals.set(requestId, { kind: 'choice', resolve, info, askedAt });
+      this.emitTurn(conv, { type: 'ask', requestId, askedAt, ...info });
     });
     this._record(conv, { role: 'choice', ...info, choice: picked, state: picked ? 'picked' : 'skipped' });
     return picked;
   }
 
   _rejectApprovals(conv, reason) {
+    if (!conv.approvals.size) return;
+    this.log && this.log.info('ai', 'ai approval dropped', {
+      sessionId: conv.sessionId, host: conv.meta ? conv.meta.host : '', reason, waiting: conv.approvals.size,
+    });
     for (const [id, pending] of conv.approvals) {
-      clearTimeout(pending.timer);
       conv.approvals.delete(id);
       if (pending.kind === 'choice') {
         pending.resolve('');
         this.emitTurn(conv, { type: 'ask-resolved', requestId: id, choice: '', reason });
         continue;
       }
-      pending.resolve('deny');
+      // 落盘要能区分「用户点了拒绝」与「整轮被停止/会话结束」，工具侧仍只认 allow/deny
+      pending.resolve(reason === 'canceled' ? 'canceled' : 'ended');
       this.emitTurn(conv, { type: 'approval-resolved', requestId: id, decision: 'deny', reason });
     }
   }
@@ -410,7 +458,7 @@ class AiManager {
         this.pendingScreens.delete(requestId);
         resolve('');
       }, SCREEN_TIMEOUT_MS);
-      this.pendingScreens.set(requestId, { resolve, timer });
+      this.pendingScreens.set(requestId, { sessionId, resolve, timer });
       this.emit(sessionId, { type: 'screen-request', requestId });
     });
   }
@@ -446,11 +494,34 @@ class AiManager {
     return lines.join('\n');
   }
 
+  /**
+   * 这一轮真正发给模型的输出上限：优先用降载学到的档位，否则按窗口推一个。
+   * 不放进设置是因为这两个值用户都猜不准——猜高了整轮提问直接 400。
+   */
+  _outputCap(conv, model) {
+    const learned = conv.outputCaps[model.model];
+    if (Number.isFinite(learned) && learned > 0) return learned;
+    return Math.max(OUTPUT_MIN, Math.min(OUTPUT_MAX, Math.round(model.contextTokens * OUTPUT_RATIO)));
+  }
+
+  /** 被拒就砍一半再来一次，砍到下限还拒绝就不再试（返回 0，由调用方把原始错误抛出去）。 */
+  _stepDown(conv, model, error, cap) {
+    const status = Number(error && error.status);
+    const message = String((error && error.message) || '');
+    if ((status !== 400 && status !== 422) || !OUTPUT_REJECT.test(message)) return 0;
+    // 输入本身就超窗口时砍输出救不回来，别把同一句话的 400 再问五遍
+    if (INPUT_OVERFLOW.test(message) && !/max[_ ]?tokens|output/i.test(message)) return 0;
+    if (cap <= OUTPUT_FLOOR) return 0;
+    const next = Math.max(OUTPUT_FLOOR, Math.floor(cap / 2));
+    conv.outputCaps[model.model] = next;
+    return next;
+  }
+
   /** 窗口跟着当前选中的模型；固定开销是工具定义 + 每轮重建的 system（已含屏幕快照）。 */
-  _budget(conv, { model, settings, system, tools }) {
+  _budget(conv, { model, system, tools, maxTokens }) {
     return budget({
       window: model.contextTokens,
-      maxTokens: settings.maxTokens,
+      maxTokens,
       system,
       tools,
       messages: conv.messages,
@@ -458,7 +529,7 @@ class AiManager {
   }
 
   emitContext(conv, state) {
-    conv.context = { window: state.window, used: state.used, pct: state.pct, parts: state.parts, room: state.room };
+    conv.context = { window: state.window, used: state.used, pct: state.pct, parts: state.parts, reserve: state.reserve };
     this.emitTurn(conv, { type: 'context', ...conv.context });
   }
 
@@ -588,12 +659,18 @@ class AiManager {
       requestApproval: (info) => this._requestApproval(conv, info),
       requestChoice: (info) => this._requestChoice(conv, info),
       readScreen: () => this._requestScreen(sessionId),
+      // 停止按钮要能掐断正在跑的远程命令，否则命令得自己等到 commandTimeoutSec 才放手
+      signal: abort.signal,
     });
 
-    this.emitTurn(conv, { type: 'state', running: true, model: model.label });
+    this.emitTurn(conv, { type: 'state', running: true });
     const started = Date.now();
     let emptyRetried = false;
     let finished = false;
+    /** 末轮 finish_reason 是 length 说明正文被单次输出上限砍断，不能当成模型自己说完了。 */
+    let truncated = false;
+    /** 最后一次真正发出去的输出上限，只用于截断日志。 */
+    let lastCap = 0;
     let tokenIn = 0;
     let tokenOut = 0;
     /** 本轮最后一个生效的预算范围，收尾时用它重算一次水位给圆环。 */
@@ -601,14 +678,16 @@ class AiManager {
     /** 整轮统计要落盘，历史回放才有耗时与用量可显示；异常收场同样记一条。 */
     const closeTurn = () => {
       const ms = Date.now() - started;
-      this._record(conv, { role: 'turn', ms, promptTokens: tokenIn, completionTokens: tokenOut });
+      this._record(conv, { role: 'turn', ms, promptTokens: tokenIn, completionTokens: tokenOut, truncated });
       return ms;
     };
     try {
       for (let round = 0; round < settings.maxTurns; round += 1) {
         if (abort.signal.aborted) break;
         const system = this.systemPrompt(ctx);
-        scope = { model, settings, system, tools };
+        // 预算只认工具定义的数组：createTools 返回的是 {definitions, invoke}，整个塞进去会让
+        // aiContext 的 defs.length 读成 undefined，工具开销永远算 0，水位偏低、压缩晚触发。
+        scope = { model, settings, system, tools: tools.definitions, maxTokens: this._outputCap(conv, model) };
         // 治理必须在组装之前：压缩会改 conv.messages，水位要按真正发出去的那一份算
         const state = await this._governContext(conv, scope);
         const messages = [{ role: 'system', content: system }, ...conv.messages];
@@ -617,13 +696,13 @@ class AiManager {
         let reasonBuf = '';
         let reasonOpen = false;
         let bodyStarted = false;
-        const result = await streamChat({
+        const ask = (cap) => streamChat({
           baseUrl: model.baseUrl,
           apiKey: model.apiKey,
           model: model.model,
           messages,
           tools: tools.definitions,
-          maxTokens: settings.maxTokens,
+          maxTokens: cap,
           temperature: settings.temperature,
           signal: abort.signal,
           log: this.log,
@@ -647,6 +726,21 @@ class AiManager {
             }
           },
         });
+        // 猜高的输出上限只会换来一次 400：被拒就降档重问，学到的高度按模型钉在这一场会话上
+        let cap = scope.maxTokens;
+        let result;
+        for (;;) {
+          try {
+            result = await ask(cap);
+            lastCap = cap;
+            break;
+          } catch (error) {
+            const next = this._stepDown(conv, model, error, cap);
+            if (!next) throw error;
+            this.log && this.log.warn('ai', 'ai output limit rejected, retrying with lower cap', { sessionId, host: target.host, model: model.model, from: cap, to: next });
+            cap = next;
+          }
+        }
         if (result.usage) {
           const inTok = Number(result.usage.prompt_tokens) || 0;
           tokenIn += inTok;
@@ -657,8 +751,8 @@ class AiManager {
         if (reasonOpen) {
           const ms = Math.max(0, thinkEnd - thinkStart);
           this.emitTurn(conv, { type: 'think', state: 'end', ms });
-          // 落盘用开播时攒下的文本，历史回放才会和当时屏幕上看到的一模一样
-          this._record(conv, { role: 'think', text: reasonBuf.slice(0, 8000), ms });
+          // 落盘用开播时攒下的文本，历史回放才会和当时屏幕上看到的一模一样；长度上限交给 sessionStore
+          this._record(conv, { role: 'think', text: reasonBuf, ms });
         }
         this.log && this.log.info('ai', 'ai round completed', {
           sessionId, host: target.host, model: model.model, round,
@@ -668,6 +762,8 @@ class AiManager {
           if (result.text) {
             conv.messages.push({ role: 'assistant', content: result.text });
             this._record(conv, { role: 'ai', text: result.text });
+            // length 表示正文被 maxTokens 砍断：这一轮其实没说完，面板必须给出「继续」的入口
+            truncated = result.finishReason === 'length';
             finished = true;
             break;
           }
@@ -727,37 +823,45 @@ class AiManager {
           if (!reported && !isAsk) markRunning();
           const ms = Date.now() - began;
           const output = String(outcome.text || '').slice(0, 4000);
+          const exitCode = Number.isInteger(outcome.exitCode) ? outcome.exitCode : null;
+          const state = stepState(outcome, exitCode);
           if (!isAsk) {
             this.emitTurn(conv, {
               type: 'tool', callId: call.id, name: call.name, command, channel: outcome.channel,
-              denied: !!outcome.denied, exitCode: outcome.exitCode == null ? null : outcome.exitCode,
-              state: outcome.denied ? 'denied' : 'done', ms,
+              exitCode, state, ms,
               output,
             });
             this._record(conv, {
               role: 'step', name: call.name, command, channel: outcome.channel,
-              state: outcome.denied ? 'denied' : 'done', exitCode: outcome.exitCode == null ? null : outcome.exitCode,
+              state, exitCode,
               ms, auto: settings.permission === 'full', output,
             });
           }
           conv.messages.push({ role: 'tool', tool_call_id: call.id, content: String(outcome.text || '(no output)') });
           answered.add(call.id);
-          if (outcome.denied) halted = true;
+          if (outcome.denied || outcome.canceled) halted = true;
         }
       }
       // 跑满回合上限不是错误，但必须让用户知道这一轮没做完，否则表现为「话说一半就停了」
-      const hitLimit = !finished && !abort.signal.aborted;
+      const stopped = abort.signal.aborted;
+      const hitLimit = !finished && !stopped;
       if (hitLimit) {
         this.log && this.log.warn('ai', 'ai turn reached max turns', { sessionId, host: target.host, maxTurns: settings.maxTurns });
+      }
+      if (truncated) {
+        this.log && this.log.warn('ai', 'ai answer hit the max output tokens', { sessionId, host: target.host, model: model.model, maxTokens: lastCap || scope.maxTokens });
       }
       this.emitTurn(conv, {
         type: 'done',
         ms: closeTurn(),
         usage: tokenIn || tokenOut ? { promptTokens: tokenIn, completionTokens: tokenOut } : null,
         recordId: conv.recordId,
-        error: hitLimit ? { code: 'AI_MAX_TURNS', message: 'reached max turns' } : undefined,
+        truncated,
+        error: hitLimit ? { code: 'AI_MAX_TURNS', message: 'reached max turns' }
+          // 用户点了停止：正常收场也要打标，否则面板看起来像模型自己把话说完
+          : (stopped ? { code: 'AI_CANCELED', message: 'stopped by user' } : undefined),
       });
-      this.log && this.log.info('ai', 'ai turn finished', { sessionId, host: target.host, model: model.model, ms: Date.now() - started });
+      this.log && this.log.info('ai', stopped ? 'ai turn stopped' : 'ai turn finished', { sessionId, host: target.host, model: model.model, ms: Date.now() - started });
       return { ok: true };
     } catch (error) {
       const code = error.code || 'AI_REQUEST';
@@ -774,7 +878,7 @@ class AiManager {
       // 收尾这轮又追加了正文与工具回包，圆环要显示的是真正留下来的量
       if (scope) this.emitContext(conv, this._budget(conv, scope));
       this._archive(conv, conv.title);
-      this.emitTurn(conv, { type: 'state', running: false, model: model.label });
+      this.emitTurn(conv, { type: 'state', running: false });
     }
   }
 
@@ -785,7 +889,8 @@ class AiManager {
     if (!conv) return;
     if (conv.abort) conv.abort.abort();
     this._rejectApprovals(conv, reason || 'session-ended');
-    this._archive(conv, conv.title);
+    // 进行中的回合会在自己的 finally 里带完整内容归档；这里只收尾没在跑的会话，避免同一份记录写两遍
+    if (!conv.running) this._archive(conv, conv.title);
     this.conversations.delete(sessionId);
   }
 

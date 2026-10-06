@@ -17,7 +17,8 @@ const PROTOCOL_KEY = /^[a-z0-9-]{1,16}$/;
 const SESSION_KEY = /^ais-[a-zA-Z0-9-]{1,64}$/;
 const OUTPUT_CHARS = 4000;
 const TEXT_CHARS = 8000;
-const CONTEXT_CONTENT_CHARS = 12000;
+/** 正文与思考的上限：远高于单次输出派生上限（`aiManager` 的 OUTPUT_MAX 8192 token）能产出的长度，否则长答案会在记录里被腰斩。 */
+const ANSWER_CHARS = 200000;
 const CONTEXT_ARGS_CHARS = 4000;
 const CONTEXT_CALLS = 8;
 
@@ -45,7 +46,8 @@ function summaryOf(rec) {
     protocol: rec.protocol,
     host: rec.host,
     port: rec.port,
-    messages: rec.messages.length,
+    // 与面板里「未归档」那一行同口径：提问与正文算消息，命令/审批/反问算步骤，否则同一段对话两处数字对不上
+    messages: rec.messages.filter((m) => m.role === 'user' || m.role === 'ai').length,
     steps: rec.messages.filter((m) => m.role === 'step' || m.role === 'approval' || m.role === 'choice').length,
     preview: str(preview, 160),
   };
@@ -163,7 +165,7 @@ class AiSessionStore {
 function normalizeMessage(m) {
   if (!m || typeof m !== 'object') return null;
   if (m.role === 'user' || m.role === 'ai') {
-    const text = str(m.text, TEXT_CHARS).trim();
+    const text = str(m.text, ANSWER_CHARS).trim();
     return text ? { role: m.role, text } : null;
   }
   if (m.role === 'approval') {
@@ -173,11 +175,12 @@ function normalizeMessage(m) {
       command: str(m.command, TEXT_CHARS),
       reason: str(m.reason, 1000),
       readOnly: !!m.readOnly,
-      decision: ['allow', 'deny', 'timeout'].includes(m.decision) ? m.decision : 'allow',
+      // 读不懂的结论按「未允许」处理：脏记录不能伪装成用户点过允许。timeout 是旧记录里的「整轮被停止」
+      decision: ['allow', 'deny', 'canceled', 'ended', 'timeout'].includes(m.decision) ? m.decision : 'deny',
     };
   }
   if (m.role === 'think') {
-    const text = str(m.text, TEXT_CHARS).trim();
+    const text = str(m.text, ANSWER_CHARS).trim();
     return text ? { role: 'think', text, ms: numOrNull(m.ms) } : null;
   }
   if (m.role === 'choice') {
@@ -199,6 +202,7 @@ function normalizeMessage(m) {
     const out = { role: 'turn', ms: numOrNull(m.ms) };
     if (m.promptTokens) out.promptTokens = numOrNull(m.promptTokens);
     if (m.completionTokens) out.completionTokens = numOrNull(m.completionTokens);
+    if (m.truncated) out.truncated = true;
     return out;
   }
   if (m.role === 'compress') {
@@ -211,7 +215,7 @@ function normalizeMessage(m) {
       name: str(m.name, 60),
       command: str(m.command, TEXT_CHARS),
       channel: str(m.channel, 20),
-      state: m.state === 'denied' ? 'denied' : 'done',
+      state: ['done', 'denied', 'failed', 'stopped'].includes(m.state) ? m.state : 'done',
       exitCode: Number.isInteger(m.exitCode) ? m.exitCode : null,
       ms: Number.isFinite(m.ms) ? m.ms : null,
       auto: !!m.auto,
@@ -225,7 +229,8 @@ function normalizeMessage(m) {
 function normalizeContextMessage(m) {
   if (!m || typeof m !== 'object') return null;
   if (!['system', 'user', 'assistant', 'tool'].includes(m.role)) return null;
-  const out = { role: m.role, content: str(m.content, CONTEXT_CONTENT_CHARS) };
+  // 与展示记录同一把上限：重启后恢复的模型序列必须和内存里那份一致，否则重开一次就换了上下文
+  const out = { role: m.role, content: str(m.content, ANSWER_CHARS) };
   if (m.role === 'tool') {
     const callId = str(m.tool_call_id, 60);
     if (!callId) return null;
