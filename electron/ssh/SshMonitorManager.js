@@ -5,6 +5,7 @@ const PROBE_TIMEOUT_MS = 6000;
 const META_TIMEOUT_MS = 12000;
 const POLL_TIMEOUT_MS = 8000;
 const WINDOWS_POLL_TIMEOUT_MS = 20000;
+const START_TIMEOUT_MS = 24000;
 const MAX_POLL_FAILURES = 3;
 
 function monitorError(code, message) {
@@ -83,24 +84,45 @@ class SshMonitorManager {
     runner.supported = true;
     if (!runner.intervalMs) runner.intervalMs = collector.pollMs;
     let meta = null;
-    try {
-      const metaOut = await exec(client, collector.metaCommand, charset, META_TIMEOUT_MS);
-      meta = collector.parseMeta(metaOut.stdout);
-    } catch (e) {
-      this.log && this.log.warn('ssh', 'ssh monitor meta failed', { sessionId, host, message: e.message });
+    let snapshot = null;
+    let pollText = null;
+    const combined = Boolean(collector.startCommand);
+    if (combined) {
+      // Windows 上 meta 与首帧由同一次 PowerShell 启动给出，省掉一次进程冷启动
+      try {
+        const out = await exec(client, collector.startCommand, charset, START_TIMEOUT_MS);
+        const started = collector.parseStart(out.stdout);
+        if (!started) throw monitorError('SSH_MONITOR_PARSE', 'monitor output unparseable');
+        meta = started.meta;
+        pollText = started.pollText;
+      } catch (e) {
+        this.log && this.log.error('ssh', 'ssh monitor combined start failed', { sessionId, host, message: e.message, code: e.code });
+        this.stop(sessionId);
+        throw e;
+      }
+    } else {
+      try {
+        const metaOut = await exec(client, collector.metaCommand, charset, META_TIMEOUT_MS);
+        meta = collector.parseMeta(metaOut.stdout);
+      } catch (e) {
+        this.log && this.log.warn('ssh', 'ssh monitor meta failed', { sessionId, host, message: e.message });
+      }
     }
     meta = meta || {};
     meta.ip = target.host;
     runner.meta = meta;
-    let snapshot = null;
-    try {
-      snapshot = await this.pollOnce(sessionId, runner);
-    } catch (e) {
-      this.log && this.log.error('ssh', 'ssh monitor first poll failed', { sessionId, host, message: e.message, code: e.code });
-      this.stop(sessionId);
-      throw e;
+    if (combined) {
+      snapshot = this.applyPoll(sessionId, runner, pollText);
+    } else {
+      try {
+        snapshot = await this.pollOnce(sessionId, runner);
+      } catch (e) {
+        this.log && this.log.error('ssh', 'ssh monitor first poll failed', { sessionId, host, message: e.message, code: e.code });
+        this.stop(sessionId);
+        throw e;
+      }
     }
-    // The session died or the runner was stopped mid-start: pollOnce returned null without throwing.
+    // The session died or the runner was stopped mid-start: the first snapshot came back null without throwing.
     // Registering a timer here would leave the renderer stuck behind a loading mask forever.
     if (!snapshot && this.runners.get(sessionId) !== runner) {
       this.log && this.log.warn('ssh', 'ssh monitor start aborted: runner gone', { sessionId, host });
@@ -140,7 +162,13 @@ class SshMonitorManager {
       this.handleFailure(sessionId, runner, e);
       return null;
     }
-    const parsed = collector.parsePoll(out.stdout, runner.state);
+    return this.applyPoll(sessionId, runner, out.stdout);
+  }
+
+  /** 解析一帧输出并广播；合并启动路径直接复用已有输出，不再发起第二次调用。 */
+  applyPoll(sessionId, runner, text) {
+    if (this.runners.get(sessionId) !== runner || runner.stopRequested) return null;
+    const parsed = runner.collector.parsePoll(text, runner.state);
     if (!parsed) {
       this.handleFailure(sessionId, runner, monitorError('SSH_MONITOR_PARSE', 'monitor output unparseable'));
       return null;
@@ -155,7 +183,8 @@ class SshMonitorManager {
     snapshot.ts = Date.now();
     runner.failures = 0;
     runner.lastSnapshot = snapshot;
-    this.send('monitor:snapshot', { sessionId, snapshot }, target.ownerId);
+    const target = this.ssh.execTarget(sessionId);
+    this.send('monitor:snapshot', { sessionId, snapshot }, target && target.ownerId);
     return snapshot;
   }
 

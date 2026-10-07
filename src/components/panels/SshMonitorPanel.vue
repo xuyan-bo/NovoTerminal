@@ -54,17 +54,17 @@
           <div class="sec-head">
             <i class="el-icon-cpu sec-icon"></i>
             <span class="sec-name">CPU</span>
-            <span class="sec-note">{{ cpuNoteText }}</span>
             <span class="sec-badge mono">{{ cpuNowText }}</span>
           </div>
-          <div v-if="hasPerCore" class="vu-rows">
-            <div v-for="(v, i) in snap.cpu.perCore" :key="i" class="vu-row">
-              <span class="vu-label mono">{{ i + 1 }}</span>
-              <span class="vu-track">
-                <span v-for="n in vuCells" :key="n" :class="cellClass(v, n)"></span>
-              </span>
-              <span class="vu-val mono">{{ v == null ? '—' : v.toFixed(1) + '%' }}</span>
+          <div class="mem-flex">
+            <div class="mem-legend">
+              <div v-for="item in cpuLegend" :key="item.label" class="mem-item">
+                <span class="dot" :style="{ background: item.color }"></span>
+                <span class="lbl">{{ item.label }}</span>
+                <span class="val mono">{{ item.value }}</span>
+              </div>
             </div>
+            <div ref="cpuDonut" class="mem-donut"></div>
           </div>
           <div class="spark-wrap"><div ref="cpuSpark" class="chart" style="height: 64px"></div></div>
         </section>
@@ -114,14 +114,19 @@
           </div>
           <div class="disk-list">
             <div v-for="d in snap.disks" :key="d.dev + d.mount" class="disk-row" :title="diskTitle(d)">
-              <span class="disk-mount mono">{{ d.mount }}</span>
-              <span v-if="d.fs" class="disk-fs mono">{{ d.fs }}</span>
-              <span class="disk-io">
-                <span class="io-line"><span>{{ $t('monitor.read') }}</span><b>{{ d.readKBs == null ? '—' : fmtRate(d.readKBs) }}</b></span>
-                <span class="io-line"><span>{{ $t('monitor.write') }}</span><b>{{ d.writeKBs == null ? '—' : fmtRate(d.writeKBs) }}</b></span>
-              </span>
-              <span class="disk-pct mono">{{ diskPct(d).toFixed(0) }}%<br><span class="disk-cap">{{ d.totalGB }}/{{ d.usedGB }}G</span></span>
-              <span class="disk-tank"><span class="fill" :class="tankClass(d)" :style="{ height: diskPct(d) + '%' }"></span></span>
+              <div class="disk-main">
+                <div class="disk-id">
+                  <span class="disk-mount mono">{{ d.mount }}</span>
+                  <span v-if="d.fs" class="disk-fs mono">{{ d.fs }}</span>
+                </div>
+                <span class="io-line"><span class="dot" style="background: var(--accent)"></span><span>{{ $t('monitor.read') }}</span><b>{{ d.readKBs == null ? '—' : fmtRate(d.readKBs) }}</b></span>
+                <span class="io-line"><span class="dot" style="background: var(--success)"></span><span>{{ $t('monitor.write') }}</span><b>{{ d.writeKBs == null ? '—' : fmtRate(d.writeKBs) }}</b></span>
+              </div>
+              <div class="disk-side">
+                <span class="disk-pct mono">{{ diskPct(d).toFixed(0) }}%</span>
+                <span class="disk-cap mono">{{ diskCapText(d) }}</span>
+              </div>
+              <span class="disk-tank"><span class="fill" :style="{ height: diskPct(d) + '%', background: tone(diskPct(d)) }"></span></span>
             </div>
           </div>
         </section>
@@ -132,7 +137,6 @@
 
 <script>
 const HISTORY = 45;
-const VU_CELLS = 18;
 
 export default {
   name: 'SshMonitorPanel',
@@ -146,7 +150,6 @@ export default {
   data() {
     return {
       tick: 0,
-      vuCells: VU_CELLS,
     };
   },
   computed: {
@@ -156,10 +159,6 @@ export default {
     snap() {
       const s = this.snapshot || {};
       return { cpu: s.cpu || {}, mem: s.mem || {}, net: s.net || {}, disks: s.disks || [], uptimeSec: s.uptimeSec || 0 };
-    },
-    hasPerCore() {
-      const pc = this.snap.cpu && this.snap.cpu.perCore;
-      return Array.isArray(pc) && pc.some((v) => v != null);
     },
     hostText() {
       const m = this.meta;
@@ -207,15 +206,18 @@ export default {
       const totalText = totalGB >= 1024 ? (totalGB / 1024).toFixed(1) + ' TB' : totalGB.toFixed(0) + ' GB';
       return disks.length + ' · ' + totalText;
     },
-    cpuNoteText() {
-      const c = this.snap.cpu;
-      if (!c || !c.cores) return '';
-      const load = c.load ? ' · ' + this.$t('monitor.load') + ' ' + c.load.map((v) => v.toFixed(2)).join(' / ') : '';
-      return this.$t('monitor.cores', { n: c.cores }) + load;
-    },
     cpuNowText() {
       const v = this.snap.cpu && this.snap.cpu.overall;
       return v == null ? '--%' : v.toFixed(1) + '%';
+    },
+    cpuLegend() {
+      void this.tick;
+      const cpu = this.snap.cpu || {};
+      const pct = cpu.overall == null ? 0 : cpu.overall;
+      return [
+        { label: this.$t('monitor.coreCount'), value: cpu.cores || '—', color: this.palette().success },
+        { label: this.$t('monitor.load'), value: this.cpuNowText, color: this.tone(pct) },
+      ];
     },
     memPctText() {
       const mem = this.snap.mem;
@@ -227,9 +229,9 @@ export default {
       const mem = this.snap.mem || {};
       const free = Math.max(0, (mem.totalGB || 0) - (mem.usedGB || 0) - (mem.cacheGB || 0));
       const pctOf = (v) => (mem.totalGB ? ((v / mem.totalGB) * 100).toFixed(0) + '%' : '');
-      const usedColor = mem.totalGB && mem.usedGB / mem.totalGB > 0.85 ? c.danger : c.accent;
+      const usedPct = mem.totalGB ? (mem.usedGB / mem.totalGB) * 100 : 0;
       return [
-        { label: this.$t('monitor.used'), value: (mem.usedGB || 0).toFixed(1) + 'G', pct: pctOf(mem.usedGB || 0), color: usedColor },
+        { label: this.$t('monitor.used'), value: (mem.usedGB || 0).toFixed(1) + 'G', pct: pctOf(mem.usedGB || 0), color: this.tone(usedPct) },
         { label: this.$t('monitor.cache'), value: (mem.cacheGB || 0).toFixed(1) + 'G', pct: pctOf(mem.cacheGB || 0), color: c.success },
         { label: this.$t('monitor.free'), value: free.toFixed(1) + 'G', pct: pctOf(free), color: c.border },
       ];
@@ -242,10 +244,9 @@ export default {
     diskTotalsText() {
       const disks = this.snap.disks || [];
       if (!disks.length) return '';
-      const fmt = (gb) => (gb >= 1024 ? (gb / 1024).toFixed(1) + 'T' : gb.toFixed(1) + 'G');
       const used = disks.reduce((a, d) => a + (d.usedGB || 0), 0);
       const total = disks.reduce((a, d) => a + (d.totalGB || 0), 0);
-      return fmt(used) + ' / ' + fmt(total);
+      return this.fmtGB(used) + ' / ' + this.fmtGB(total);
     },
   },
   watch: {
@@ -306,18 +307,19 @@ export default {
       if (kbs >= 1024) return (kbs / 1024).toFixed(1) + ' M/s';
       return kbs.toFixed(1) + ' K/s';
     },
-    cellClass(value, n) {
-      const v = value == null ? 0 : value;
-      const lit = n <= Math.round((v / 100) * VU_CELLS);
-      if (!lit) return 'vu-cell';
-      return 'vu-cell on' + (v > 85 ? ' hot' : v > 60 ? ' warn' : '');
+    /** 使用率统一取色：环形图色块与图例点必须同源，否则同一指标会出现两种颜色。 */
+    tone(pct) {
+      const c = this.palette();
+      return pct > 85 ? c.danger : pct > 70 ? c.warning : c.accent;
     },
     diskPct(d) {
       return d.totalGB ? Math.min(100, (d.usedGB / d.totalGB) * 100) : 0;
     },
-    tankClass(d) {
-      const pct = this.diskPct(d);
-      return pct > 90 ? 'hot' : pct > 75 ? 'warn' : '';
+    fmtGB(gb) {
+      return gb >= 1024 ? (gb / 1024).toFixed(1) + 'T' : gb.toFixed(1) + 'G';
+    },
+    diskCapText(d) {
+      return this.fmtGB(d.usedGB || 0) + '/' + this.fmtGB(d.totalGB || 0);
     },
     diskTitle(d) {
       return (d.dev || '') + ' ' + d.mount + ' ' + d.usedGB + ' / ' + d.totalGB + ' GB';
@@ -377,16 +379,39 @@ export default {
           textStyle: { color: c.text, fontSize: 11 },
           axisPointer: { type: 'line', lineStyle: { color: c.text3, type: 'dashed' } },
           formatter: (params) => params
-            .map((p) => p.marker + ' ' + p.seriesName + '&nbsp;&nbsp;' + p.value + '%')
+            .map((p) => p.marker + ' ' + p.seriesName + '&nbsp;&nbsp;' + Number(p.value).toFixed(1) + '%')
             .join('<br>'),
         },
         xAxis: catAxis,
         yAxis: Object.assign(axis('{value}%'), { max }),
-        series: [{ name: 'CPU', type: 'line', data, symbol: 'none', lineStyle: { color, width: 1.4 }, areaStyle: { color, opacity: 0.12 } }],
+        series: [{ name: 'CPU', type: 'line', data, symbol: 'none', itemStyle: { color }, lineStyle: { color, width: 1.4 }, areaStyle: { color, opacity: 0.12 } }],
       });
 
       const cpuChart = this.ensureChart('cpuSpark', this.$refs.cpuSpark);
       if (cpuChart) cpuChart.setOption(spark(this._hist.cpu.map((v) => +v.toFixed(1)), c.accent, 100));
+
+      const cpu = this.snap.cpu || {};
+      const cpuPct = cpu.overall == null ? 0 : cpu.overall;
+      const cpuColor = this.tone(cpuPct);
+      const cpuDonut = this.ensureChart('cpuDonut', this.$refs.cpuDonut);
+      if (cpuDonut) {
+        cpuDonut.setOption({
+          animation: false,
+          series: [{
+            type: 'pie', radius: ['64%', '84%'], center: ['50%', '50%'],
+            label: { show: false }, labelLine: { show: false },
+            itemStyle: { borderColor: c.elevated, borderWidth: 2 },
+            data: [
+              { value: cpuPct, itemStyle: { color: cpuColor } },
+              { value: Math.max(0, 100 - cpuPct), itemStyle: { color: c.border } },
+            ],
+          }],
+          graphic: [{
+            type: 'text', left: 'center', top: 'center',
+            style: { text: cpuPct.toFixed(0) + '%', fill: c.text, fontSize: 15, fontWeight: 700, fontFamily: 'Consolas' },
+          }],
+        });
+      }
 
       const mem = this.snap.mem || {};
       const donut = this.ensureChart('memDonut', this.$refs.memDonut);
@@ -400,7 +425,7 @@ export default {
             label: { show: false }, labelLine: { show: false },
             itemStyle: { borderColor: c.elevated, borderWidth: 2 },
             data: [
-              { value: +(mem.usedGB || 0).toFixed(1), itemStyle: { color: pct > 85 ? c.danger : pct > 70 ? c.warning : c.accent } },
+              { value: +(mem.usedGB || 0).toFixed(1), itemStyle: { color: this.tone(pct) } },
               { value: +(mem.cacheGB || 0).toFixed(1), itemStyle: { color: c.success } },
               { value: +free.toFixed(1), itemStyle: { color: c.border } },
             ],
@@ -431,8 +456,8 @@ export default {
           xAxis: Object.assign({}, catAxis, { data: this._hist.rx.map((_, i) => i) }),
           yAxis: axis((v) => (v >= 1024 ? (v / 1024).toFixed(0) + 'M' : v + 'K')),
           series: [
-            { name: this.$t('monitor.download'), type: 'line', data: this._hist.rx.map((v) => +v.toFixed(0)), symbol: 'none', lineStyle: { color: c.accent, width: 1.4 }, areaStyle: { color: c.accent, opacity: 0.14 } },
-            { name: this.$t('monitor.upload'), type: 'line', data: this._hist.tx.map((v) => +v.toFixed(0)), symbol: 'none', lineStyle: { color: c.success, width: 1.4 }, areaStyle: { color: c.success, opacity: 0.1 } },
+            { name: this.$t('monitor.download'), type: 'line', data: this._hist.rx.map((v) => +v.toFixed(1)), symbol: 'none', itemStyle: { color: c.accent }, lineStyle: { color: c.accent, width: 1.4 }, areaStyle: { color: c.accent, opacity: 0.14 } },
+            { name: this.$t('monitor.upload'), type: 'line', data: this._hist.tx.map((v) => +v.toFixed(1)), symbol: 'none', itemStyle: { color: c.success }, lineStyle: { color: c.success, width: 1.4 }, areaStyle: { color: c.success, opacity: 0.1 } },
           ],
         });
       }
@@ -569,15 +594,6 @@ export default {
 }
 .sys-kv .v.up { color: var(--success); }
 
-.vu-rows { display: flex; flex-direction: column; gap: 5px; }
-.vu-row { display: flex; align-items: center; gap: 8px; }
-.vu-label { width: 26px; font-size: 10.5px; color: var(--text-2); text-align: right; flex: 0 0 auto; }
-.vu-track { flex: 1; display: flex; gap: 2px; height: 10px; min-width: 0; }
-.vu-cell { flex: 1; border-radius: 1px; background: var(--border); opacity: .45; }
-.vu-cell.on { opacity: 1; background: var(--accent); }
-.vu-cell.on.warn { background: var(--warning); }
-.vu-cell.on.hot { background: var(--danger); }
-.vu-val { width: 92px; flex: 0 0 auto; font-size: 10.5px; color: var(--text-2); text-align: right; white-space: nowrap; }
 .chart { width: 100%; min-height: 0; }
 .spark-wrap { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 4px; }
 
@@ -591,19 +607,23 @@ export default {
 .mem-donut { width: 118px; height: 118px; flex: 0 0 auto; }
 .disk-list { display: flex; flex-direction: column; gap: 8px; }
 .disk-row {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: stretch; gap: 8px;
   border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
   background: var(--bg-panel);
   min-width: 0;
 }
-.disk-mount { font-size: 12px; font-weight: 700; color: var(--text); width: 62px; flex: 0 0 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.disk-fs { font-size: 9.5px; color: var(--accent); background: var(--accent-soft); border-radius: 3px; padding: 1px 5px; flex: 0 0 auto; white-space: nowrap; }
-.disk-io { flex: 1 1 0; display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow: hidden; }
-.disk-io .io-line { display: flex; justify-content: flex-start; gap: 6px; font-size: 10px; color: var(--text-2); font-family: Consolas, monospace; min-width: 0; white-space: nowrap; }
-.disk-io .io-line span { flex: 0 0 auto; }
-.disk-io .io-line b { color: var(--text); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.disk-main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.disk-id { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.disk-mount { font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.disk-fs { font-size: 9.5px; color: var(--accent); background: var(--accent-soft); border-radius: 3px; padding: 1px 4px; flex: 0 0 auto; white-space: nowrap; }
+.io-line { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); font-family: Consolas, monospace; min-width: 0; white-space: nowrap; }
+.io-line > span { flex: 0 0 auto; }
+.io-line b { color: var(--text); font-size: 12px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.disk-side { flex: 0 0 auto; min-width: 80px; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; gap: 2px; }
+.disk-pct { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.1; white-space: nowrap; }
+.disk-cap { font-size: 11px; color: var(--text-2); line-height: 1.2; white-space: nowrap; }
 .disk-tank {
-  width: 22px; height: 46px; flex: 0 0 auto;
+  width: 22px; flex: 0 0 auto; align-self: stretch; min-height: 46px;
   border: 1px solid var(--border); border-radius: 4px;
   position: relative; overflow: hidden; background: var(--bg-app);
 }
@@ -612,8 +632,4 @@ export default {
   background: var(--accent);
   transition: height .5s ease, background .5s;
 }
-.disk-tank .fill.warn { background: var(--warning); }
-.disk-tank .fill.hot { background: var(--danger); }
-.disk-pct { width: 72px; flex: 0 1 auto; min-width: 52px; white-space: nowrap; overflow: hidden; text-align: right; font-size: 11px; color: var(--text-2); }
-.disk-cap { font-size: 9.5px; color: var(--text-3); }
 </style>

@@ -122,7 +122,7 @@ const linux = {
   id: 'linux',
   pollMs: 3000,
   metaCommand: '{ echo @A; uname -snr; echo @B; grep -m1 PRETTY_NAME /etc/os-release 2>/dev/null; echo @C; grep -m1 "model name" /proc/cpuinfo 2>/dev/null; echo @D; nproc; echo @E; ls /sys/devices/system/cpu/cpu*/topology/physical_package_id 2>/dev/null | wc -l; echo @F; date +"%Z %z"; } 2>/dev/null',
-  pollCommand: '{ echo @A; cat /proc/stat; echo @B; grep -E "^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SReclaimable):" /proc/meminfo; echo @C; cat /proc/loadavg; echo @D; cat /proc/uptime; echo @E; cat /proc/net/dev; echo @F; df -kPT; echo @G; cat /proc/diskstats; } 2>/dev/null',
+  pollCommand: '{ echo @A; cat /proc/stat; echo @B; grep -E "^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SReclaimable):" /proc/meminfo; echo @C; cat /proc/uptime; echo @D; cat /proc/net/dev; echo @E; df -kPT; echo @F; cat /proc/diskstats; } 2>/dev/null',
   parseMeta(text) {
     const s = sections(text);
     const uname = (s.A || []).join(' ').trim().split(/\s+/);
@@ -142,13 +142,8 @@ const linux = {
     const s = sections(text);
     const stat = parseStat((s.A || []).join('\n'));
     const overall = tickPercent(prev && prev.aggregate, stat.aggregate);
-    const perCore = stat.cores.map((ticks, i) => {
-      const p = prev && prev.cores && prev.cores[i] ? tickPercent(prev.cores[i], ticks) : null;
-      return p == null ? null : Math.round(p * 10) / 10;
-    });
-    const load = (s.C || []).join('').trim().split(/\s+/).map((v) => num(v, 0));
-    const uptime = Math.floor(num((s.D || []).join('').trim().split(/\s+/)[0], 0));
-    const net = parseNetDev((s.E || []).join('\n'));
+    const uptime = Math.floor(num((s.C || []).join('').trim().split(/\s+/)[0], 0));
+    const net = parseNetDev((s.D || []).join('\n'));
     let rx = 0;
     let tx = 0;
     let rxTotal = 0;
@@ -166,8 +161,8 @@ const linux = {
       }
     }
     const intervalMs = prev ? Math.max(500, Date.now() - prev.ts) : 2000;
-    const diskStats = parseDiskstats((s.G || []).join('\n'));
-    const disks = parseDf((s.F || []).join('\n')).map((d) => {
+    const diskStats = parseDiskstats((s.F || []).join('\n'));
+    const disks = parseDf((s.E || []).join('\n')).map((d) => {
       const name = d.dev.replace(/^\/dev\//, '');
       const curr = diskStats[name] || diskStats[name.replace(/\d+$/, '')];
       const prevD = prev && prev.disk && (prev.disk[name] || prev.disk[name.replace(/\d+$/, '')]);
@@ -177,13 +172,11 @@ const linux = {
       return Object.assign(d, { readKBs: Math.round(rd * 10) / 10, writeKBs: Math.round(wr * 10) / 10 });
     });
     return {
-      prev: { aggregate: stat.aggregate, cores: stat.cores, net, disk: diskStats, ts: Date.now() },
+      prev: { aggregate: stat.aggregate, net, disk: diskStats, ts: Date.now() },
       snapshot: {
         cpu: {
           cores: stat.cores.length,
           overall: overall == null ? null : Math.round(overall * 10) / 10,
-          perCore: perCore.some((v) => v != null) ? perCore : null,
-          load: load.length >= 3 ? load.slice(0, 3) : null,
         },
         mem: parseMeminfo((s.B || []).join('\n')),
         net: {
@@ -276,7 +269,7 @@ const darwin = {
     return {
       prev: { net, ts: Date.now() },
       snapshot: {
-        cpu: { cores: 0, overall: overall == null ? null : Math.round(overall * 10) / 10, perCore: null, load: null },
+        cpu: { cores: 0, overall: overall == null ? null : Math.round(overall * 10) / 10 },
         mem: {
           totalGB,
           usedGB: Math.round((usedPages * pageSize / 1024 / 1024 / 1024) * 100) / 100,
@@ -305,37 +298,50 @@ function jsonSafe(text) {
   return String(text == null ? '' : text).replace(/^﻿+/, '').trim();
 }
 
-const WINDOWS_META_SCRIPT = [
+/** meta 与 poll 都要查的系统信息，合并启动路径共用同一次查询。 */
+const WINDOWS_HEAD = [
   "$ErrorActionPreference='SilentlyContinue'",
   "[Console]::OutputEncoding=[Text.Encoding]::UTF8",
-  "$S=Get-CimInstance Win32_ComputerSystem",
   "$O=Get-CimInstance Win32_OperatingSystem",
-  "$C=@(Get-CimInstance Win32_Processor)",
-  "@{hostname=$S.Name;distro=$O.Caption;kernel=$O.Version;arch=$env:PROCESSOR_ARCHITECTURE;cpuModel=$C[0].Name;sockets=[int]$S.NumberOfProcessors;cores=[int]$S.NumberOfLogicalProcessors;tz=(Get-TimeZone).Id}|ConvertTo-Json -Compress -Depth 3",
-].join(';');
+  "$S=Get-CimInstance Win32_ComputerSystem",
+];
 
-const WINDOWS_POLL_SCRIPT = [
-  "$ErrorActionPreference='SilentlyContinue'",
-  "[Console]::OutputEncoding=[Text.Encoding]::UTF8",
-  "$O=Get-CimInstance Win32_OperatingSystem",
-  "$S=Get-CimInstance Win32_ComputerSystem",
-  "$P=@(Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor)",
-  "$T=@($P|Where-Object{$_.Name -ne '_Total'})",
-  "$A=@($P|Where-Object{$_.Name -eq '_Total'})",
+const WINDOWS_META_JSON = "@{hostname=$S.Name;distro=$O.Caption;kernel=$O.Version;arch=$env:PROCESSOR_ARCHITECTURE;cpuModel=$C[0].Name;sockets=[int]$S.NumberOfProcessors;cores=[int]$S.NumberOfLogicalProcessors;tz=(Get-TimeZone).Id}|ConvertTo-Json -Compress -Depth 3";
+
+const WINDOWS_POLL_BODY = [
+  "$A=@(Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter \"Name='_Total'\")",
   "$D=@(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3')",
   "$N=@(Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface)",
   "$PD=@(Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk)",
   "$rx=0.0;$tx=0.0",
   "foreach($i in $N){$rx+=[double]$i.BytesReceivedPersec;$tx+=[double]$i.BytesSentPersec}",
-  "$j=@{cpu=@{cores=[int]$S.NumberOfLogicalProcessors;overall=[double]$A[0].PercentProcessorTime;perCore=@($T|ForEach-Object{[double]$_.PercentProcessorTime})};mem=@{totalGB=[math]::Round($O.TotalVisibleMemorySize/1MB,1);usedGB=[math]::Round(($O.TotalVisibleMemorySize-$O.FreePhysicalMemory)/1MB,1);cacheGB=0};net=@{rxKBs=[math]::Round($rx/1KB,1);txKBs=[math]::Round($tx/1KB,1)};disks=@($D|ForEach-Object{@{dev=$_.DeviceID;mount=$_.DeviceID;fs=$_.FileSystem;totalGB=[math]::Round($_.Size/1GB,1);usedGB=[math]::Round(($_.Size-$_.FreeSpace)/1GB,1)}});diskio=@($PD|ForEach-Object{@{n=$_.Name;r=[double]$_.ReadBytesPersec;w=[double]$_.WriteBytesPersec}});uptimeSec=[int](((Get-Date)-$O.LastBootUpTime).TotalSeconds)}",
+  "$j=@{cpu=@{cores=[int]$S.NumberOfLogicalProcessors;overall=[double]$A[0].PercentProcessorTime};mem=@{totalGB=[math]::Round($O.TotalVisibleMemorySize/1MB,1);usedGB=[math]::Round(($O.TotalVisibleMemorySize-$O.FreePhysicalMemory)/1MB,1);cacheGB=0};net=@{rxKBs=[math]::Round($rx/1KB,1);txKBs=[math]::Round($tx/1KB,1)};disks=@($D|ForEach-Object{@{dev=$_.DeviceID;mount=$_.DeviceID;fs=$_.FileSystem;totalGB=[math]::Round($_.Size/1GB,1);usedGB=[math]::Round(($_.Size-$_.FreeSpace)/1GB,1)}});diskio=@($PD|ForEach-Object{@{n=$_.Name;r=[double]$_.ReadBytesPersec;w=[double]$_.WriteBytesPersec}});uptimeSec=[int](((Get-Date)-$O.LastBootUpTime).TotalSeconds)}",
   "$j|ConvertTo-Json -Compress -Depth 6",
-].join(';');
+];
+
+const WINDOWS_META_SCRIPT = WINDOWS_HEAD.concat(['$C=@(Get-CimInstance Win32_Processor)', WINDOWS_META_JSON]).join(';');
+
+const WINDOWS_POLL_SCRIPT = WINDOWS_HEAD.concat(WINDOWS_POLL_BODY).join(';');
+
+/** 一次 PowerShell 冷启动同时交出 meta 与首帧，Windows 上省掉一半进程启动开销。 */
+const WINDOWS_START_SCRIPT = WINDOWS_HEAD.concat([
+  '$C=@(Get-CimInstance Win32_Processor)',
+  "'@A'",
+  WINDOWS_META_JSON,
+  "'@B'",
+]).concat(WINDOWS_POLL_BODY).join(';');
 
 const windows = {
   id: 'windows',
   pollMs: 5000,
   metaCommand: powershell(WINDOWS_META_SCRIPT),
   pollCommand: powershell(WINDOWS_POLL_SCRIPT),
+  startCommand: powershell(WINDOWS_START_SCRIPT),
+  parseStart(text) {
+    const s = sections(text);
+    if (!s.A || !s.B) return null;
+    return { meta: this.parseMeta(s.A.join('\n')), pollText: s.B.join('\n') };
+  },
   parseMeta(text) {
     try {
       const raw = JSON.parse(jsonSafe(text));
@@ -361,7 +367,6 @@ const windows = {
       return null;
     }
     if (!raw || !raw.cpu) return null;
-    const perCore = Array.isArray(raw.cpu.perCore) && raw.cpu.perCore.length ? raw.cpu.perCore.map((v) => num(v)) : null;
     const ioList = Array.isArray(raw.diskio) ? raw.diskio : [];
     const disks = Array.isArray(raw.disks)
       ? raw.disks.map((d) => {
@@ -376,10 +381,8 @@ const windows = {
       prev: null,
       snapshot: {
         cpu: {
-          cores: num(raw.cpu.cores, perCore ? perCore.length : 0),
+          cores: num(raw.cpu.cores, 0),
           overall: num(raw.cpu.overall, 0),
-          perCore,
-          load: null,
         },
         mem: { totalGB: num(raw.mem.totalGB, 0), usedGB: num(raw.mem.usedGB, 0), cacheGB: 0 },
         net: { dev: '', rxKBs: num(raw.net.rxKBs, 0), txKBs: num(raw.net.txKBs, 0), rxGB: null, txGB: null },
