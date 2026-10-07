@@ -149,6 +149,12 @@ export const api = hasBridge
       async monitorStop() {
         return { ok: true, existed: false };
       },
+      async monitorUiGet() {
+        return null;
+      },
+      async monitorUiSet() {
+        return { ok: false, code: 'NO_BRIDGE' };
+      },
       onMonitorSnapshot() {
         return () => {};
       },

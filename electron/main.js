@@ -862,6 +862,26 @@ function registerIpc() {
     ownSsh(sender, sessionId);
     return sshMonitor.stop(sessionId);
   }, true);
+  /**
+   * 监控面板的开合、刷新间隔与宽度是界面偏好，但页签在宿主窗口之间移动时视图实例会被重建；
+   * 存在主进程、按 tabId 取，拆分与合并就都不要求用户重开一次面板。
+   * 两个入口都走 handle 的来源校验（自有窗口的主框架）；状态本身只按形状校验，不含凭据也不触发远端动作。
+   */
+  const monitorUi = new Map();
+  handle('monitor:ui-get', (sender, tabId) => (typeof tabId === 'string' ? monitorUi.get(tabId) || null : null), true);
+  handle('monitor:ui-set', (sender, tabId, ui) => {
+    if (typeof tabId !== 'string' || !tabId || tabId.length > 128 || !ui || typeof ui !== 'object') {
+      return { ok: false, code: 'BAD_REQUEST' };
+    }
+    const next = monitorUi.get(tabId) || { open: false, intervalSec: null, width: null };
+    if (typeof ui.open === 'boolean') next.open = ui.open;
+    if (ui.intervalSec === null || (Number.isInteger(ui.intervalSec) && ui.intervalSec >= 1 && ui.intervalSec <= 60)) {
+      next.intervalSec = ui.intervalSec;
+    }
+    if (ui.width === null || (typeof ui.width === 'number' && ui.width >= 18 && ui.width <= 60)) next.width = ui.width;
+    monitorUi.set(tabId, next);
+    return { ok: true };
+  }, true);
 
   // ---- AI 助手：一切动作都以「是否拥有这条 SSH 会话」为权限边界 ----
   handle('ai:send', (sender, req) => {
@@ -1132,7 +1152,10 @@ function registerIpc() {
       logger.info('session', 'detached window closed', { tabId, kind, reason: current.reason || 'window' });
       // Only dragging the window back onto the tab bar re-hosts it; any other close ends the session.
       if (current.reason === 'merge') send('session:detached', { tabId, detached: false });
-      else send('session:closed', { tabId });
+      else {
+        monitorUi.delete(tabId);
+        send('session:closed', { tabId });
+      }
     });
     /**
      * Closing this window ends the session, so it asks first with the same prompt the tab bar

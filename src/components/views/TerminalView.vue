@@ -261,6 +261,8 @@ export default {
   created() {
     this._disposed = false;
     this._connectVersion = 0;
+    this._monitorGen = 0;
+    this._monitorUiPromise = null;
     this._handedOff = false;
     this._aiUnreadTimer = null;
     this._inputSubscriptions = [];
@@ -319,13 +321,9 @@ export default {
       this._sideUp = null;
     }
     document.body.style.userSelect = '';
-    if (this.monitorOpen && this.liveSessionId && api.monitorStop) {
-      try {
-        const r = api.monitorStop(this.liveSessionId);
-        if (r && typeof r.then === 'function') r.catch(() => {});
-      } catch (_) {}
-    }
     // A handover means another window is about to re-host this very connection.
+    // 交接时监控 runner 也留给新宿主：它用的还是同一个 client，拆掉就得重新探测并启动一次。
+    // 真正结束会话才连监控一起停，由 disconnectNow 在 liveSessionId 置空前调用。
     if (this.liveSessionId && takeSessionHandover(this.sessionId)) this.releaseHost();
     else this.disconnectNow(true);
     this.teardownTerm();
@@ -701,6 +699,9 @@ export default {
         this._sentRows = rows;
         if (this.term && r.tail) r.tail.forEach((chunk) => this.term.write(chunk));
         this.status = r.ready ? 'ready' : 'connecting';
+        // 换宿主不换 runner：它的 client 还是同一个，广播目标 ownerId 已随 ssh:attach 转移
+        await this.applyMonitorUi();
+        if (!isCurrent()) return;
         // The previous host may have left a monitor runner polling for its now-dead window.
         if (!this.monitorOpen) this.stopMonitor();
         refresh().catch(() => {});
@@ -807,6 +808,35 @@ export default {
       }
     },
 
+    /**
+     * 面板的开合、刷新间隔与宽度记在主进程按 tabId 的表里：拆分/合并只是换宿主窗口，视图实例会被重建，
+     * 复原它才不用用户每次重开面板、重付一次探测与采集启动的代价。
+     */
+    async applyMonitorUi() {
+      if (!this._monitorUiPromise) {
+        this._monitorUiPromise = api.monitorUiGet
+          ? api.monitorUiGet(this.sessionId).catch(() => null)
+          : Promise.resolve(null);
+      }
+      const ui = await this._monitorUiPromise;
+      if (this._disposed || !ui || !ui.open) return;
+      if (ui.intervalSec) this.monitorIntervalSec = ui.intervalSec;
+      if (ui.width) this.monitorWidth = ui.width;
+      this.monitorOpen = true;
+      this.monitorEver = true;
+      this.subscribeMonitor();
+      if (this.status === 'ready' && this.monitorState !== 'live') this.startMonitor();
+    },
+
+    persistMonitorUi() {
+      if (!api.monitorUiSet) return;
+      const payload = { open: this.monitorOpen, intervalSec: this.monitorIntervalSec, width: Math.round(this.monitorWidth) };
+      try {
+        const r = api.monitorUiSet(this.sessionId, payload);
+        if (r && typeof r.then === 'function') r.catch(() => {});
+      } catch (_) {}
+    },
+
     toggleMonitor() {
       if (this.monitorOpen) {
         this.closeMonitor();
@@ -815,6 +845,7 @@ export default {
       this.monitorOpen = true;
       this.monitorEver = true;
       this.subscribeMonitor();
+      this.persistMonitorUi();
       if (this.status === 'ready') this.startMonitor();
       else this.monitorState = 'offline';
     },
@@ -822,6 +853,7 @@ export default {
     closeMonitor() {
       this.monitorOpen = false;
       this.stopMonitor();
+      this.persistMonitorUi();
     },
 
     toggleAi() {
@@ -898,6 +930,7 @@ export default {
       const value = Number(sec);
       if (!Number.isInteger(value) || value < 1 || value > 60) return;
       this.monitorIntervalSec = value;
+      this.persistMonitorUi();
       const sid = this.liveSessionId;
       if (!sid || this.status !== 'ready' || !this.monitorOpen || !api.monitorStart) return;
       try {
@@ -930,11 +963,13 @@ export default {
         this.monitorState = 'unsupported';
         return;
       }
+      const gen = ++this._monitorGen;
       this.monitorState = 'probing';
       if (this.$refs.monitorPanel) this.$refs.monitorPanel.resetHistory();
       try {
         const r = unwrap(await api.monitorStart(sid, this.monitorIntervalSec || undefined));
-        if (this._disposed || this.liveSessionId !== sid || !this.monitorOpen) return;
+        // 代际不一致说明期间又关/开过面板，晚到的结果不能改写新一次的状态
+        if (this._disposed || gen !== this._monitorGen || this.liveSessionId !== sid || !this.monitorOpen) return;
         if (!r || !r.supported) {
           this.monitorState = r && r.reason === 'not-ready' ? 'offline' : 'unsupported';
           return;
@@ -944,7 +979,7 @@ export default {
         this.monitorSnapshot = r.snapshot || null;
         this.monitorState = r.snapshot ? 'live' : 'probing';
       } catch (e) {
-        if (this._disposed || this.liveSessionId !== sid) return;
+        if (this._disposed || gen !== this._monitorGen || this.liveSessionId !== sid) return;
         this.monitorState = 'error';
       }
     },
@@ -976,6 +1011,7 @@ export default {
         window.removeEventListener('mouseup', onUp);
         this._splitMove = null;
         this._splitUp = null;
+        this.persistMonitorUi();
         this.scheduleFit();
       };
       this.monitorDragging = true;
@@ -1024,6 +1060,8 @@ export default {
       this._connectVersion += 1;
       if (this._rsTimer) clearTimeout(this._rsTimer);
       const sid = this.liveSessionId;
+      // 监控要先停：sid 置空后 status 监听与 beforeDestroy 都拿不到会话，runner 只能空转到下一轮
+      if (this.monitorOpen) this.stopMonitor();
       this.liveSessionId = null;
       // 重连后旧目录已无意义，交给下次 OSC 7 或主进程探测重新确定
       this.oscCwd = '';

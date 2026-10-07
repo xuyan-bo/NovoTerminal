@@ -91,6 +91,8 @@ const api = {
   // SSH server monitor (per-session stats pushed to the owning window)
   monitorStart: (sessionId, intervalSec) => ipcRenderer.invoke('monitor:start', sessionId, intervalSec),
   monitorStop: (sessionId) => ipcRenderer.invoke('monitor:stop', sessionId),
+  monitorUiGet: (tabId) => ipcRenderer.invoke('monitor:ui-get', tabId),
+  monitorUiSet: (tabId, ui) => ipcRenderer.invoke('monitor:ui-set', tabId, ui),
   onMonitorSnapshot: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('monitor:snapshot', handler);

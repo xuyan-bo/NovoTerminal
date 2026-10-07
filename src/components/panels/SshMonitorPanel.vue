@@ -222,14 +222,14 @@ export default {
     memPctText() {
       const mem = this.snap.mem;
       if (!mem || !mem.totalGB) return '--%';
-      return ((mem.usedGB / mem.totalGB) * 100).toFixed(1) + '%';
+      return (((mem.usedGB || 0) / mem.totalGB) * 100).toFixed(1) + '%';
     },
     memLegend() {
       const c = this.palette();
       const mem = this.snap.mem || {};
       const free = Math.max(0, (mem.totalGB || 0) - (mem.usedGB || 0) - (mem.cacheGB || 0));
       const pctOf = (v) => (mem.totalGB ? ((v / mem.totalGB) * 100).toFixed(0) + '%' : '');
-      const usedPct = mem.totalGB ? (mem.usedGB / mem.totalGB) * 100 : 0;
+      const usedPct = mem.totalGB ? ((mem.usedGB || 0) / mem.totalGB) * 100 : 0;
       return [
         { label: this.$t('monitor.used'), value: (mem.usedGB || 0).toFixed(1) + 'G', pct: pctOf(mem.usedGB || 0), color: this.tone(usedPct) },
         { label: this.$t('monitor.cache'), value: (mem.cacheGB || 0).toFixed(1) + 'G', pct: pctOf(mem.cacheGB || 0), color: c.success },
@@ -313,7 +313,7 @@ export default {
       return pct > 85 ? c.danger : pct > 70 ? c.warning : c.accent;
     },
     diskPct(d) {
-      return d.totalGB ? Math.min(100, (d.usedGB / d.totalGB) * 100) : 0;
+      return d.totalGB ? Math.min(100, ((d.usedGB || 0) / d.totalGB) * 100) : 0;
     },
     fmtGB(gb) {
       return gb >= 1024 ? (gb / 1024).toFixed(1) + 'T' : gb.toFixed(1) + 'G';
@@ -322,7 +322,7 @@ export default {
       return this.fmtGB(d.usedGB || 0) + '/' + this.fmtGB(d.totalGB || 0);
     },
     diskTitle(d) {
-      return (d.dev || '') + ' ' + d.mount + ' ' + d.usedGB + ' / ' + d.totalGB + ' GB';
+      return (d.dev || '') + ' ' + d.mount + ' ' + (d.usedGB || 0) + ' / ' + (d.totalGB || 0) + ' GB';
     },
     pushHistory(snap) {
       const h = this._hist;
@@ -416,7 +416,7 @@ export default {
       const mem = this.snap.mem || {};
       const donut = this.ensureChart('memDonut', this.$refs.memDonut);
       if (donut) {
-        const pct = mem.totalGB ? (mem.usedGB / mem.totalGB) * 100 : 0;
+        const pct = mem.totalGB ? ((mem.usedGB || 0) / mem.totalGB) * 100 : 0;
         const free = Math.max(0, (mem.totalGB || 0) - (mem.usedGB || 0) - (mem.cacheGB || 0));
         donut.setOption({
           animation: false,

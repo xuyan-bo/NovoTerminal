@@ -1,11 +1,13 @@
 const collectors = require('./monitor/collectors');
+const { PowerShellChannel } = require('./monitor/PowerShellChannel');
 const { exec: remoteExec, platformOf } = require('./exec');
 
 const PROBE_TIMEOUT_MS = 6000;
 const META_TIMEOUT_MS = 12000;
 const POLL_TIMEOUT_MS = 8000;
-const WINDOWS_POLL_TIMEOUT_MS = 20000;
-const START_TIMEOUT_MS = 24000;
+const WINDOWS_BOOT_TIMEOUT_MS = 20000;
+const WINDOWS_FRAME_TIMEOUT_MS = 8000;
+const START_SEED_GAP_MS = 1000;
 const MAX_POLL_FAILURES = 3;
 
 function monitorError(code, message) {
@@ -46,9 +48,11 @@ class SshMonitorManager {
         return { ok: true, supported: existing.supported !== false, platform: existing.platform, meta: existing.meta, snapshot: existing.lastSnapshot, intervalSec: Math.round(existing.intervalMs / 1000) };
       }
       // A probe is still running; join it instead of launching a second one.
+      // 探测期间的间隔修改也要落到同一个 runner：runStart 只有在 intervalMs 为空时才取采集器默认值。
+      if (requestedMs) existing.intervalMs = requestedMs;
       return existing.pending;
     }
-    const runner = { platform: null, meta: null, supported: false, lastSnapshot: null, timer: null, state: null, failures: 0, collector: null, stopRequested: false, intervalMs: null };
+    const runner = { platform: null, meta: null, supported: false, lastSnapshot: null, timer: null, state: null, failures: 0, collector: null, stopRequested: false, intervalMs: null, shell: null, busy: false };
     if (requestedMs) runner.intervalMs = requestedMs;
     this.runners.set(sessionId, runner);
     runner.pending = this.runStart(sessionId, runner).catch((e) => {
@@ -83,38 +87,33 @@ class SshMonitorManager {
     runner.collector = collector;
     runner.supported = true;
     if (!runner.intervalMs) runner.intervalMs = collector.pollMs;
-    let meta = null;
     let snapshot = null;
-    let pollText = null;
-    const combined = Boolean(collector.startCommand);
-    if (combined) {
-      // Windows 上 meta 与首帧由同一次 PowerShell 启动给出，省掉一次进程冷启动
+    if (collector.resident) {
+      // meta 与首帧由同一次 boot 给出（boot 内含相隔 1 秒的两帧采样），所以 Windows 首帧就带速率
       try {
-        const out = await exec(client, collector.startCommand, charset, START_TIMEOUT_MS);
-        const started = collector.parseStart(out.stdout);
-        if (!started) throw monitorError('SSH_MONITOR_PARSE', 'monitor output unparseable');
-        meta = started.meta;
-        pollText = started.pollText;
+        snapshot = await this.openResident(sessionId, runner, target);
       } catch (e) {
-        this.log && this.log.error('ssh', 'ssh monitor combined start failed', { sessionId, host, message: e.message, code: e.code });
+        this.log && this.log.error('ssh', 'ssh monitor resident start failed', { sessionId, host, message: e.message, code: e.code });
         this.stop(sessionId);
         throw e;
       }
     } else {
+      let meta = null;
       try {
         const metaOut = await exec(client, collector.metaCommand, charset, META_TIMEOUT_MS);
         meta = collector.parseMeta(metaOut.stdout);
       } catch (e) {
         this.log && this.log.warn('ssh', 'ssh monitor meta failed', { sessionId, host, message: e.message });
       }
-    }
-    meta = meta || {};
-    meta.ip = target.host;
-    runner.meta = meta;
-    if (combined) {
-      snapshot = this.applyPoll(sessionId, runner, pollText);
-    } else {
+      meta = meta || {};
+      meta.ip = target.host;
+      runner.meta = meta;
       try {
+        // 首帧也要有速率：先取一帧纯做差分基准，隔 1 秒后再取真正广播的首帧（与 Windows boot 的双采样同语义）
+        const seed = await exec(client, collector.pollCommand, charset, POLL_TIMEOUT_MS);
+        const seeded = collector.parsePoll(seed.stdout, null);
+        if (seeded) runner.state = seeded.prev;
+        await new Promise((resolve) => setTimeout(resolve, START_SEED_GAP_MS));
         snapshot = await this.pollOnce(sessionId, runner);
       } catch (e) {
         this.log && this.log.error('ssh', 'ssh monitor first poll failed', { sessionId, host, message: e.message, code: e.code });
@@ -122,16 +121,56 @@ class SshMonitorManager {
         throw e;
       }
     }
-    // The session died or the runner was stopped mid-start: the first snapshot came back null without throwing.
-    // Registering a timer here would leave the renderer stuck behind a loading mask forever.
-    if (!snapshot && this.runners.get(sessionId) !== runner) {
-      this.log && this.log.warn('ssh', 'ssh monitor start aborted: runner gone', { sessionId, host });
-      return { ok: true, supported: false, reason: 'not-ready' };
+    // 首帧没回来：会话已断则按 not-ready 返回，否则说明采集输出不可用
+    // （注册定时器会让渲染端永久停在加载遮罩上，种子帧残缺时也会让速率一直空白）
+    if (!snapshot) {
+      if (this.runners.get(sessionId) !== runner) {
+        this.log && this.log.warn('ssh', 'ssh monitor start aborted: runner gone', { sessionId, host });
+        return { ok: true, supported: false, reason: 'not-ready' };
+      }
+      this.log && this.log.error('ssh', 'ssh monitor start failed: no usable first frame', { sessionId, host });
+      this.stop(sessionId);
+      throw monitorError('SSH_MONITOR_PARSE', 'monitor first frame unparseable');
     }
     this.resetTimer(sessionId, runner);
     this.log && this.log.info('ssh', 'ssh monitor started', { sessionId, host, port, platform, intervalMs: runner.intervalMs });
     runner.pending = null;
-    return { ok: true, supported: true, platform, meta, snapshot, intervalSec: runner.intervalMs / 1000 };
+    return { ok: true, supported: true, platform, meta: runner.meta, snapshot, intervalSec: runner.intervalMs / 1000 };
+  }
+
+  /** 打开（或重开）常驻 PowerShell 通道并消费 boot：meta 落到 runner，尾帧直接作为一帧快照广播。 */
+  async openResident(sessionId, runner, target) {
+    // boot 脚本把远端 [Console]::OutputEncoding 固定成 UTF-8，通道也必须按 UTF-8 解码，
+    // 否则会拿终端的 GBK 等字符集去解 UTF-8 字节，meta 里的发行版/CPU 型号/时区全是乱码
+    const shell = await PowerShellChannel.open({ client: target.client, charset: 'UTF-8', log: this.log });
+    if (this.runners.get(sessionId) !== runner || runner.stopRequested) {
+      shell.destroy();
+      return null;
+    }
+    runner.shell = shell;
+    this.log && this.log.info('ssh', 'ssh monitor powershell channel opened', { sessionId, host: target.host });
+    const block = await shell.run(runner.collector.bootCommand, WINDOWS_BOOT_TIMEOUT_MS);
+    if (this.runners.get(sessionId) !== runner) {
+      this.dropShell(runner);
+      return null;
+    }
+    const boot = runner.collector.parseBoot(block);
+    if (boot && boot.error === 'counters') {
+      // 不是输出坏了，是这台机器的性能计数器库本身查不到；重开通道也不会好，日志要能直接给出修复线索
+      this.log && this.log.error('ssh', 'ssh monitor raw perf counters unavailable', { sessionId, host: target.host });
+      throw monitorError('SSH_MONITOR_COUNTERS', 'perf counters unavailable, repair with: lodctr /R');
+    }
+    if (!boot) throw monitorError('SSH_MONITOR_PARSE', 'monitor boot output unparseable');
+    runner.meta = Object.assign({}, boot.meta, { ip: target.host });
+    runner.state = boot.prev;
+    return this.emitSnapshot(sessionId, runner, boot.snapshot);
+  }
+
+  dropShell(runner) {
+    const shell = runner.shell;
+    if (!shell) return;
+    runner.shell = null;
+    shell.destroy();
   }
 
   async probe(target, logMeta) {
@@ -153,19 +192,34 @@ class SshMonitorManager {
       this.stop(sessionId);
       return null;
     }
-    const collector = runner.collector;
-    const timeoutMs = runner.platform === 'windows' ? WINDOWS_POLL_TIMEOUT_MS : POLL_TIMEOUT_MS;
-    let out;
+    // 上一帧还没回来就跳过这个周期：常驻通道一次只容一帧在飞
+    if (runner.busy) return null;
+    runner.busy = true;
     try {
-      out = await exec(target.client, collector.pollCommand, target.charset, timeoutMs);
+      if (runner.collector.resident) return await this.pollResident(sessionId, runner, target);
+      const out = await exec(target.client, runner.collector.pollCommand, target.charset, POLL_TIMEOUT_MS);
+      return this.applyPoll(sessionId, runner, out.stdout);
     } catch (e) {
+      if (this.runners.get(sessionId) !== runner || runner.stopRequested) return null;
       this.handleFailure(sessionId, runner, e);
       return null;
+    } finally {
+      runner.busy = false;
     }
-    return this.applyPoll(sessionId, runner, out.stdout);
   }
 
-  /** 解析一帧输出并广播；合并启动路径直接复用已有输出，不再发起第二次调用。 */
+  async pollResident(sessionId, runner, target) {
+    const shell = runner.shell;
+    if (shell && shell.alive) {
+      return this.applyPoll(sessionId, runner, await shell.run(runner.collector.frameCommand, WINDOWS_FRAME_TIMEOUT_MS));
+    }
+    // 通道断了（远端进程退出或帧超时已自毁）：重开 boot，失败照旧计入轮询失败次数
+    this.dropShell(runner);
+    this.log && this.log.warn('ssh', 'ssh monitor powershell channel lost, reopening', { sessionId, host: target.host });
+    return this.openResident(sessionId, runner, target);
+  }
+
+  /** 解析一帧输出并广播；boot 的尾帧已经解析成快照，直接走 emitSnapshot。 */
   applyPoll(sessionId, runner, text) {
     if (this.runners.get(sessionId) !== runner || runner.stopRequested) return null;
     const parsed = runner.collector.parsePoll(text, runner.state);
@@ -174,7 +228,12 @@ class SshMonitorManager {
       return null;
     }
     runner.state = parsed.prev;
-    const snapshot = parsed.snapshot;
+    return this.emitSnapshot(sessionId, runner, parsed.snapshot);
+  }
+
+  emitSnapshot(sessionId, runner, snapshot) {
+    if (!snapshot) return null;
+    if (this.runners.get(sessionId) !== runner || runner.stopRequested) return null;
     if (snapshot.cpu && runner.meta) {
       if (!snapshot.cpu.cores && runner.meta.cores) snapshot.cpu.cores = runner.meta.cores;
       if (!snapshot.cpu.sockets) snapshot.cpu.sockets = runner.meta.sockets;
@@ -207,6 +266,7 @@ class SshMonitorManager {
     this.runners.delete(sessionId);
     runner.stopRequested = true;
     if (runner.timer) clearInterval(runner.timer);
+    this.dropShell(runner);
     this.log && this.log.info('ssh', 'ssh monitor stopped', { sessionId, platform: runner.platform });
     return { ok: true, existed: true };
   }

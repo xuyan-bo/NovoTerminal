@@ -21,6 +21,14 @@ function num(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function round1(value) {
+  return Math.round(value * 10) / 10;
+}
+
+function round2(value) {
+  return Math.round(value * 100) / 100;
+}
+
 function gb(kb) {
   return Math.round((kb / 1024 / 1024) * 100) / 100;
 }
@@ -141,8 +149,11 @@ const linux = {
   parsePoll(text, prev) {
     const s = sections(text);
     const stat = parseStat((s.A || []).join('\n'));
+    const uptimeSec = num((s.C || []).join('').trim().split(/\s+/)[0], 0);
+    // 只认基准可用的上一帧：畸形输出把 0 写进 state 会让速率永久失真，远端 uptime 必须比上一帧更大
+    if (prev && (!prev.aggregate || !prev.aggregate.length || !(uptimeSec > prev.uptimeSec))) return null;
     const overall = tickPercent(prev && prev.aggregate, stat.aggregate);
-    const uptime = Math.floor(num((s.C || []).join('').trim().split(/\s+/)[0], 0));
+    const uptime = Math.floor(uptimeSec);
     const net = parseNetDev((s.D || []).join('\n'));
     let rx = 0;
     let tx = 0;
@@ -160,7 +171,8 @@ const linux = {
         tx += Math.max(0, counters.tx - prev.net[dev].tx);
       }
     }
-    const intervalMs = prev ? Math.max(500, Date.now() - prev.ts) : 2000;
+    // 分母用远端 /proc/uptime 差分：本地解析时刻把 exec 与网络往返也算进去，df 一慢就会污染速率
+    const intervalMs = prev ? Math.max(500, (uptimeSec - prev.uptimeSec) * 1000) : 2000;
     const diskStats = parseDiskstats((s.F || []).join('\n'));
     const disks = parseDf((s.E || []).join('\n')).map((d) => {
       const name = d.dev.replace(/^\/dev\//, '');
@@ -172,7 +184,7 @@ const linux = {
       return Object.assign(d, { readKBs: Math.round(rd * 10) / 10, writeKBs: Math.round(wr * 10) / 10 });
     });
     return {
-      prev: { aggregate: stat.aggregate, net, disk: diskStats, ts: Date.now() },
+      prev: { aggregate: stat.aggregate, net, disk: diskStats, uptimeSec },
       snapshot: {
         cpu: {
           cores: stat.cores.length,
@@ -253,6 +265,7 @@ const darwin = {
         tx += Math.max(0, counters.tx - prev.net[dev].tx);
       }
     }
+    // macOS 的 BSD date 没有亚秒精度，拿不到可用的远端采样时钟，只能继续用本地解析间隔
     const intervalMs = prev ? Math.max(500, Date.now() - prev.ts) : 3000;
     const boot = num((s.E || []).join('').match(/sec\s*=\s*(\d+)/)?.[1], 0);
     const disks = [];
@@ -289,58 +302,100 @@ const darwin = {
   },
 };
 
-function powershell(script) {
-  return 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + Buffer.from(script, 'utf16le').toString('base64');
-}
-
 /** PowerShell console output can carry a UTF-8 BOM that JSON.parse rejects. */
 function jsonSafe(text) {
   return String(text == null ? '' : text).replace(/^﻿+/, '').trim();
 }
 
-/** meta 与 poll 都要查的系统信息，合并启动路径共用同一次查询。 */
-const WINDOWS_HEAD = [
+/** boot 失败分两种：输出坏了（重开通道可能就好）与这台机器的性能计数器类根本查不到（重开多少次都一样）。 */
+function countersMissing(text) {
+  try {
+    const raw = JSON.parse(jsonSafe(text));
+    return Boolean(raw) && raw.rawOk === false;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** Windows 采集走常驻 PowerShell 通道：boot 一次查完慢的基础类并把静态量留在进程全局，之后每帧只读
+ *  `Win32_PerfRawData_*` 原始计数器，速率与占用由 JS 端按远端 100NS 时间戳差分（与 Linux 的 /proc 差分同语义）。
+ *  实测冷查 FormattedData 聚合类要 0.55~1.8s，原始计数器只要 15~80ms，差一个数量级。
+ *  经 stdin 喂给 `powershell -Command -` 的脚本必须是分号拼成的单行、且只含 ASCII：
+ *  带换行的多行构造会让行解析器一直等闭合，此后所有输入都不再执行。 */
+const WINDOWS_IDLE_SEC = 900;
+
+const WINDOWS_BASE = [
   "$ErrorActionPreference='SilentlyContinue'",
-  "[Console]::OutputEncoding=[Text.Encoding]::UTF8",
-  "$O=Get-CimInstance Win32_OperatingSystem",
-  "$S=Get-CimInstance Win32_ComputerSystem",
+  '[Console]::OutputEncoding=[Text.Encoding]::UTF8',
+  '$Global:Exp=(Get-Date).AddSeconds(' + WINDOWS_IDLE_SEC + ')',
 ];
 
-const WINDOWS_META_JSON = "@{hostname=$S.Name;distro=$O.Caption;kernel=$O.Version;arch=$env:PROCESSOR_ARCHITECTURE;cpuModel=$C[0].Name;sockets=[int]$S.NumberOfProcessors;cores=[int]$S.NumberOfLogicalProcessors;tz=(Get-TimeZone).Id}|ConvertTo-Json -Compress -Depth 3";
+/** 卷的 fs 与容量只来自 Win32_LogicalDisk（原始磁盘类没有这两项）：boot 扫一次，帧脚本每 WINDOWS_CAP_EVERY 帧重扫，
+ *  这样 boot 之后新插入的 U 盘、新映射的网络盘最迟 N 个周期就会出现，而每帧的贵查询仍然只有一次都没有。 */
+const WINDOWS_CAP_EVERY = 15;
+const WINDOWS_CAP_SCAN = 'foreach($v in @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3")){$Global:Cap[$v.DeviceID]=@{fs=$v.FileSystem;totalMB=[math]::Round($v.Size/1MB,1)}}';
 
-const WINDOWS_POLL_BODY = [
-  "$A=@(Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter \"Name='_Total'\")",
-  "$D=@(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3')",
-  "$N=@(Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface)",
-  "$PD=@(Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk)",
-  "$rx=0.0;$tx=0.0",
-  "foreach($i in $N){$rx+=[double]$i.BytesReceivedPersec;$tx+=[double]$i.BytesSentPersec}",
-  "$j=@{cpu=@{cores=[int]$S.NumberOfLogicalProcessors;overall=[double]$A[0].PercentProcessorTime};mem=@{totalGB=[math]::Round($O.TotalVisibleMemorySize/1MB,1);usedGB=[math]::Round(($O.TotalVisibleMemorySize-$O.FreePhysicalMemory)/1MB,1);cacheGB=0};net=@{rxKBs=[math]::Round($rx/1KB,1);txKBs=[math]::Round($tx/1KB,1)};disks=@($D|ForEach-Object{@{dev=$_.DeviceID;mount=$_.DeviceID;fs=$_.FileSystem;totalGB=[math]::Round($_.Size/1GB,1);usedGB=[math]::Round(($_.Size-$_.FreeSpace)/1GB,1)}});diskio=@($PD|ForEach-Object{@{n=$_.Name;r=[double]$_.ReadBytesPersec;w=[double]$_.WriteBytesPersec}});uptimeSec=[int](((Get-Date)-$O.LastBootUpTime).TotalSeconds)}",
-  "$j|ConvertTo-Json -Compress -Depth 6",
+/** 只在 boot 查一次的慢类与静态量：OS 描述、核数、总内存、开机时刻、CPU 型号、各卷的 fs 与容量。 */
+const WINDOWS_BOOT_STATIC = [
+  '$O=Get-CimInstance Win32_OperatingSystem',
+  '$S=Get-CimInstance Win32_ComputerSystem',
+  '$Global:Cores=[int]$S.NumberOfLogicalProcessors',
+  '$Global:TotalBytes=[long]($O.TotalVisibleMemorySize*1KB)',
+  '$Global:Boot=$O.LastBootUpTime',
+  "$Global:Cpu=(Get-ItemProperty 'HKLM:\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0').ProcessorNameString",
+  '$Global:Cap=@{}',
+  WINDOWS_CAP_SCAN,
 ];
 
-const WINDOWS_META_SCRIPT = WINDOWS_HEAD.concat(['$C=@(Get-CimInstance Win32_Processor)', WINDOWS_META_JSON]).join(';');
+const WINDOWS_META_JSON = '@{hostname=$env:COMPUTERNAME;distro=$O.Caption;kernel=$O.Version;arch=$env:PROCESSOR_ARCHITECTURE;cpuModel=$Global:Cpu;sockets=[int]$S.NumberOfProcessors;cores=$Global:Cores;tz=(Get-TimeZone).Id}|ConvertTo-Json -Compress';
 
-const WINDOWS_POLL_SCRIPT = WINDOWS_HEAD.concat(WINDOWS_POLL_BODY).join(';');
+/** 帧内空闲期限自退：连接被硬断时 sshd 未必及时关掉 stdin，避免常驻进程长期滞留。 */
+const WINDOWS_FRAME_GUARD = '$n=Get-Date;if($Global:Exp -and $n -gt $Global:Exp){exit};$Global:Exp=$n.AddSeconds(' + WINDOWS_IDLE_SEC + ')';
 
-/** 一次 PowerShell 冷启动同时交出 meta 与首帧，Windows 上省掉一半进程启动开销。 */
-const WINDOWS_START_SCRIPT = WINDOWS_HEAD.concat([
-  '$C=@(Get-CimInstance Win32_Processor)',
-  "'@A'",
-  WINDOWS_META_JSON,
-  "'@B'",
-]).concat(WINDOWS_POLL_BODY).join(';');
+const WINDOWS_RAW_QUERY = [
+  "$P=Get-CimInstance Win32_PerfRawData_PerfOS_Processor -Filter \"Name='_Total'\"",
+  '$N=@(Get-CimInstance Win32_PerfRawData_Tcpip_NetworkInterface)',
+  '$V=@(Get-CimInstance Win32_PerfRawData_PerfDisk_LogicalDisk)',
+  '$M=Get-CimInstance Win32_PerfRawData_PerfOS_Memory',
+];
+
+/** LogicalDisk 的实例名就是 C: 这样的盘符，只保留 $Global:Cap 里查到的卷（原始类还带着 _Total 与 HarddiskVolume*）。 */
+/** 计数器类取不到时 PowerShell 只会留下 $null，`[double]$null` 又是 0（照样是「合法」数值），界面会显示内存 100%、
+ *  磁盘空列表却不报错。所以把「这次到底查没查到」显式带出来，交给 JS 端判定失败。 */
+const WINDOWS_RAW_JSON = '$R=@{rawOk=[bool]($P -and $M);'
+  + 'cpu=@{idle=[double]$P.PercentIdleTime;priv=[double]$P.PercentPrivilegedTime;user=[double]$P.PercentUserTime;ts=[double]$P.Timestamp_Sys100NS};'
+  + 'mem=@{totalBytes=$Global:TotalBytes;availBytes=[double]$M.AvailableBytes;cacheBytes=[double]$M.CacheBytes};'
+  + 'net=@($N|ForEach-Object{@{n=$_.Name;rx=[double]$_.BytesReceivedPersec;tx=[double]$_.BytesSentPersec;ts=[double]$_.Timestamp_Sys100NS}});'
+  + 'disks=@($V|ForEach-Object{$c=$Global:Cap[$_.Name];if($c){@{mount=$_.Name;fs=$c.fs;totalMB=$c.totalMB;freeMB=[double]$_.FreeMegabytes;rd=[double]$_.DiskReadBytesPersec;wr=[double]$_.DiskWriteBytesPersec;ts=[double]$_.Timestamp_Sys100NS}}});'
+  + 'cores=$Global:Cores;uptimeSec=[int]((Get-Date)-$Global:Boot).TotalSeconds};'
+  + '$R|ConvertTo-Json -Compress -Depth 5';
+
+/** boot 交出 meta 与相隔 1 秒的两帧原始采样，因此 Windows 的首帧就带速率，而不是下一轮才有。 */
+const WINDOWS_BOOT_SCRIPT = WINDOWS_BASE
+  .concat(WINDOWS_BOOT_STATIC)
+  .concat(["'@A'", WINDOWS_META_JSON, "'@B'"], WINDOWS_RAW_QUERY, [WINDOWS_RAW_JSON], ["'@C'", 'Start-Sleep 1'], WINDOWS_RAW_QUERY, [WINDOWS_RAW_JSON])
+  .join(';');
+
+/** 帧脚本：空闲自退守卫 → 按帧号重扫卷表 → 读原始计数器。仍然只查 Raw 类，慢的 LogicalDisk 每 N 帧才碰一次。 */
+const WINDOWS_CAP_TICK = '$Global:F=([int]$Global:F)+1;if($Global:F -ge ' + WINDOWS_CAP_EVERY + '){$Global:F=0;' + WINDOWS_CAP_SCAN + '}';
+
+const WINDOWS_FRAME_SCRIPT = [WINDOWS_FRAME_GUARD, WINDOWS_CAP_TICK].concat(WINDOWS_RAW_QUERY, [WINDOWS_RAW_JSON]).join(';');
 
 const windows = {
   id: 'windows',
-  pollMs: 5000,
-  metaCommand: powershell(WINDOWS_META_SCRIPT),
-  pollCommand: powershell(WINDOWS_POLL_SCRIPT),
-  startCommand: powershell(WINDOWS_START_SCRIPT),
-  parseStart(text) {
+  pollMs: 3000,
+  resident: true,
+  bootCommand: WINDOWS_BOOT_SCRIPT,
+  frameCommand: WINDOWS_FRAME_SCRIPT,
+  parseBoot(text) {
     const s = sections(text);
-    if (!s.A || !s.B) return null;
-    return { meta: this.parseMeta(s.A.join('\n')), pollText: s.B.join('\n') };
+    if (!s.A || !s.B || !s.C) return null;
+    const meta = this.parseMeta(s.A.join('\n'));
+    if (!meta) return null;
+    const seed = this.parsePoll(s.B.join('\n'), null);
+    if (!seed) return countersMissing(s.B.join('\n')) ? { error: 'counters', meta } : null;
+    const frame = this.parsePoll(s.C.join('\n'), seed.prev);
+    return frame ? { meta, prev: frame.prev, snapshot: frame.snapshot } : null;
   },
   parseMeta(text) {
     try {
@@ -359,33 +414,89 @@ const windows = {
       return null;
     }
   },
-  parsePoll(text) {
+  parsePoll(text, prev) {
     let raw = null;
     try {
       raw = JSON.parse(jsonSafe(text));
     } catch (_) {
       return null;
     }
-    if (!raw || !raw.cpu) return null;
-    const ioList = Array.isArray(raw.diskio) ? raw.diskio : [];
-    const disks = Array.isArray(raw.disks)
-      ? raw.disks.map((d) => {
-          const io = ioList.find((x) => x && x.n && String(x.n).includes(d.mount));
-          return Object.assign({ dev: d.dev, mount: d.mount, fs: d.fs || null, totalGB: num(d.totalGB), usedGB: num(d.usedGB) },
-            io
-              ? { readKBs: Math.round(num(io.r, 0) / 102.4) / 10, writeKBs: Math.round(num(io.w, 0) / 102.4) / 10 }
-              : { readKBs: null, writeKBs: null });
-        })
-      : [];
+    if (!raw || raw.rawOk === false || !raw.cpu || !(raw.cpu.ts > 0)) return null;
+
+    const cpuPrev = prev && prev.cpu;
+    const cpuElapsedMs = cpuPrev ? (raw.cpu.ts - cpuPrev.ts) / 1e4 : 0;
+    const idleMs = cpuPrev ? (raw.cpu.idle - cpuPrev.idle) / 1e4 : 0;
+    const overall = cpuElapsedMs > 0 ? Math.max(0, Math.min(100, 100 * (1 - idleMs / cpuElapsedMs))) : null;
+
+    const totalBytes = num(raw.mem && raw.mem.totalBytes, 0);
+    const availBytes = num(raw.mem && raw.mem.availBytes, 0);
+    const cacheBytes = num(raw.mem && raw.mem.cacheBytes, 0);
+
+    const netPrev = (prev && prev.net) || {};
+    const net = {};
+    let rxKBs = 0;
+    let txKBs = 0;
+    let rxTotal = 0;
+    let txTotal = 0;
+    for (const item of Array.isArray(raw.net) ? raw.net : []) {
+      if (!item || !item.n) continue;
+      const rx = num(item.rx, -1);
+      const tx = num(item.tx, -1);
+      if (rx < 0 || tx < 0) continue;
+      const ts = num(item.ts, 0);
+      net[item.n] = { rx, tx, ts };
+      rxTotal += rx;
+      txTotal += tx;
+      const last = netPrev[item.n];
+      if (!last) continue;
+      const elapsedMs = (ts - last.ts) / 1e4;
+      if (elapsedMs <= 0) continue;
+      rxKBs += (Math.max(0, rx - last.rx) / elapsedMs) * (1000 / 1024);
+      txKBs += (Math.max(0, tx - last.tx) / elapsedMs) * (1000 / 1024);
+    }
+
+    const diskPrev = (prev && prev.disk) || {};
+    const diskNow = {};
+    const disks = [];
+    for (const item of Array.isArray(raw.disks) ? raw.disks : []) {
+      if (!item || !item.mount) continue;
+      const rd = num(item.rd, 0);
+      const wr = num(item.wr, 0);
+      const ts = num(item.ts, 0);
+      diskNow[item.mount] = { rd, wr, ts };
+      const last = diskPrev[item.mount];
+      const elapsedMs = last ? (ts - last.ts) / 1e4 : 0;
+      const totalMB = num(item.totalMB, 0);
+      disks.push({
+        dev: item.mount,
+        mount: item.mount,
+        fs: item.fs || null,
+        totalGB: round2(totalMB / 1024),
+        usedGB: round2(Math.max(0, totalMB - num(item.freeMB, 0)) / 1024),
+        readKBs: elapsedMs > 0 ? round1(((Math.max(0, rd - last.rd) / elapsedMs) * 1000) / 1024) : null,
+        writeKBs: elapsedMs > 0 ? round1(((Math.max(0, wr - last.wr) / elapsedMs) * 1000) / 1024) : null,
+      });
+    }
+
+    // 原始性能类的实例顺序不固定（实测 D:、E:、C:），按盘符排好再交给界面
+    disks.sort((a, b) => a.mount.localeCompare(b.mount));
+
     return {
-      prev: null,
+      prev: { cpu: { idle: num(raw.cpu.idle, 0), ts: num(raw.cpu.ts, 0) }, net, disk: diskNow },
       snapshot: {
-        cpu: {
-          cores: num(raw.cpu.cores, 0),
-          overall: num(raw.cpu.overall, 0),
+        cpu: { cores: num(raw.cores, 0), overall: overall == null ? null : round1(overall) },
+        mem: {
+          totalGB: round2(totalBytes / 1024 ** 3),
+          usedGB: round2(Math.max(0, totalBytes - availBytes) / 1024 ** 3),
+          cacheGB: round2(cacheBytes / 1024 ** 3),
         },
-        mem: { totalGB: num(raw.mem.totalGB, 0), usedGB: num(raw.mem.usedGB, 0), cacheGB: 0 },
-        net: { dev: '', rxKBs: num(raw.net.rxKBs, 0), txKBs: num(raw.net.txKBs, 0), rxGB: null, txGB: null },
+        net: {
+          dev: '',
+          rxKBs: round1(rxKBs),
+          txKBs: round1(txKBs),
+          rxGB: round2(rxTotal / 1024 ** 3),
+          txGB: round2(txTotal / 1024 ** 3),
+        },
         disks,
         uptimeSec: num(raw.uptimeSec, 0),
       },
