@@ -65,9 +65,9 @@ const bool = (value, fallback) => {
   if (value === 1 || value === '1' || value === 'true') return true;
   return fallback;
 };
-const clamp01 = (value, fallback) => {
+const clampTemp = (value, fallback) => {
   const n = Number(value);
-  return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : fallback;
+  return Number.isFinite(n) ? Math.min(0.5, Math.max(0, n)) : fallback;
 };
 
 /** 按模型 ID 前缀猜窗口（k token），命中不了用 128k 的保守默认。 */
@@ -118,7 +118,7 @@ function normalize(raw) {
     readScreen: bool(src.readScreen, AI_DEFAULTS.readScreen),
     commandTimeoutSec: int(src.commandTimeoutSec, 10, 1800, AI_DEFAULTS.commandTimeoutSec),
     maxTurns: int(src.maxTurns, 3, 60, AI_DEFAULTS.maxTurns),
-    temperature: clamp01(src.temperature, AI_DEFAULTS.temperature),
+    temperature: clampTemp(src.temperature, AI_DEFAULTS.temperature),
     services,
     defaultRef,
   };

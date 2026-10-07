@@ -1,12 +1,18 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue2';
 import path from 'path';
+import { readFileSync } from 'fs';
+
+const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'));
 
 export default defineConfig({
   plugins: [vue()],
   base: './',
   root: path.resolve(__dirname),
   publicDir: 'public',
+  define: {
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(pkg.version),
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

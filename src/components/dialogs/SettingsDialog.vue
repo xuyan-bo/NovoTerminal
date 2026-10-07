@@ -202,7 +202,15 @@
                     <el-button size="mini" type="text" :loading="!!svc.testing" @click="testService(svc)">
                       {{ $t('settings.ai.test') }}
                     </el-button>
-                    <el-button size="mini" type="text" class="svc-del" @click="removeService(i)">{{ $t('settings.ai.deleteService') }}</el-button>
+                    <el-popconfirm
+                      placement="top-end"
+                      :title="$t('settings.ai.deleteServiceConfirm', { name: svc.name || svc.baseUrl || '—' })"
+                      :confirm-button-text="$t('settings.ai.confirm')"
+                      :cancel-button-text="$t('settings.cancel')"
+                      @confirm="removeService(i)"
+                    >
+                      <el-button slot="reference" size="mini" type="text" class="svc-del">{{ $t('settings.ai.deleteService') }}</el-button>
+                    </el-popconfirm>
                   </span>
                 </div>
                 <div class="svc-grid">
@@ -213,7 +221,21 @@
                   </label>
                   <label class="svc-field">
                     <span>{{ $t('settings.ai.apiKey') }}</span>
-                    <el-input v-model="svc.apiKey" size="mini" class="mono" maxlength="400" show-password autocomplete="off" />
+                    <el-input v-model="svc.apiKey" size="mini" class="mono" maxlength="400" autocomplete="off"
+                              :type="svc._keyVisible ? 'text' : 'password'" clearable>
+                      <button
+                        slot="append"
+                        type="button"
+                        class="svc-key-reveal"
+                        :disabled="svc._keyChecking"
+                        :title="svc._keyChecking ? $t('auth.verifying') : (svc._keyVisible ? $t('auth.hidePass') : $t('auth.revealPass'))"
+                        @click="onToggleKeyVisible(svc)"
+                      >
+                        <svg v-if="svc._keyChecking" class="spin-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="28 28"/></svg>
+                        <img v-else-if="!svc._keyVisible" :src="'icons/eye-open.svg'" alt="" width="18" height="18" aria-hidden="true">
+                        <img v-else :src="'icons/eye-closed.svg'" alt="" width="18" height="18" aria-hidden="true">
+                      </button>
+                    </el-input>
                   </label>
                 </div>
                 <div class="svc-models">
@@ -302,7 +324,6 @@
                         v-if="editing[svc.id + '#' + m.id]"
                         size="mini"
                         type="text"
-                        class="svc-del"
                         @click="cancelModelEdit(svc, m)"
                       >{{ $t('settings.cancel') }}</el-button>
                       <el-popconfirm
@@ -337,7 +358,7 @@
                     />
                     <span class="model-ops">
                       <el-button size="mini" @click="addModel(svc)">{{ $t('settings.ai.addModel') }}</el-button>
-                      <el-button size="mini" type="text" class="svc-del" @click="closeManual(svc)">{{ $t('settings.cancel') }}</el-button>
+                      <el-button size="mini" type="text" @click="closeManual(svc)">{{ $t('settings.cancel') }}</el-button>
                     </span>
                   </div>
                   <el-button v-else size="mini" type="text" icon="el-icon-plus" @click="openManual(svc)">
@@ -351,18 +372,57 @@
         </div>
 
         <div v-show="activeMenu === 'about'" class="set-section">
-          <div class="about-box">
-            <img class="logo-mark" src="../../assets/logo.svg" alt="NovoTerminal" width="36" height="36" />
-            <div>
-              <div style="font-family:Consolas,monospace;font-weight:600">NovoTerminal v0.1.0</div>
-              <div class="meta" v-html="$t('settings.aboutBody')"></div>
-              <div class="meta">
-                {{ $t('settings.aboutSource') }}
-                <a class="meta-link" @click="openUrl('https://gitee.com/xu-san333/omni-desk')">Gitee</a>
-                <span class="meta-sep"> · </span>
-                <a class="meta-link" @click="openUrl('https://github.com/xu-san333/omni-desk')">GitHub</a>
-              </div>
+          <div class="about-hero">
+            <div class="about-logo">
+              <img src="../../assets/logo.svg" alt="Logo" width="30" height="30" />
             </div>
+            <div class="about-title">
+              NovoTerminal<span class="about-ver">v{{ appVersion }}</span>
+            </div>
+            <div class="about-desc">{{ $t('settings.aboutDesc') }}</div>
+          </div>
+
+          <div class="about-card">
+            <div class="about-card-title">{{ $t('settings.aboutInfoTitle') }}</div>
+            <dl class="about-info">
+              <dt>{{ $t('settings.aboutVersion') }}</dt>
+              <dd><span class="about-badge">v{{ appVersion }}</span></dd>
+              <dt>{{ $t('settings.aboutLicense') }}</dt>
+              <dd>MIT License</dd>
+              <dt>{{ $t('settings.aboutSource') }}</dt>
+              <dd>
+                <a class="about-link" @click="openUrl('')">GitHub</a>
+                <span class="about-sep">·</span>
+                <a class="about-link" @click="openUrl('')">Gitee</a>
+              </dd>
+            </dl>
+          </div>
+
+          <div class="about-card">
+            <div class="about-card-title">{{ $t('settings.aboutStackTitle') }}</div>
+            <dl class="about-info">
+              <dt>{{ $t('settings.aboutRuntime') }}</dt>
+              <dd>Electron · Node.js</dd>
+              <dt>{{ $t('settings.aboutFrontend') }}</dt>
+              <dd>Vue · Element UI</dd>
+              <dt>{{ $t('settings.aboutBuild') }}</dt>
+              <dd>Vite</dd>
+            </dl>
+          </div>
+
+          <div class="about-actions">
+            <el-button size="small" disabled>
+              <i class="el-icon-refresh"></i>
+              {{ $t('settings.aboutCheckUpdate') }}
+            </el-button>
+            <el-button size="small" type="primary" disabled>
+              <i class="el-icon-upload2"></i>
+              {{ $t('settings.aboutReleases') }}
+            </el-button>
+          </div>
+
+          <div class="about-footer">
+            © {{ new Date().getFullYear() }} NovoTerminal · {{ $t('settings.aboutFooter') }}
           </div>
         </div>
         </el-form>
@@ -506,6 +566,8 @@ export default {
       saving: false,
       browsing: false,
       activeMenu: 'general',
+      appVersion: import.meta.env.VITE_APP_VERSION || '0.1.0',
+      newSvcIds: new Set(),
       permissions: AI_PERMISSIONS,
       AI_LIMITS,
       RECENT_LIMIT_MAX,
@@ -630,6 +692,7 @@ export default {
       }).then(() => { this.ai.permission = 'full'; }).catch(() => {});
     },
     async load() {
+      this.newSvcIds = new Set();
       const s = (await api.getSettings()) || store.snapshot.settings || {};
       this.form = {
         theme: s.theme || 'system',
@@ -710,6 +773,44 @@ export default {
       const id = 'svc-' + crypto.randomUUID();
       this.ai.services = [...this.ai.services, { id, name: '', baseUrl: '', apiKey: '', models: [] }];
       this.$set(this.draft, id, newModelDraft());
+      this.newSvcIds.add(id);
+    },
+    async onToggleKeyVisible(svc) {
+      if (svc._keyChecking) return;
+      if (svc._keyVisible) {
+        this.$set(svc, '_keyVisible', false);
+        return;
+      }
+      if (!String(svc.apiKey || '').trim() || this.newSvcIds.has(svc.id)) {
+        this.$set(svc, '_keyVisible', true);
+        return;
+      }
+      if (!api.verifySystemAuth) {
+        this.$message.error(t('auth.needElectron'));
+        return;
+      }
+      this.$set(svc, '_keyChecking', true);
+      try {
+        const r = unwrap(await api.verifySystemAuth(t('auth.viewKeyReason')));
+        if (r && r.ok) {
+          this.$set(svc, '_keyVisible', true);
+        } else {
+          const code = (r && r.code) || '';
+          let msg = t('auth.failed');
+          if (/Canceled|UserCanceled/i.test(code)) msg = t('auth.canceled');
+          else if (/NotConfigured/i.test(code)) msg = t('auth.notConfigured');
+          else if (r && r.message) msg = r.message;
+          this.$message.error(msg);
+        }
+      } catch (e) {
+        const code = e.code || '';
+        let msg = e.message || t('auth.failed');
+        if (/Canceled|UserCanceled/i.test(code)) msg = t('auth.canceled');
+        else if (/NotConfigured/i.test(code)) msg = t('auth.notConfigured');
+        this.$message.error(msg);
+      } finally {
+        this.$set(svc, '_keyChecking', false);
+      }
     },
     removeService(i) {
       const [gone] = this.ai.services.splice(i, 1);
@@ -1091,10 +1192,9 @@ export default {
 .svc-tag { font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; flex: none; }
 .svc-tag.ok { background: rgba(103, 194, 58, 0.16); color: var(--success); }
 .svc-tag.bad { background: rgba(245, 108, 108, 0.16); color: var(--danger); }
-.svc-ops { margin-left: auto; display: flex; align-items: center; flex: none; }
-.svc-ops .el-button + .el-button { margin-left: 8px; }
-.svc-del { color: var(--text-3); }
-.svc-del:hover { color: var(--danger); }
+.svc-ops { margin-left: auto; display: flex; align-items: center; flex: none; gap: 6px; }
+.svc-del { color: var(--danger); }
+.svc-del:hover { color: var(--danger-hover, #f78989); }
 .svc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
 .svc-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .svc-field > span { font-size: 11px; color: var(--text-3); }
@@ -1148,8 +1248,8 @@ export default {
 }
 .model-ops { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .model-star { cursor: pointer; font-size: 14px; color: var(--text-3); }
-.model-star:hover { color: var(--accent); }
-.model-star.on { color: var(--accent); }
+.model-star:hover { color: #e6a23c; }
+.model-star.on { color: #f0c040; }
 .model-empty { font-size: 11.5px; color: var(--text-3); padding: 2px 0 4px; }
 .model-add { margin-top: 4px; }
 .model-add .add-ctx { width: 100%; margin-top: 0; }
@@ -1202,36 +1302,148 @@ export default {
   font-size: 12px;
   color: var(--text-2);
 }
-.about-box {
+.about-hero {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 22px 20px;
+  text-align: center;
+}
+.about-logo {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 14px;
+}
+.about-logo img {
+  width: 30px;
+  height: 30px;
+}
+.about-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  font-family: Consolas, "JetBrains Mono", monospace;
+  color: var(--text);
+}
+.about-ver {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-left: 6px;
+  font-weight: 400;
+}
+.about-desc {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.about-card {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 14px 16px;
-  display: flex;
-  gap: 14px;
+  padding: 15px 18px;
+  margin-top: 12px;
 }
-.about-box .meta {
-  font-size: 11.5px;
-  color: var(--text-2);
-  line-height: 1.65;
-}
-.about-box .meta a {
-  color: var(--accent);
-  text-decoration: none;
-  cursor: pointer;
-}
-.about-box .meta a:hover {
-  text-decoration: underline;
-}
-.about-box .meta-link {
-  color: var(--accent);
-  text-decoration: none;
-  cursor: pointer;
-}
-.about-box .meta-link:hover {
-  text-decoration: underline;
-}
-.about-box .meta-sep {
+.about-card-title {
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.about-card-title::before {
+  content: '';
+  width: 3px;
+  height: 12px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.about-info {
+  display: grid;
+  grid-template-columns: 86px 1fr;
+  gap: 7px 14px;
+  font-size: 12px;
+}
+.about-info dt {
+  color: var(--text-3);
+  text-align: right;
+  white-space: nowrap;
+}
+.about-info dd {
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.about-badge {
+  display: inline-block;
+  font-size: 10.5px;
+  padding: 1.5px 6px;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: Consolas, monospace;
+}
+.about-link {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.about-link:hover {
+  text-decoration: underline;
+}
+.about-sep {
+  color: var(--text-3);
+}
+.about-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 14px;
+}
+.about-footer {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.7;
+}
+.svc-key-reveal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 100%;
+  padding: 0 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.svc-key-reveal img {
+  pointer-events: none;
+}
+.svc-key-reveal:hover:not(:disabled) {
+  color: var(--accent);
+}
+.svc-key-reveal:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.svc-key-reveal .spin-icon {
+  animation: auth-spin 0.8s linear infinite;
+}
+@keyframes auth-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>
