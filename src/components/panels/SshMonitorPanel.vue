@@ -154,7 +154,8 @@ export default {
       return this.state === 'probing';
     },
     snap() {
-      return this.snapshot || { cpu: {}, mem: {}, net: {}, disks: [], uptimeSec: 0 };
+      const s = this.snapshot || {};
+      return { cpu: s.cpu || {}, mem: s.mem || {}, net: s.net || {}, disks: s.disks || [], uptimeSec: s.uptimeSec || 0 };
     },
     hasPerCore() {
       const pc = this.snap.cpu && this.snap.cpu.perCore;

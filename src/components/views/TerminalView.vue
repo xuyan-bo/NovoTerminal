@@ -530,11 +530,25 @@ export default {
 
       const prevCols = this.term.cols;
       const prevRows = this.term.rows;
+      const buf = this.term.buffer.active;
+      const atBottom = buf.viewportY >= buf.baseY;
       this._fitting = true;
       try {
         this.fit.fit();
       } catch (_) {
         /* ignore */
+      }
+      // 贴底对齐：把 .xterm 高度收成本 rows*行高+上下内边距，余量留给 .ssh-term 顶部
+      const screenEl = el.querySelector('.xterm-screen');
+      if (screenEl && this.term.rows > 0) {
+        const cellH = screenEl.getBoundingClientRect().height / this.term.rows;
+        this.term.element.style.height = this.term.rows * cellH + 10 + 'px';
+      }
+      // 窗口尺寸变化后 xterm 视口的 scrollHeight 滞后一帧，原来到底的视图会被误判成滚到了中间；下一帧钉回底部
+      if (atBottom) {
+        requestAnimationFrame(() => {
+          if (!this._disposed && this.term) this.term.scrollToBottom();
+        });
       }
       this._fitting = false;
 
@@ -843,7 +857,8 @@ export default {
     readScreenText() {
       const term = this.term;
       if (!term) return '';
-      const buf = term.buffer.active;
+      const buf = term.buffer && term.buffer.active;
+      if (!buf) return '';
       const lines = [];
       for (let i = 0; i < buf.length; i += 1) {
         const line = buf.getLine(i);
@@ -1140,8 +1155,10 @@ export default {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 4px 6px 6px;
-  box-sizing: border-box;
+  /* 终端网格贴底对齐：fit 取整的余量移到顶部黑区，底部空隙恒为 .xterm 的 6px 下内边距 */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
   background: var(--ssh-bg, #000000);
 }
 .ssh-body {
@@ -1197,9 +1214,10 @@ export default {
   top: 0;
   right: 0;
   z-index: 10;
-  width: 24px;
+  width: 27px;
   height: 44px;
-  padding: 0;
+  /* 左侧圆弧吃掉视觉空间，图标略向右偏才在 D 形里显居中 */
+  padding: 0 0 0 5px;
   border: 1px solid var(--border, #2a3544);
   border-right: none;
   border-radius: 22px 0 0 22px;
@@ -1294,6 +1312,9 @@ export default {
 .ssh-term /deep/ .xterm {
   height: 100%;
   width: 100%;
+  box-sizing: border-box;
+  /* FitAddon 只从父元素尺寸里扣 .xterm 自身的 padding，父级带 padding 会被算进可用高度导致多排一行、贴底裁切，故内边距放这里 */
+  padding: 4px 6px 6px;
   background: transparent;
 }
 .ssh-term /deep/ .xterm-viewport {

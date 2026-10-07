@@ -29,6 +29,10 @@ window.addEventListener('unhandledrejection', (e) => {
 Vue.use(ElementUI, { size: 'small' });
 Vue.component('svg-icon', SvgIcon);
 Vue.config.productionTip = false;
+// 生产构建里组件渲染/钩子异常只进 console，不落盘；转发后界面白屏类问题可从日志回溯
+Vue.config.errorHandler = (err, vm, info) => {
+  forwardError((err && err.message) || String(err), { vueInfo: info, component: (vm && vm.$options && vm.$options.name) || '' });
+};
 Vue.prototype.$t = function (key, params) {
   // touch localeTick so computed re-render
   void store.localeTick;

@@ -100,6 +100,12 @@ class SshMonitorManager {
       this.stop(sessionId);
       throw e;
     }
+    // The session died or the runner was stopped mid-start: pollOnce returned null without throwing.
+    // Registering a timer here would leave the renderer stuck behind a loading mask forever.
+    if (!snapshot && this.runners.get(sessionId) !== runner) {
+      this.log && this.log.warn('ssh', 'ssh monitor start aborted: runner gone', { sessionId, host });
+      return { ok: true, supported: false, reason: 'not-ready' };
+    }
     this.resetTimer(sessionId, runner);
     this.log && this.log.info('ssh', 'ssh monitor started', { sessionId, host, port, platform, intervalMs: runner.intervalMs });
     runner.pending = null;
