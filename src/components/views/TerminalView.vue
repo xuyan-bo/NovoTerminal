@@ -1326,6 +1326,8 @@ export default {
   flex: 1 1 0%;
   min-height: 0;
   display: flex;
+  /* 子树异常丢失时露出的是终端黑底；面板底色兜底，避免整块「黑屏」 */
+  background: var(--bg-panel);
 }
 .side-hsplit {
   flex: 0 0 5px;
