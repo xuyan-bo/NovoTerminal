@@ -23,6 +23,7 @@ function mockSettings() {
     closeAction: 'ask',
     homeWelcome: true,
     autoUpdateCheck: true,
+    skippedUpdateVersion: '',
     recentLimit: 20,
     logTotalMb: 20,
     ai: { ...AI_DEFAULTS, services: [], defaultRef: null },

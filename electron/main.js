@@ -3,7 +3,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { execFile } = require('child_process');
-/** Bump when shipping renderer changes — shown in every window title */
+/** Bump when shipping renderer changes — source-only marker, not surfaced in the UI */
 const APP_BUILD = 'rd2-1647';
 const {
   AssetStore,
@@ -135,10 +135,10 @@ function clampedLogTotalMb(v) {
   return Math.min(LOG_TOTAL_MAX_MB, Math.max(LOG_TOTAL_MIN_MB, Math.floor(Number(v)) || LOG_TOTAL_DEFAULT_MB));
 }
 
-/** 发行版标签只认 x.y.z 前缀，杂字符（v3.9.2last 之类）按可比部分处理 */
+/** 发行版标签只认数字版本前缀，V/v 前缀均可且缺位补 0（V1.0.0 与 1.0 等价），杂字符（v3.9.2last 之类）按可比部分处理 */
 function parseVersion(tag) {
-  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(tag == null ? '' : tag).trim());
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  const m = /^[vV]?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(String(tag == null ? '' : tag).trim());
+  return m ? [Number(m[1]), Number(m[2] || 0), Number(m[3] || 0)] : null;
 }
 
 function isNewerVersion(a, b) {
@@ -560,7 +560,7 @@ function createWindow() {
     height: size.height,
     minWidth: 960,
     minHeight: 600,
-    title: `NovoTerminal ${APP_BUILD}`,
+    title: 'NovoTerminal',
     backgroundColor: '#0f1419',
     icon: path.join(__dirname, 'assets', 'icon.png'),
     autoHideMenuBar: true,
@@ -710,11 +710,18 @@ function registerIpc() {
       throw Object.assign(new Error(probed.failures.join('; ') || 'no releases found'), { code: 'UPDATE_UNAVAILABLE' });
     }
     const best = probed.best;
+    // 被忽略的版本按数值比较，避免标签大小写/前缀差异（V1.0.0 与 1.0.0 视为同一版本）
+    const skipped = String((store.getSettings() || {}).skippedUpdateVersion || '').trim();
+    const skippedVer = parseVersion(skipped);
+    const ignored = !!(best && skippedVer && skippedVer.every((n, i) => n === best.version[i]));
+    // hasUpdate 只看版本是否更新；是否因忽略而不打扰用户交给渲染端按启动/手动区分
     const hasUpdate = !!(cur && best && isNewerVersion(best.version, cur));
     logger.info('update', 'update checked', {
       current,
       latest: best ? best.tag : '',
       source: best ? best.source : '',
+      skipped,
+      ignored,
       probed: sources.join(','),
       timings: probed.timings.join(' '),
       failures: probed.failures.join(' | '),
@@ -723,10 +730,11 @@ function registerIpc() {
     return {
       current,
       hasUpdate,
+      ignored,
       latest: hasUpdate ? best.tag : '',
       notes: hasUpdate ? best.notes : '',
       url: best ? best.url : RELEASES_PAGE,
-      // 「还没有发行版」和「已是最新」是两回事，渲染端据此给不同反馈
+      // 「还没有发行版」和「已是最新」两种情况给不同反馈；ignored 由渲染端决定是否打扰
       reason: hasUpdate ? '' : best ? 'up_to_date' : 'no_release',
     };
   });

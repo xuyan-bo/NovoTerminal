@@ -197,10 +197,10 @@ export default {
         api.onStoreChanged(() => {
           refresh().catch(() => {});
         });
-      // 错开首屏渲染再出网；检查失败或没有新版都不打扰用户
+      // 错开首屏渲染再出网；检查失败、没有新版、或用户已忽略该版本都不打扰
       this._updateTimer = setTimeout(() => {
         if ((store.snapshot.settings || {}).autoUpdateCheck === false) return;
-        checkForUpdates().catch(() => {});
+        checkForUpdates(true).catch(() => {});
       }, 3000);
     }
     if (window.matchMedia) {

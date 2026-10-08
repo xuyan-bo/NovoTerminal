@@ -4,7 +4,7 @@
 
 A thinking operations terminal: SSH, VNC / RDP remote desktops, SFTP transfers and asset/credential management in one desktop app. Sessions live in tabs, can be detached into their own windows, and all data stays on your machine.
 
-[![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![license](https://img.shields.io/badge/license-Apache--2.0-green)](./LICENSE)
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![version](https://img.shields.io/badge/version-0.1.0-informational)
 
@@ -266,7 +266,7 @@ Requires Node.js 18 or newer (Electron 33 / Vite 5). There is no CI pipeline: ea
 
 ### License
 
-MIT — see [LICENSE](./LICENSE).
+Apache-2.0 — see [LICENSE](./LICENSE).
 
 ---
 
@@ -278,4 +278,4 @@ MIT — see [LICENSE](./LICENSE).
 
 ## License
 
-MIT © NovoTerminal — 详见 [LICENSE](./LICENSE) / see [LICENSE](./LICENSE).
+Apache-2.0 © NovoTerminal — 详见 [LICENSE](./LICENSE) / see [LICENSE](./LICENSE).

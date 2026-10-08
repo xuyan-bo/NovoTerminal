@@ -39,14 +39,23 @@ export async function refresh() {
   store.localeTick++;
 }
 
-/** 有新版本才落状态并开弹窗；无更新与失败都交给调用方决定要不要提示用户。 */
-export async function checkForUpdates() {
+/** 有新版本才落状态并开弹窗；无更新与失败都交给调用方决定要不要提示用户。
+ *  silent 用于启动时的自动检查：用户忽略过的版本不再打扰，手动检查仍照常弹窗。 */
+export async function checkForUpdates(silent = false) {
   const r = unwrap(await api.checkUpdate());
-  if (r.hasUpdate) {
+  if (r.hasUpdate && !(silent && r.ignored)) {
     store.update = r;
     store.updateDialog = true;
   }
   return r;
+}
+
+/** 记住被忽略的版本：主进程按数值比较，同版本启动时不再提示。 */
+export async function ignoreUpdateVersion(version) {
+  const v = String(version || '').trim();
+  if (!v) return;
+  await api.updateSettings({ skippedUpdateVersion: v });
+  await refresh();
 }
 
 export function switchTab(id) {

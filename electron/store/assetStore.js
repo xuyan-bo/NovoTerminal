@@ -29,6 +29,8 @@ function defaultData() {
       closeAction: 'ask', // 'ask' = 每次询问, 'minimize' = 直接最小化, 'quit' = 直接退出
       homeWelcome: true,
       autoUpdateCheck: true,
+      // 用户勾选「忽略此版本」后记住的发行版标签；同版本不再提示更新
+      skippedUpdateVersion: '',
       recentLimit: RECENT_LIMIT_DEFAULT,
       logTotalMb: LOG_TOTAL_DEFAULT_MB,
       // AI 助手配置：结构与取值范围由 electron/ai/aiSettings.js 收敛，这里只给持久化默认值

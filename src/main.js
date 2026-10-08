@@ -28,6 +28,25 @@ window.addEventListener('unhandledrejection', (e) => {
 
 Vue.use(ElementUI, { size: 'small' });
 Vue.component('svg-icon', SvgIcon);
+
+// Element UI 的 el-radio 把原生 input 硬编码成 aria-hidden="true"，但点击 label 时浏览器会把焦点落到
+// 这个 input 上，Chrome 会拦截并打印 “Blocked aria-hidden … descendant retained focus”。摘掉这条错误
+// 属性即可，组件本身仍是 tabindex="-1" 且视觉隐藏，交互与外观不变。
+function stripRadioAriaHidden(root) {
+  const nodes = root.querySelectorAll ? root.querySelectorAll('.el-radio__original[aria-hidden]') : [];
+  for (const node of nodes) node.removeAttribute('aria-hidden');
+}
+stripRadioAriaHidden(document);
+new MutationObserver((records) => {
+  for (const record of records) {
+    for (const node of record.addedNodes) {
+      if (node.nodeType !== 1) continue;
+      if (node.matches('.el-radio__original')) node.removeAttribute('aria-hidden');
+      else stripRadioAriaHidden(node);
+    }
+  }
+}).observe(document.body, { childList: true, subtree: true });
+
 Vue.config.productionTip = false;
 // 生产构建里组件渲染/钩子异常只进 console，不落盘；转发后界面白屏类问题可从日志回溯
 Vue.config.errorHandler = (err, vm, info) => {
