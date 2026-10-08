@@ -39,6 +39,7 @@ const api = {
   clipboardReadText: () => ipcRenderer.invoke('clipboard:read-text'),
   clipboardWriteText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
 
   // Logs
   logList: (filter) => ipcRenderer.invoke('log:list', filter),

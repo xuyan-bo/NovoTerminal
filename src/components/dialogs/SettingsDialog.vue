@@ -34,6 +34,9 @@
           <el-form-item :label="$t('settings.homeWelcome')">
             <el-switch v-model="form.homeWelcome" />
           </el-form-item>
+          <el-form-item :label="$t('settings.autoUpdateCheck')">
+            <el-switch v-model="form.autoUpdateCheck" />
+          </el-form-item>
           <el-form-item :label="$t('settings.theme')" prop="theme">
             <div class="theme-picks">
               <button
@@ -391,9 +394,9 @@
               <dd>MIT License</dd>
               <dt>{{ $t('settings.aboutSource') }}</dt>
               <dd>
-                <a class="about-link" @click="openUrl('')">GitHub</a>
+                <a class="about-link" @click="openUrl(githubUrl)">GitHub</a>
                 <span class="about-sep">·</span>
-                <a class="about-link" @click="openUrl('')">Gitee</a>
+                <a class="about-link" @click="openUrl(repoUrl)">Gitee</a>
               </dd>
             </dl>
           </div>
@@ -411,12 +414,10 @@
           </div>
 
           <div class="about-actions">
-            <el-button size="small" disabled>
-              <i class="el-icon-refresh"></i>
+            <el-button size="small" icon="el-icon-refresh" :loading="checkingUpdate" @click="checkUpdate">
               {{ $t('settings.aboutCheckUpdate') }}
             </el-button>
-            <el-button size="small" type="primary" disabled>
-              <i class="el-icon-upload2"></i>
+            <el-button size="small" type="primary" icon="el-icon-upload2" @click="openUrl(releasesUrl)">
               {{ $t('settings.aboutReleases') }}
             </el-button>
           </div>
@@ -495,7 +496,7 @@
 </template>
 
 <script>
-import { store, api, unwrap, refresh } from '../../store';
+import { store, api, unwrap, refresh, checkForUpdates } from '../../store';
 import { applyTheme, applyFont, setLocale, t } from '../../i18n';
 import {
   UI_FONTS,
@@ -565,6 +566,10 @@ export default {
     return {
       saving: false,
       browsing: false,
+      checkingUpdate: false,
+      repoUrl: import.meta.env.VITE_HOMEPAGE,
+      githubUrl: import.meta.env.VITE_GITHUB_HOMEPAGE,
+      releasesUrl: import.meta.env.VITE_HOMEPAGE + '/releases',
       activeMenu: 'general',
       appVersion: import.meta.env.VITE_APP_VERSION || '0.1.0',
       newSvcIds: new Set(),
@@ -598,6 +603,7 @@ export default {
         font: 'default',
         closeAction: 'ask',
         homeWelcome: true,
+        autoUpdateCheck: true,
         recentLimit: RECENT_LIMIT_DEFAULT,
         logTotalMb: LOG_TOTAL_DEFAULT_MB,
       },
@@ -679,6 +685,21 @@ export default {
         window.novoTerminal.openExternal(url);
       }
     },
+    /** 手动检查必须给结果；有新版本时弹窗已由 store 打开，这里只补「没有更新」「还没有发行版」两种反馈。 */
+    async checkUpdate() {
+      this.checkingUpdate = true;
+      try {
+        const r = await checkForUpdates();
+        if (r.hasUpdate) return;
+        if (r.reason === 'no_release') this.$message.info(t('update.noRelease'));
+        else this.$message.success(t('update.latest', { version: r.current }));
+      } catch (e) {
+        // 具体失败原因（哪一路、HTTP 状态）已经落在运行日志里，界面只给可操作的通用提示
+        this.$message.error(t('update.checkFailed'));
+      } finally {
+        this.checkingUpdate = false;
+      }
+    },
     /** 「完全访问」跳过所有审批，与面板内切换共用同一条风险确认；取消就不改级别。 */
     setAiPermission(id) {
       if (id !== 'full' || this.ai.permission === 'full') {
@@ -702,6 +723,7 @@ export default {
         font: s.font || 'default',
         closeAction: s.closeAction || 'ask',
         homeWelcome: s.homeWelcome !== false,
+        autoUpdateCheck: s.autoUpdateCheck !== false,
         recentLimit: this.clampedRecentLimit(s.recentLimit),
         logTotalMb: this.clampedLogTotalMb(s.logTotalMb),
       };
@@ -1091,6 +1113,7 @@ export default {
               font: this.form.font,
               closeAction: this.form.closeAction,
               homeWelcome: !!this.form.homeWelcome,
+              autoUpdateCheck: !!this.form.autoUpdateCheck,
               recentLimit: this.clampedRecentLimit(this.form.recentLimit),
               logTotalMb: this.clampedLogTotalMb(this.form.logTotalMb),
               ai: this.aiPayload(),

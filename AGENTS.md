@@ -28,7 +28,7 @@
 | `src/constants.js` | OS 访问方式目录、表单默认值与高级参数 schema；不承载连接执行逻辑 |
 | `src/lib/` | 渲染端纯工具与数据模块（资产树、Markdown 渲染），无 UI 与状态 |
 | `src/components/views/` | 页面级/根容器视图（首页、资产详情、协议视图、SFTP 页、独立会话窗口）；协议视图负责各自的输入、显示、尺寸和连接状态协调 |
-| `src/components/dialogs/` | 模态弹窗（设置、资产/分组、方法高级参数、SSH 主题与认证、日志、关闭确认） |
+| `src/components/dialogs/` | 模态弹窗（设置、资产/分组、方法高级参数、SSH 主题与认证、日志、关闭确认、更新提示） |
 | `src/components/panels/` | 应用外壳与停靠面板（侧边栏、页签栏、AI 助手、SSH 监控） |
 | `src/components/common/` | 通用小组件（右键菜单、SVG 图标、方法配置、Markdown 展示） |
 | `src/components/session/fullscreen.js` | 共用全屏生命周期；协议组件只提供样式类和尺寸回调 |
@@ -155,8 +155,9 @@
 | `npm run build:renderer` | 生产渲染构建，会生成 dist；不是轻量语法检查 |
 | `npm run build:auth:mac` | 仅在 macOS 编译双架构认证组件到 `build/auth`，需要 Xcode Command Line Tools；非 macOS 不执行 |
 | `npm start` | 先构建，再运行 Electron；macOS 启动前自动编译认证组件，不是单纯启动开发服务 |
-| `npm run pack:mac` | 在 macOS 构建并打包当前架构，beforePack 自动编译认证组件并随包复制、纳入签名；用户无需编译工具 |
-| `npm run pack:win` | 构建并打包 Windows x64；非普通修改的默认检查步骤 |
+| `npm run pack:mac` | 在 macOS 构建并打包：dmg 与 zip 各出 arm64 / x64 两份，另出一份 universal 的 `pkg`（`mac.target` 用 `{target:"pkg",arch:["universal"]}` 声明，需 Xcode CLT 的 `productbuild`）；beforePack 自动编译认证组件（已是 arm64+x86_64 通用二进制，两架构各编译一次）并随包复制、纳入签名；用户无需编译工具 |
+| `npm run pack:win` | 构建并打包 Windows x64 与 arm64 的 nsis 安装程序与 zip 绿色包；非普通修改的默认检查步骤 |
+| `npm run pack:linux` | 在 Linux 构建并打包 deb / rpm / AppImage / tar.xz（x64 与 arm64）；须在 Linux 物理机或虚拟机执行，产物落 `release/`（已 gitignore）；仓库不配置 CI，三平台一律手工打包后人工验证 |
 | `npm run lint` | 当前仅打印占位消息，不能作为静态检查通过的证据 |
 
 - 当前没有 `npm test` 或项目测试套件入口；`electron/session/testers.js` 是产品联网探测，不能当作离线测试运行。

@@ -28,6 +28,7 @@ function defaultData() {
       font: 'default',
       closeAction: 'ask', // 'ask' = 每次询问, 'minimize' = 直接最小化, 'quit' = 直接退出
       homeWelcome: true,
+      autoUpdateCheck: true,
       recentLimit: RECENT_LIMIT_DEFAULT,
       logTotalMb: LOG_TOTAL_DEFAULT_MB,
       // AI 助手配置：结构与取值范围由 electron/ai/aiSettings.js 收敛，这里只给持久化默认值

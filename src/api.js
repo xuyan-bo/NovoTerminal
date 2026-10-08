@@ -22,6 +22,7 @@ function mockSettings() {
     font: 'default',
     closeAction: 'ask',
     homeWelcome: true,
+    autoUpdateCheck: true,
     recentLimit: 20,
     logTotalMb: 20,
     ai: { ...AI_DEFAULTS, services: [], defaultRef: null },
@@ -55,6 +56,9 @@ export const api = hasBridge
       },
       async backupExport() {
         return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async checkUpdate() {
+        return { __error: true, message: t('msg.needElectron'), code: 'NO_BRIDGE' };
       },
       async verifySystemAuth() {
         return { ok: false, code: 'NO_BRIDGE', message: t('auth.needElectron') };

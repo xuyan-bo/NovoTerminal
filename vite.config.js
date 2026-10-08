@@ -12,6 +12,8 @@ export default defineConfig({
   publicDir: 'public',
   define: {
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(pkg.version),
+    'import.meta.env.VITE_HOMEPAGE': JSON.stringify(pkg.homepage),
+    'import.meta.env.VITE_GITHUB_HOMEPAGE': JSON.stringify(pkg.githubHomepage || ''),
   },
   build: {
     outDir: 'dist',

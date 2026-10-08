@@ -1,10 +1,11 @@
 {
   "name": "novoterminal",
   "version": "0.1.0",
-  "description": "NovoTerminal — local-first remote desktop client (Windows first)",
+  "description": "Thinking operations terminal for SSH, VNC and RDP with SFTP file transfer",
   "main": "electron/main.js",
   "author": "NovoTerminal <xuyanbo.c@qq.com>",
   "homepage": "https://gitee.com/xu-san333/omni-desk",
+  "githubHomepage": "https://github.com/xuyan-bo/OmniDesk",
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -15,9 +16,9 @@
     "electron": "cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
     "prestart": "node scripts/build-mac-auth.cjs",
     "start": "npm run build:renderer && electron .",
-    "pack:mac": "npm run build:renderer && electron-builder --mac",
-    "pack:win": "npm run build:renderer && cross-env ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win --x64",
-    "pack:linux": "npm run build:renderer && cross-env ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --linux --x64",
+    "pack:mac": "npm run build:renderer && cross-env ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --mac --arm64 --x64",
+    "pack:win": "npm run build:renderer && cross-env ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win --x64 --arm64",
+    "pack:linux": "npm run build:renderer && cross-env ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --linux --x64 --arm64",
     "lint": "echo \"no lint configured\""
   },
   "dependencies": {
@@ -54,7 +55,12 @@
     ],
     "beforePack": "./scripts/build-mac-auth.cjs",
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip",
+        { "target": "pkg", "arch": ["universal"] }
+      ],
+      "minimumSystemVersion": "11.0",
       "extraResources": [
         { "from": "build/auth/novoterminal-auth", "to": "auth/novoterminal-auth" }
       ],
@@ -63,18 +69,21 @@
     "win": {
       "target": [
         "nsis",
-        "7z"
+        "zip"
       ],
       "icon": "build/icon.ico"
     },
     "linux": {
-      "target": ["deb", "rpm", "AppImage"],
+      "target": ["deb", "rpm", "AppImage", "tar.xz"],
       "icon": "build/icon.png",
-      "category": "Network"
+      "category": "Network",
+      "synopsis": "Thinking ops terminal with SSH, VNC, RDP and SFTP",
+      "description": "NovoTerminal is a thinking operations terminal: SSH, VNC and RDP sessions, SFTP file transfer, per-host monitoring and a built-in AI assistant. Asset data stays on this machine."
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
     }
   },
   "allowScripts": {}

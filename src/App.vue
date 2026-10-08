@@ -57,6 +57,7 @@
     <group-dialog />
     <method-advanced-dialog />
     <close-prompt-dialog />
+    <update-dialog />
     </template>
     <ssh-auth-dialog />
   </div>
@@ -73,8 +74,9 @@ import AssetDialog from './components/dialogs/AssetDialog.vue';
 import GroupDialog from './components/dialogs/GroupDialog.vue';
 import MethodAdvancedDialog from './components/dialogs/MethodAdvancedDialog.vue';
 import ClosePromptDialog from './components/dialogs/ClosePromptDialog.vue';
+import UpdateDialog from './components/dialogs/UpdateDialog.vue';
 import SshAuthDialog from './components/dialogs/SshAuthDialog.vue';
-import { store, api, refresh, applyDetached, dropDetachedTab } from './store';
+import { store, api, refresh, applyDetached, dropDetachedTab, checkForUpdates } from './store';
 import { t, applySettings } from './i18n';
 import { getProtocol } from './protocols';
 
@@ -124,6 +126,7 @@ export default {
     GroupDialog,
     MethodAdvancedDialog,
     ClosePromptDialog,
+    UpdateDialog,
     SshAuthDialog,
     SftpPage: () => import('./components/views/SftpPage.vue'),
     SessionWindow: () => import('./components/views/SessionWindow.vue'),
@@ -194,6 +197,11 @@ export default {
         api.onStoreChanged(() => {
           refresh().catch(() => {});
         });
+      // 错开首屏渲染再出网；检查失败或没有新版都不打扰用户
+      this._updateTimer = setTimeout(() => {
+        if ((store.snapshot.settings || {}).autoUpdateCheck === false) return;
+        checkForUpdates().catch(() => {});
+      }, 3000);
     }
     if (window.matchMedia) {
       const mq = window.matchMedia('(prefers-color-scheme: light)');
@@ -208,6 +216,7 @@ export default {
   },
   beforeDestroy() {
     if (this._onHash) window.removeEventListener('hashchange', this._onHash);
+    if (this._updateTimer) clearTimeout(this._updateTimer);
     if (this._off) this._off();
     if (this._offDetached) this._offDetached();
     if (this._offClosedWindow) this._offClosedWindow();

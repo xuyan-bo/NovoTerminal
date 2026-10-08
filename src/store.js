@@ -12,6 +12,9 @@ export const store = Vue.observable({
   activeGroupId: null,
   sessionMap: {},
   settingsDialog: false,
+  /** 更新检查结果 { current, latest, notes, url }；弹窗开关独立，关闭结果仍保留 */
+  update: null,
+  updateDialog: false,
   /** 备份弹窗模式：'' 关闭，'export' 导出，'import' 导入 */
   backupDialog: '',
   logDialog: false,
@@ -34,6 +37,16 @@ export async function refresh() {
   store.snapshot = snap;
   if (snap && snap.settings) applySettings(snap.settings);
   store.localeTick++;
+}
+
+/** 有新版本才落状态并开弹窗；无更新与失败都交给调用方决定要不要提示用户。 */
+export async function checkForUpdates() {
+  const r = unwrap(await api.checkUpdate());
+  if (r.hasUpdate) {
+    store.update = r;
+    store.updateDialog = true;
+  }
+  return r;
 }
 
 export function switchTab(id) {

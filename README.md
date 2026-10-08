@@ -1,14 +1,14 @@
 # NovoTerminal
 
-本地优先（local-first）的一体化远程运维工作台：把 SSH 终端、VNC / RDP 远程桌面、SFTP 文件传输和资产凭据管理收进同一个桌面应用，会话以页签编排、可拆成独立窗口，数据全部存在你自己机器上。
+会思考的运维终端：把 SSH 终端、VNC / RDP 远程桌面、SFTP 文件传输和资产凭据管理收进同一个桌面应用，会话以页签编排、可拆成独立窗口，数据全部存在你自己机器上。
 
-A local-first remote operations workbench: SSH terminals, VNC / RDP remote desktops, SFTP transfers and asset/credential management in one desktop app. Sessions live in tabs, can be detached into their own windows, and all data stays on your machine.
+A thinking operations terminal: SSH, VNC / RDP remote desktops, SFTP transfers and asset/credential management in one desktop app. Sessions live in tabs, can be detached into their own windows, and all data stays on your machine.
 
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![version](https://img.shields.io/badge/version-0.1.0-informational)
 
-仓库主页 / Homepage：<https://gitee.com/xu-san333/omni-desk>
+仓库主页 / Homepage：<https://gitee.com/xu-san333/omni-desk> · <https://github.com/xuyan-bo/OmniDesk>
 
 > 目录 / Contents：[中文](#中文) · [English](#english) · [开发约定](#开发与约定)
 
@@ -62,6 +62,7 @@ A local-first remote operations workbench: SSH terminals, VNC / RDP remote deskt
 - 资产、分组、最近连接与设置统一持久化，凭据经 `safeStorage` 加密后以 JSON 存放；数据路径可自定义并自动迁移。
 - 备份与还原：导出 / 导入配置前先做系统身份验证——Windows 走 Hello / 账号密码，macOS 用原生 `LocalAuthentication`（查看可复用 30 秒缓存，导入导出重新认证），Linux 经确认后跳过。
 - 运行日志持久化到本地，应用内可查看：连接建立 / 断开 / 失败、IPC 错误、SFTP 任务起止都留有记录，日志不含密码与私钥。
+- 提示式更新检查：启动后并发探测 Gitee（仓库 `homepage`）与 GitHub（`githubHomepage`）两处发行版，以 Gitee 为准——它拿到发行版就立刻采用，GitHub 只作兜底且不再等它返回（两平台由 Gitee 自动同步，版本一致），只有 Gitee 请求失败或还没有任何发行版时才用 GitHub 的结果，两路都失败才算检查失败；发现新版才弹窗展示更新内容并提供「前往发布页」，不自动下载安装。可在设置「通用」里关闭，也可在「关于」页手动检查（两边都还没有发行版时提示「发布页还没有可比较的版本」，不是报错）。新版本安装包可直接覆盖旧版（`appId`、`productName` 与安装作用域保持一致即可），不需要先卸载。
 
 **界面与体验**
 
@@ -83,9 +84,9 @@ npm run electron     # 另一个终端，连接 dev server
 npm start
 
 # 4. 打包
-npm run pack:win     # Windows x64（nsis + 7z）
-npm run pack:mac     # macOS（dmg + zip，需在 macOS 上执行）
-npm run pack:linux   # Linux（deb + rpm + AppImage，需在 Linux 上执行）
+npm run pack:win     # Windows（nsis + zip，x64 与 arm64 各一份）
+npm run pack:mac     # macOS（dmg + zip 各 arm64 / x64，另加一份 universal pkg，需在 macOS 上执行）
+npm run pack:linux   # Linux（deb + rpm + AppImage + tar.xz，x64 与 arm64 各一份，需在 Linux 上执行）
 ```
 
 要求 Node.js 18 以上（Electron 33 / Vite 5）。国内网络安装 Electron 或 electron-builder 二进制慢时：
@@ -114,11 +115,9 @@ export ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-b
 | 系统身份验证（导入导出） | Hello / 账号密码 | 原生弹窗 | 跳过并记为 `Skipped` |
 | 从系统文件管理器复制后粘贴 | ✅ 多文件 | 单文件 | 尽力（取决于 `text/uri-list`） |
 | 把远端文件拖出到系统文件夹 | ✅ | ✅ | ❌ 不支持（`startDrag` 限制） |
-| 安装包 | nsis / 7z | dmg / zip | deb / rpm / AppImage |
+| 安装包 | nsis / zip（x64 + arm64） | dmg / zip（arm64 + x64）+ pkg（universal） | deb / rpm / AppImage / tar.xz（x64 + arm64） |
 
-打包环境不可互换：macOS 包必须在 Mac 上打，Linux 包必须在 Linux 上打。
-
-Linux 包由仓库自带的 Gitee Go 流水线 `.workflow/build-linux.yml` 构建（Node 24，`npm install` + `npm run pack:linux`），产物归档在 `release/`；Windows 与 macOS 安装包仍需在本机对应系统上执行 `pack:win` / `pack:mac`。
+打包环境不可互换，三个平台都在对应的物理机或虚拟机上手工执行 `pack:*`（仓库不配置 CI）：Windows 在 Windows、macOS 在 Mac、Linux 在 Linux。产物输出到 `release/`（已 gitignore，不入库），发布前逐项手动验证。发新版时在 Gitee 建发行版并上传安装包，标签用 `x.y.z`（客户端的更新检查按标签比版本，且以 Gitee 为探测主源，GitHub 只在 Gitee 拿不到结果时兜底），同时把 `package.json` 的 `version` 升到同一版本；GitHub 仓库地址写在 `package.json` 的 `githubHomepage`（更新探测与「关于」页链接都读它）。注意 Gitee→GitHub 的镜像推送同步的是代码与标签，发行版对象和附件属于平台数据，需要时在 GitHub 侧另建同名发行版。Linux 打包机首次需 `apt-get install -y binutils rpm`（deb 要 `ar`、rpm 要 `rpmbuild`），AppImage 还依赖 `mksquashfs`。
 
 ### 项目结构
 
@@ -212,6 +211,7 @@ build/ scripts/      图标与认证组件构建、离线校验脚本
 - Assets, groups, recent connections and settings persist together; credentials are encrypted with `safeStorage` before being written as JSON. The data path is configurable and migrates automatically.
 - Backup and restore require system authentication first — Windows Hello / password on Windows, native `LocalAuthentication` on macOS (a 30-second cache is reusable for viewing; import and export re-authenticate), explicitly skipped on Linux.
 - Runtime logs are persisted and browsable in-app: connect / disconnect / failure, IPC errors and SFTP task lifecycle are all recorded, without passwords or private keys.
+- Advisory update check: after launch the app concurrently probes the Gitee releases API (derived from `homepage`) and the GitHub one (`githubHomepage`). Gitee is authoritative — once it returns a release the answer is taken immediately without waiting for GitHub, since the repository auto-syncs to GitHub and both carry the same tag; GitHub is only consulted when Gitee fails or has no release at all, and the check reports failure only when both are down. A dialog appears when a newer release exists, listing its notes with a button to the releases page; nothing is downloaded automatically. It can be turned off under General, and the About page can check on demand (with no releases published yet it says so instead of raising an error). Installers overwrite the previous build in place as long as `appId`, `productName` and the install scope stay unchanged, so no uninstall step is needed.
 
 **Interface**
 
@@ -233,12 +233,12 @@ npm run electron
 npm start
 
 # 4. Package
-npm run pack:win     # Windows x64 (nsis + 7z)
-npm run pack:mac     # macOS (dmg + zip) — must run on macOS
-npm run pack:linux   # Linux (deb + rpm + AppImage) — must run on Linux
+npm run pack:win     # Windows (nsis + zip, one per arch: x64 and arm64)
+npm run pack:mac     # macOS (dmg + zip per arch: arm64 and x64, plus one universal pkg) — must run on macOS
+npm run pack:linux   # Linux (deb + rpm + AppImage + tar.xz, x64 and arm64) — must run on Linux
 ```
 
-Requires Node.js 18 or newer (Electron 33 / Vite 5). Linux packages are built by the Gitee Go pipeline `.workflow/build-linux.yml` and archived from `release/`; Windows and macOS builds must run on their own OS.
+Requires Node.js 18 or newer (Electron 33 / Vite 5). There is no CI pipeline: each platform is packaged by hand on its own physical machine or VM — `pack:win` on Windows, `pack:mac` on macOS, `pack:linux` on Linux — and artifacts land in the git-ignored `release/` directory for manual verification before publishing. To ship a release, create it on Gitee with a plain `x.y.z` tag and attach the installers, bumping `package.json`'s `version` to match — the in-app update check compares those tags and treats Gitee as the authoritative source, with GitHub only as a fallback. Note that a Gitee→GitHub mirror push syncs commits and tags, while releases and their binary assets are platform data, so create the matching GitHub release by hand when you want it. The GitHub repository URL lives in `package.json`'s `githubHomepage`, which both the update probe and the About page link read. A Linux box needs `apt-get install -y binutils rpm` the first time (deb requires `ar`, rpm requires `rpmbuild`) plus `mksquashfs` for AppImage.
 
 ### Platform support
 
@@ -250,7 +250,7 @@ Requires Node.js 18 or newer (Electron 33 / Vite 5). Linux packages are built by
 | System authentication for export / import | Hello / password | native prompt | skipped, logged as `Skipped` |
 | Paste files copied in the OS file manager | ✅ multi-file | single file | best effort (`text/uri-list`) |
 | Drag remote files out to a system folder | ✅ | ✅ | ❌ (`startDrag` unsupported) |
-| Installers | nsis / 7z | dmg / zip | deb / rpm / AppImage |
+| Installers | nsis / zip (x64 + arm64) | dmg / zip (arm64 + x64) + pkg (universal) | deb / rpm / AppImage / tar.xz (x64 + arm64) |
 
 ### Project layout
 
