@@ -39,6 +39,7 @@
 | `electron/session/` | 外部会话适配及连接探测；当前实际 RDP 连接由 mstsc 适配器执行 |
 | `electron/ssh/`、`electron/vnc/`、`electron/sftp/` | 各自的连接、代理、资源和传输管理 |
 | `electron/store/`、`electron/auth/` | 持久化与系统身份验证；UI 不绕过这些边界自行实现 |
+| `scripts/` | 构建钩子与工具（`build-mac-auth.cjs`、`afterPack.cjs`、`gen-os-icons.js`）及开发期 SSH 检查脚本；不参与运行时，新增文件须同步 `.gitignore` 的 `/scripts/*` 例外 |
 
 - 普通页面使用 store 页签；SFTP 使用独立窗口的 `#sftp?assetId=...` 入口，拆分出去的会话窗口使用 `#session?kind=...&tabId=...`，两者都不擅自迁移为另一套路由。
 - SSH 实际使用主进程 ssh2 与渲染进程 xterm；VNC 使用主进程代理与 noVNC；不能把 `SessionManager` 的 SSH/VNC 占位适配器当作真实连接实现。
@@ -160,6 +161,7 @@
 | `npm run pack:linux` | 在 Linux 构建并打包 deb / rpm / AppImage / tar.xz（x64 与 arm64）；须在 Linux 物理机或虚拟机执行，产物落 `release/`（已 gitignore）；仓库不配置 CI，三平台一律手工打包后人工验证 |
 | `npm run lint` | 当前仅打印占位消息，不能作为静态检查通过的证据 |
 
+- 打包体积依赖 `package.json` 两处约定，改动协议或新组件时必须同步：`dependencies` 只允许主进程真正 `require` 的模块（现为 `iconv-lite`、`openai`、`ssh2`、`ws`），渲染端依赖一律放 `devDependencies`，否则 electron-builder 会把 Vite 已打进 `dist/` 的包再复制进 `app.asar`；`scripts/afterPack.cjs` 在 Windows 与 Linux 打包后只保留 `locales/` 里的 `en-US.pak`、`zh-CN.pak`（约省 39 MB），macOS 走 `.lproj` 且涉及签名，钩子对 darwin 直接返回不裁剪。
 - 当前没有 `npm test` 或项目测试套件入口；`electron/session/testers.js` 是产品联网探测，不能当作离线测试运行。
 - `scripts/gen-os-icons.js` 会生成/改写资源和代码，不属于检查命令，不为验证代码而运行。
 - 依赖必须有实际需要，并且按第 3 节的流程先经用户批准才能引入；变更依赖时同步锁文件，不为执行一次检查擅自安装工具或升级依赖。
