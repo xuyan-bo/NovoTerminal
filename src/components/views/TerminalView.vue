@@ -1217,10 +1217,6 @@ export default {
   width: 0;
   display: flex;
   overflow: hidden;
-  transition: flex-basis 0.28s ease, width 0.28s ease;
-}
-.ssh-monitor-host.dragging {
-  transition: none;
 }
 /* 展开后按比例可能窄到装不下 AI 输入条，兜最小宽度让终端侧让步而不是裁掉按钮 */
 .ssh-monitor-host.open {
