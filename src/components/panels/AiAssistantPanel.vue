@@ -269,12 +269,6 @@
               <i :class="permissionIcon"></i>{{ $t('ai.perm.' + permission) }}<i class="el-icon-arrow-down bar-caret"></i>
             </button>
             <el-dropdown-menu slot="dropdown" class="ai-drop">
-              <el-dropdown-item command="default" :disabled="savingPermission || !sessionPermission">
-                <div class="drop-item" :class="{ on: !sessionPermission }">
-                  <i class="el-icon-back"></i>
-                  <span>{{ $t('ai.permFollow', { perm: $t('ai.perm.' + (ai.permission || 'auto')) }) }}</span>
-                </div>
-              </el-dropdown-item>
               <el-dropdown-item v-for="p in permissions" :key="p.id" :command="p.id" :disabled="savingPermission">
                 <div class="drop-item" :class="{ on: p.id === permission }">
                   <i :class="p.icon"></i>
@@ -484,7 +478,7 @@ export default {
       boxHeight: 0,
       boxDragging: false,
       savingPermission: false,
-      /** 本会话的审批级别覆盖；为空表示跟随设置里的默认值。 */
+      /** 本会话的审批级别覆盖；为空表示沿用设置里的默认值（新会话即此状态）。 */
       sessionPermission: '',
       /** 本会话选用的模型；同样只在会话内生效，随下一次请求递给主进程。 */
       sessionModel: null,
@@ -626,6 +620,15 @@ export default {
     available(val) {
       if (val) this.$nextTick(() => this.observeLog());
     },
+    /** 收起只藏不销毁；重新显示时容器恢复布局可能夹回滚动位置，强制保持跟随后贴底。 */
+    open(val) {
+      if (!val) return;
+      this.$nextTick(() => {
+        this.observeLog();
+        this.follow = true;
+        this.scrollToEnd();
+      });
+    },
     /** 宿主半圆要显示「正在跑」的提示点；心跳只在回合进行中走。 */
     running(val) {
       this.$emit('running-change', val);
@@ -644,6 +647,7 @@ export default {
     this._boxUp = null;
     this._tick = null;
     this._ro = null;
+    this._thinkPending = false;
     this.subscribe();
     this.clearConversation();
   },
@@ -849,6 +853,7 @@ export default {
         }
         node.text += ev.text || '';
         this.stick();
+        this.scrollThink();
         return;
       }
       if (ev.type === 'tool') {
@@ -1334,8 +1339,7 @@ export default {
     },
 
     async setPermission(id) {
-      const follow = id === 'default';
-      if (this.savingPermission || (follow ? !this.sessionPermission : id === this.permission)) return;
+      if (this.savingPermission || id === this.permission) return;
       if (id === 'full') {
         try {
           await this.$confirm(t('ai.fullWarn'), t('ai.fullTitle'), {
@@ -1348,8 +1352,8 @@ export default {
       if (!api.aiSetPermission) { this.error = { code: 'NO_BRIDGE', message: t('msg.needElectron') }; return; }
       this.savingPermission = true;
       try {
-        unwrap(await api.aiSetPermission({ sessionId: this.sessionId, permission: follow ? '' : id }));
-        this.sessionPermission = follow ? '' : id;
+        unwrap(await api.aiSetPermission({ sessionId: this.sessionId, permission: id }));
+        this.sessionPermission = id;
       } catch (e) {
         this.error = { code: e.code || 'AI_REQUEST', message: e.message };
       } finally {
@@ -1405,6 +1409,8 @@ export default {
       return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
     },
     onLogScroll() {
+      // 收起时容器 display:none，布局塌缩引发的滚动不算用户上翻，否则收起前的位置就丢了
+      if (!this.open) return;
       this.follow = this.atBottom();
     },
     goBottom() {
@@ -1422,6 +1428,18 @@ export default {
         if (el) el.scrollTop = el.scrollHeight;
       });
     },
+    /** 思考块有最大高度，流式输出超出后自动滚到最末尾看到最新内容；最大高度不变。 */
+    scrollThink() {
+      if (this._thinkPending) return;
+      this._thinkPending = true;
+      this.$nextTick(() => {
+        this._thinkPending = false;
+        const root = this.$el;
+        if (!root || !root.querySelector) return;
+        const el = root.querySelector('.think-text.typing');
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
 
     /** 会话区高度随侧栏拖动/拆分窗口变化，细节上限只能实测，不能按视口估。 */
     observeLog() {
@@ -1435,6 +1453,8 @@ export default {
       const el = this.$refs.logEl;
       if (!el || !el.clientHeight) return;
       this.actCap = Math.max(CAP_MIN, Math.round(el.clientHeight * CAP_RATIO));
+      // 全屏切换、拖分隔条、缩放窗口都会让会话区重排、离底一截；仍停在底部时重新贴回去
+      this.stick();
     },
 
     /** 心跳只在有东西在跳动时开启：进行中的回合、等审批/等选择的秒数。 */
