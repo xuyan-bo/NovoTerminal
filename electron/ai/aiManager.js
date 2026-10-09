@@ -297,16 +297,10 @@ class AiManager {
     return out;
   }
 
-  /** 审批级别只影响这一条会话，设置里的默认值不动；空值表示取消覆盖、跟随设置。 */
+  /** 审批级别只影响这一条会话，设置里的默认值不动；没覆盖过的会话跟随设置。 */
   setPermission(req) {
     const sessionId = req && req.sessionId;
     const value = req && req.permission;
-    const ov = this.overrides.get(sessionId);
-    if (value === '' || value == null) {
-      if (ov) delete ov.permission;
-      this.log && this.log.info('ai', 'ai permission override cleared', { sessionId });
-      return { ok: true };
-    }
     if (!PERMISSIONS.includes(value)) throw aiError('AI_REQUEST', 'invalid permission');
     this._override(sessionId).permission = value;
     this.log && this.log.info('ai', 'ai permission changed', { sessionId, permission: value });
