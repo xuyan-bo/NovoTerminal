@@ -6,12 +6,18 @@
  * version 1 只有展示记录（用户提问、思考、正文、命令、审批/选择、压缩行、整轮统计）；
  * version 2 另存 context——当时真正发给模型的那份序列与水位快照，加载会话才能原样接上。
  * 两个版本都不写 system 提示词与审批等待中的凭据。
+ *
+ * 同目录另有 index.list：该目录所有会话的摘要缓存（含每个文件的 mtime/大小）。
+ * 列历史只读它，不再逐个打开会话文件；与目录对不上时按差异单个重读或删除条目并写回。
+ * 它只是加速层，缺失/损坏都按「整目录重建」处理，删掉也不影响正确性。
  */
 
 const fs = require('fs');
 const path = require('path');
 
 const ROOT_DIR = 'ai-sessions';
+const INDEX_FILE = 'index.list';
+const INDEX_VERSION = 1;
 const ASSET_KEY = /^a-[a-zA-Z0-9-]{1,64}$/;
 const PROTOCOL_KEY = /^[a-z0-9-]{1,16}$/;
 const SESSION_KEY = /^ais-[a-zA-Z0-9-]{1,64}$/;
@@ -87,11 +93,39 @@ class AiSessionStore {
     } catch (_) {
       return [];
     }
-    const out = [];
+    const onDisk = new Set();
     for (const name of names) {
-      if (!name.endsWith('.json')) continue;
-      const rec = this._readFile(path.join(dir, name));
-      if (rec) out.push(summaryOf(rec));
+      if (name.endsWith('.json')) onDisk.add(name);
+    }
+    const cached = this._readIndex(dir);
+    const files = cached ? { ...cached } : {};
+    let dirty = !cached;
+    // 目录里已删除的文件，对应条目一并去掉
+    for (const name of Object.keys(files)) {
+      if (!onDisk.has(name)) {
+        delete files[name];
+        dirty = true;
+      }
+    }
+    // 新出现或 mtime/大小变过的文件才单独读取，其余直接复用摘要
+    for (const name of onDisk) {
+      let st;
+      try {
+        st = fs.statSync(path.join(dir, name));
+      } catch (_) {
+        continue;
+      }
+      const prev = files[name];
+      if (prev && prev.mtimeMs === st.mtimeMs && prev.size === st.size) continue;
+      const rec = this._readFile(path.join(dir, name), true);
+      files[name] = { mtimeMs: st.mtimeMs, size: st.size, summary: rec ? summaryOf(rec) : null };
+      dirty = true;
+    }
+    if (dirty) this._writeIndex(dir, files);
+    const out = [];
+    for (const name of Object.keys(files)) {
+      const summary = files[name] && files[name].summary;
+      if (summary) out.push(summary);
     }
     out.sort((a, b) => b.updatedAt - a.updatedAt);
     return out;
@@ -124,8 +158,10 @@ class AiSessionStore {
     // 先写临时文件再改名：中途崩溃不会留下半截 JSON
     fs.writeFileSync(file + '.tmp', JSON.stringify(rec, null, 2), 'utf8');
     fs.renameSync(file + '.tmp', file);
+    const summary = summaryOf(rec);
+    this._indexPut(path.dirname(file), path.basename(file), file, summary);
     this.log && this.log.info('ai', 'ai session archived', { file: path.basename(file), assetId: rec.assetId, messages: rec.messages.length });
-    return summaryOf(rec);
+    return summary;
   }
 
   rename(assetId, protocol, id, title) {
@@ -138,22 +174,68 @@ class AiSessionStore {
     rec.updatedAt = Date.now();
     fs.writeFileSync(file + '.tmp', JSON.stringify(rec, null, 2), 'utf8');
     fs.renameSync(file + '.tmp', file);
-    return summaryOf(rec);
+    const summary = summaryOf(rec);
+    this._indexPut(path.dirname(file), path.basename(file), file, summary);
+    return summary;
   }
 
   remove(assetId, protocol, id) {
-    fs.rmSync(this.fileOf(assetId, protocol, id), { force: true });
+    const file = this.fileOf(assetId, protocol, id);
+    fs.rmSync(file, { force: true });
+    this._indexDrop(path.dirname(file), path.basename(file));
     this.log && this.log.info('ai', 'ai session deleted', { sessionId: id, assetId });
     return { ok: true };
   }
 
-  _readFile(file) {
+  /** 读取目录摘要缓存；缺失、损坏或版本不符一律返回 null，交调用方整目录重建。 */
+  _readIndex(dir) {
+    try {
+      const obj = JSON.parse(fs.readFileSync(path.join(dir, INDEX_FILE), 'utf8'));
+      if (!obj || obj.version !== INDEX_VERSION || !obj.files || typeof obj.files !== 'object') return null;
+      return obj.files;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  _writeIndex(dir, files) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, INDEX_FILE);
+      fs.writeFileSync(file + '.tmp', JSON.stringify({ version: INDEX_VERSION, files }, null, 2), 'utf8');
+      fs.renameSync(file + '.tmp', file);
+    } catch (_) {
+      // 索引只是加速层，写不进去就等下次整目录重建
+    }
+  }
+
+  /** 单条摘要写回；索引还不存在时不急着建，避免建出缺项的半成品，交给 list 全量重建。 */
+  _indexPut(dir, name, file, summary) {
+    const files = this._readIndex(dir);
+    if (!files) return;
+    try {
+      const st = fs.statSync(file);
+      files[name] = { mtimeMs: st.mtimeMs, size: st.size, summary };
+    } catch (_) {
+      delete files[name];
+    }
+    this._writeIndex(dir, files);
+  }
+
+  _indexDrop(dir, name) {
+    const files = this._readIndex(dir);
+    if (!files) return;
+    delete files[name];
+    this._writeIndex(dir, files);
+  }
+
+  _readFile(file, skipContext) {
     try {
       const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (!parsed || !Array.isArray(parsed.messages) || typeof parsed.id !== 'string') return null;
       parsed.messages = parsed.messages.map(normalizeMessage).filter(Boolean);
       parsed.title = str(parsed.title, 120);
-      parsed.context = parsed.context && Array.isArray(parsed.context.messages) ? normalizeContext(parsed.context) : null;
+      parsed.context = !skipContext && parsed.context && Array.isArray(parsed.context.messages) ? normalizeContext(parsed.context) : null;
       return parsed;
     } catch (_) {
       return null;

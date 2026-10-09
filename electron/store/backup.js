@@ -25,6 +25,7 @@ const MAGIC = Buffer.from('NTBK1', 'ascii');
 const FORMAT = 'novoterminal-backup';
 const FORMAT_VERSION = 1;
 const AI_DIR = 'ai-sessions';
+const AI_INDEX = 'index.list';
 const MANIFEST = 'manifest.json';
 const SETTINGS_ENTRY = 'settings.json';
 const ASSETS_ENTRY = 'assets.json';
@@ -259,7 +260,8 @@ function packBackup({ store, include, password, appVersion }) {
   }
   if (cats.includes('ai')) {
     const root = path.join(store.dataDir(), AI_DIR);
-    const files = listFiles(root);
+    // index.list 是可重建的摘要缓存，不随包搬运（还原后 mtime 全变，带了也得重建），也不计入会话数
+    const files = listFiles(root).filter((rel) => path.basename(rel) !== AI_INDEX);
     for (const rel of files) {
       entries.push({ name: AI_PREFIX + rel, data: fs.readFileSync(path.join(root, rel)) });
     }
