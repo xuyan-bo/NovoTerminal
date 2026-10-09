@@ -8,7 +8,7 @@ A thinking operations terminal: SSH, VNC / RDP remote desktops, SFTP transfers a
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![version](https://img.shields.io/badge/version-0.1.0-informational)
 
-仓库主页 / Homepage：<https://gitee.com/xu-san333/omni-desk> · <https://github.com/xuyan-bo/OmniDesk>
+仓库主页 / Homepage：<https://gitee.com/xu-san333/novo-terminal> · <https://github.com/xuyan-bo/NovoTerminal>
 
 > 目录 / Contents：[中文](#中文) · [English](#english) · [开发约定](#开发与约定)
 

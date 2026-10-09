@@ -4,8 +4,8 @@
   "description": "Thinking operations terminal for SSH, VNC and RDP with SFTP file transfer",
   "main": "electron/main.js",
   "author": "NovoTerminal <xuyanbo.c@qq.com>",
-  "homepage": "https://gitee.com/xu-san333/omni-desk",
-  "githubHomepage": "https://github.com/xuyan-bo/OmniDesk",
+  "homepage": "https://gitee.com/xu-san333/novo-terminal",
+  "githubHomepage": "https://github.com/xuyan-bo/NovoTerminal",
   "license": "Apache-2.0",
   "private": true,
   "scripts": {
