@@ -272,10 +272,11 @@ class LogStore {
     return this.log('error', source, message, meta);
   }
 
-  /** 从磁盘按分页取样：跨文件从新到旧，文件内从尾到头，只解析当前页需要的行 */
+  /** 从磁盘按分页取样：默认跨文件从新到旧、文件内从尾到头，order:'asc' 整体反向，只解析当前页需要的行 */
   list(filter = {}) {
     const limit = Math.max(1, Number(filter.limit) || 200);
     const offset = Math.max(0, Number(filter.offset) || 0);
+    const asc = filter.order === 'asc';
     const files = this._files();
     const needle = String(filter.keyword || '').trim().toLowerCase();
     const hasFilter = Boolean((filter.level && LEVEL_ORDER[filter.level] !== undefined) || filter.source || needle);
@@ -287,17 +288,24 @@ class LogStore {
     const total = files.reduce((n, f, i) => n + count(i), 0);
     const entries = [];
     let skip = offset;
-    for (let i = 0; i < files.length && entries.length < limit; i++) {
+    for (let k = 0; k < files.length && entries.length < limit; k++) {
+      const i = asc ? files.length - 1 - k : k;
       const c = count(i);
       if (skip >= c) {
         skip -= c;
         continue;
       }
-      const from = Math.max(0, c - skip - (limit - entries.length));
+      const want = limit - entries.length;
+      const from = asc ? skip : Math.max(0, c - skip - want);
+      const to = asc ? Math.min(c, skip + want) : c - skip;
       const part = matched
-        ? this._readRanges(files[i], matched[i], from, c - skip)
-        : this._slice(files[i], from, c - skip);
-      for (let j = part.length - 1; j >= 0; j--) entries.push(part[j]);
+        ? this._readRanges(files[i], matched[i], from, to)
+        : this._slice(files[i], from, to);
+      if (asc) {
+        for (let j = 0; j < part.length; j++) entries.push(part[j]);
+      } else {
+        for (let j = part.length - 1; j >= 0; j--) entries.push(part[j]);
+      }
       skip = 0;
     }
     return { entries, total, offset, limit };

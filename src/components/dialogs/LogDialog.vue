@@ -2,7 +2,7 @@
   <el-dialog
     :title="$t('log.title')"
     :visible.sync="modalVisible"
-    width="920px"
+    width="1120px"
     top="7vh"
     :close-on-click-modal="false"
     class="log-dialog"
@@ -29,24 +29,32 @@
         @keyup.enter.native="reload"
         @clear="reload"
       />
-      <el-button size="mini" :loading="loading" @click="load">{{ $t('log.refresh') }}</el-button>
+      <el-button size="mini" @click="load">{{ $t('log.refresh') }}</el-button>
       <div class="spacer"></div>
       <el-button size="mini" type="danger" plain :disabled="!total" @click="onClear">
         {{ $t('log.clear') }}
       </el-button>
     </div>
 
+    <!-- 300px = 弹窗留白、标题栏、页脚、工具栏与分页行之和；表格吃剩余视口高度并封顶 600px，大屏不顶满、小屏翻页条不被挤出 -->
     <el-table
       v-loading="loading"
       :data="rows"
       border
       stripe
       size="small"
-      height="430"
+      height="min(600px, calc(100vh - 300px))"
       class="log-table"
       @cell-contextmenu="onCellCtx"
+      @sort-change="onSortChange"
     >
-      <el-table-column :label="$t('log.colTime')" width="158">
+      <el-table-column
+        :label="$t('log.colTime')"
+        prop="time"
+        width="158"
+        sortable="custom"
+        :sort-orders="['ascending', 'descending']"
+      >
         <template slot-scope="{ row }">{{ fmtTime(row.time) }}</template>
       </el-table-column>
       <el-table-column :label="$t('log.colLevel')" width="80" align="center">
@@ -66,12 +74,11 @@
 
     <div class="log-pager">
       <el-pagination
-        background
-        layout="total, sizes, prev, pager, next"
+        layout="total, sizes, prev, pager, next, jumper"
         :total="total"
         :current-page="page"
         :page-size="pageSize"
-        :page-sizes="[50, 100, 200, 500]"
+        :page-sizes="[100, 200, 300, 400]"
         @current-change="onPage"
         @size-change="onSize"
       />
@@ -104,6 +111,7 @@ export default {
       total: 0,
       page: 1,
       pageSize: 100,
+      order: 'desc',
     };
   },
   computed: {
@@ -165,6 +173,7 @@ export default {
         const r = await api.logList({
           level: this.level || undefined,
           keyword: this.keyword || undefined,
+          order: this.order,
           limit: this.pageSize,
           offset: (this.page - 1) * this.pageSize,
         });
@@ -194,10 +203,16 @@ export default {
       this.page = 1;
       this.load();
     },
+    // sortable="custom"：表格不排本页数据，方向交给主进程，翻页才是全局顺序
+    onSortChange({ order }) {
+      this.order = order === 'ascending' ? 'asc' : 'desc';
+      this.reload();
+    },
     push(entry) {
       if (!entry || typeof entry !== 'object' || !entry.time) return;
       this.total++;
-      // 仅在第一页且未筛选时实时插入，避免分页偏移错乱
+      // 仅在第一页且未筛选时实时插入，避免分页偏移错乱；正序时新条目属于最后一页，插不进去
+      if (this.order === 'asc') return;
       if (this.page === 1 && !this.level && !String(this.keyword).trim()) {
         this.rows.unshift(entry);
         if (this.rows.length > this.pageSize) this.rows.pop();

@@ -146,77 +146,34 @@ button {
   background: transparent;
 }
 
-/* log table: thin, subtle scrollbar matching the recent-connections look */
-.log-table .el-table__body-wrapper::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-.log-table .el-table__body-wrapper::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 4px;
-}
-.log-table .el-table__body-wrapper::-webkit-scrollbar-thumb:hover {
-  background: var(--text-3);
-}
-.log-table .el-table__body-wrapper::-webkit-scrollbar-track,
-.log-table .el-table__body-wrapper::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-/* unified Element-style thin scrollbar: session views (SSH/VNC) + xterm viewport + home + SFTP file lists.
-   Keeps the native scrollbar from pushing in thick right/bottom bars. */
-.view::-webkit-scrollbar,
-.xterm-viewport::-webkit-scrollbar,
-.home-scroll::-webkit-scrollbar,
-.file-list::-webkit-scrollbar,
-.ai-log::-webkit-scrollbar,
-.ai-pin::-webkit-scrollbar,
-.hist-list::-webkit-scrollbar,
-.cmd-out::-webkit-scrollbar,
-.think-text::-webkit-scrollbar {
+/* Element 的表格 gutter 与 el-scrollbar 的负边距，都是运行时拿一个 body 下的临时 div 实测滚动条宽度，
+   所以细滚动条必须写成不带类名的全局规则：测量 div 一起命中，量出来即 6px，表头空列与滚动条同宽。
+   逐容器限定（如 .log-table）时 Element 仍按原生 17px 预留 gutter，空列就会宽出一截。 */
+::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
-.view::-webkit-scrollbar-thumb,
-.xterm-viewport::-webkit-scrollbar-thumb,
-.home-scroll::-webkit-scrollbar-thumb,
-.file-list::-webkit-scrollbar-thumb,
-.ai-log::-webkit-scrollbar-thumb,
-.ai-pin::-webkit-scrollbar-thumb,
-.hist-list::-webkit-scrollbar-thumb,
-.cmd-out::-webkit-scrollbar-thumb,
-.think-text::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 3px;
 }
-.view::-webkit-scrollbar-thumb:hover,
-.xterm-viewport::-webkit-scrollbar-thumb:hover,
-.home-scroll::-webkit-scrollbar-thumb:hover,
-.file-list::-webkit-scrollbar-thumb:hover,
-.ai-log::-webkit-scrollbar-thumb:hover,
-.ai-pin::-webkit-scrollbar-thumb:hover,
-.hist-list::-webkit-scrollbar-thumb:hover,
-.cmd-out::-webkit-scrollbar-thumb:hover,
-.think-text::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: var(--text-3);
 }
-.view::-webkit-scrollbar-track,
-.view::-webkit-scrollbar-corner,
-.xterm-viewport::-webkit-scrollbar-track,
-.xterm-viewport::-webkit-scrollbar-corner,
-.file-list::-webkit-scrollbar-track,
-.file-list::-webkit-scrollbar-corner,
-.ai-log::-webkit-scrollbar-track,
-.ai-log::-webkit-scrollbar-corner,
-.ai-pin::-webkit-scrollbar-track,
-.ai-pin::-webkit-scrollbar-corner,
-.hist-list::-webkit-scrollbar-track,
-.hist-list::-webkit-scrollbar-corner,
-.cmd-out::-webkit-scrollbar-track,
-.cmd-out::-webkit-scrollbar-corner,
-.think-text::-webkit-scrollbar-track,
-.think-text::-webkit-scrollbar-corner {
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* Element 的加载遮罩是不透明底色淡入淡出，会把表格框线整个盖掉（实测淡入峰值 0.74，框线对比减半），
+   翻页时就成了「框线消失一瞬」。遮罩只承载 spinner，底色透明。 */
+.log-table .el-loading-mask {
+  background-color: transparent;
+}
+/* Element 还会在挂上 loading 父类时把外框 border-color 清成 transparent（它假定遮罩不透明），
+   上、左两条外框就此消失，右、下由伪元素画所以还在。底色既然透明，外框也要留着。 */
+.log-table.el-table--border.el-loading-parent--relative {
+  border-color: #ebeef5;
 }
 
 .el-dialog__title,
