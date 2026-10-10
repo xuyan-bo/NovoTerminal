@@ -566,15 +566,11 @@ class AssetStore {
     return path.join(path.dirname(this.file), 'logs');
   }
 
+  /** 存储位置不在这里改：换路径必须走主进程的 switchDataPath，它同时搬日志与 AI 会话目录 */
   updateSettings(patch) {
     this.data.settings = Object.assign({}, this.data.settings, patch);
     if ('recentLimit' in patch) this.data.recent = (this.data.recent || []).slice(0, this.recentCap());
-    if (patch.dataPath && patch.dataPath !== path.dirname(this.file)) {
-      this.setCustomPath(patch.dataPath);
-      this.persist();
-    } else {
-      this.persist();
-    }
+    this.persist();
     return this.snapshot().settings;
   }
 

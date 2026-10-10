@@ -134,6 +134,17 @@ const MB = 1024 * 1024;
 function clampedLogTotalMb(v) {
   return Math.min(LOG_TOTAL_MAX_MB, Math.max(LOG_TOTAL_MIN_MB, Math.floor(Number(v)) || LOG_TOTAL_DEFAULT_MB));
 }
+/** 页面缩放百分比，与渲染端设置页滑块的 50–200 一致；非数字回落 100 */
+function clampedZoom(v) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.min(200, Math.max(50, n)) : 100;
+}
+/**
+ * 设置项的取值集合。字体不在这里收敛：可选项在渲染端 src/constants.js 的 UI_FONTS，
+ * 主进程复制一份 id 列表会变成第二处真相，而 i18n 的 applyFont 认不出 id 时本来就回落系统字体。
+ */
+const SETTING_THEMES = ['dark', 'light', 'system'];
+const SETTING_CLOSE_ACTIONS = ['ask', 'minimize', 'quit'];
 
 /** 发行版标签只认数字版本前缀，V/v 前缀均可且缺位补 0（V1.0.0 与 1.0 等价），杂字符（v3.9.2last 之类）按可比部分处理 */
 function parseVersion(tag) {
@@ -751,8 +762,11 @@ function registerIpc() {
     const s = store.getSettings();
     return isMainWindow(sender) ? s : withoutAiKeys(s);
   }, true);
-  handle('store:update-settings', async (patch) => {
+  handle('store:update-settings', (patch) => {
     const clean = patch && typeof patch === 'object' ? { ...patch } : {};
+    // 存储位置只经 app:browse-data-path 走 switchDataPath 生效，那里会一起搬日志与 AI 会话；
+    // 从这条通道写 dataPath 会让指针文件、日志目录和数据文件三者分家，一律拒收。
+    delete clean.dataPath;
     // AI 配置由主进程收敛类型与取值范围，渲染端递来的对象不直接落盘
     if ('ai' in clean) clean.ai = normalizeAi(clean.ai);
     if ('recentLimit' in clean) {
@@ -762,17 +776,34 @@ function registerIpc() {
       );
     }
     if ('logTotalMb' in clean) clean.logTotalMb = clampedLogTotalMb(clean.logTotalMb);
-    // 存储位置变更走统一入口，附带数据（AI 会话、日志）才能一起搬
-    const desiredPath = clean.dataPath ? String(clean.dataPath) : '';
-    if (desiredPath) delete clean.dataPath;
-    if (desiredPath) await switchDataPath(desiredPath);
+    if ('zoom' in clean) clean.zoom = clampedZoom(clean.zoom);
+    if ('theme' in clean && !SETTING_THEMES.includes(clean.theme)) clean.theme = 'system';
+    if ('lang' in clean) clean.lang = clean.lang === 'en' ? 'en' : 'zh';
+    if ('closeAction' in clean && !SETTING_CLOSE_ACTIONS.includes(clean.closeAction)) clean.closeAction = 'ask';
+    if ('homeWelcome' in clean) clean.homeWelcome = !!clean.homeWelcome;
+    if ('autoUpdateCheck' in clean) clean.autoUpdateCheck = !!clean.autoUpdateCheck;
+    if ('skippedUpdateVersion' in clean) clean.skippedUpdateVersion = String(clean.skippedUpdateVersion || '').trim().slice(0, 60);
     const s = unwrap(store.updateSettings(clean));
-    if ('logTotalMb' in clean) {
-      logStore.setTotalBytes(clean.logTotalMb * MB);
-      logStore.info('settings', 'log total changed', { logTotalMb: clean.logTotalMb, logDir: logStore.dir });
-    }
+    if ('logTotalMb' in clean) logStore.setTotalBytes(clean.logTotalMb * MB);
     applyZoom();
     rebuildTrayMenu();
+    // AI 只记汇总，服务清单里有 baseUrl 与凭据，不进日志
+    const ai = clean.ai;
+    logger.info('settings', 'settings updated', {
+      keys: Object.keys(clean).sort().join(','),
+      theme: clean.theme,
+      lang: clean.lang,
+      zoom: clean.zoom,
+      font: clean.font,
+      closeAction: clean.closeAction,
+      recentLimit: clean.recentLimit,
+      logTotalMb: clean.logTotalMb,
+      logDir: logStore.dir,
+      aiEnabled: ai ? ai.enabled : undefined,
+      aiPermission: ai ? ai.permission : undefined,
+      aiServices: ai ? ai.services.length : undefined,
+      aiModels: ai ? ai.services.reduce((n, sv) => n + sv.models.length, 0) : undefined,
+    });
     return s;
   });
   /** Get the current main window HWND so the native auth dialog can be parented to it */
