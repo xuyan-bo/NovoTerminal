@@ -74,7 +74,7 @@
         @dragover.prevent.stop="$emit('row-over', $event, side, f)"
         @dragleave="$emit('drag-leave', $event)"
       >
-        <span class="c-name"><span class="f-ico">{{ f.isDir ? '\uD83D\uDCC1' : '\uD83D\uDCC4' }}</span>{{ f.name }}</span>
+        <span class="c-name"><img class="f-ico" :src="f.isDir ? 'icons/folder.svg' : 'icons/file.svg'" alt="" />{{ f.name }}</span>
         <span class="c-size">{{ f.sizeText }}</span>
         <span class="c-time">{{ f.mtime }}</span>
       </div>
@@ -330,7 +330,11 @@ export default {
   white-space: nowrap;
 }
 .f-ico {
+  width: 13px;
+  height: 13px;
   margin-right: 4px;
+  vertical-align: -2px;
+  object-fit: contain;
 }
 .marquee {
   position: fixed;
