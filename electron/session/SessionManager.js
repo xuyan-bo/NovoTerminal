@@ -158,7 +158,6 @@ class SessionManager {
       if (hit && protocol === 'rdp') {
         this.store.pushRecent(hit.asset, {
           id: (req.method && req.method.id) || 'rdp',
-          proto: 'RDP',
           port: (req.method && req.method.port) || 3389,
         });
         this.send('store:changed', { reason: 'recent' });

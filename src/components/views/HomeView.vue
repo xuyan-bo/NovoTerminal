@@ -34,40 +34,35 @@
 
       <!-- right: recent connections (taller) -->
       <div class="dash-card dash-recent">
-        <h3>{{ $t('home.recent') }} <span class="tag">{{ recent.length }}</span></h3>
-        <div v-if="recent.length" class="recent-wrap">
+        <h3>{{ $t('home.recent') }} <span class="tag">{{ recentRows.length }}</span></h3>
+        <div v-if="recentRows.length" class="recent-wrap">
           <el-scrollbar class="recent-scroll-wrap">
-          <div class="recent-list">
-          <div
-            v-for="r in recent"
-            :key="r.id + '-' + (r.method || '')"
-            class="recent-item"
-          >
-            <span class="os-icon" :class="'os-' + r.os" v-html="osSvg(r.os)"></span>
-            <div style="flex:1;min-width:0">
-              <div class="ri-name">{{ r.name }}</div>
-              <div class="ri-sub">{{ r.host }}:{{ r.port }} · {{ protoLabel(r) }}</div>
+            <div class="recent-list">
+              <div v-for="row in recentRows" :key="row.key" class="recent-item">
+                <span class="os-icon" :class="'os-' + row.os" v-html="osSvg(row.os)"></span>
+                <div class="ri-main">
+                  <div class="ri-name">{{ row.name }}</div>
+                  <div class="ri-sub">{{ row.host }}:{{ row.port }} · {{ row.protoText }}</div>
+                </div>
+                <span class="ri-time" :title="row.timeFull">{{ row.timeText }}</span>
+                <el-tooltip :content="$t('detail.connect')" placement="top">
+                  <button
+                    type="button"
+                    class="recent-connect-btn"
+                    :disabled="busyKey === row.key || !row.method"
+                    @click="connectRecent(row)"
+                  >
+                    <svg-icon name="link" />
+                  </button>
+                </el-tooltip>
+                <el-tooltip :content="$t('home.removeRecent')" placement="top">
+                  <button type="button" class="recent-delete-btn" @click="removeRecentRecord(row)">
+                    <i class="el-icon-delete"></i>
+                  </button>
+                </el-tooltip>
+              </div>
             </div>
-            <span class="ri-time">{{ formatTime(r.time) }}</span>
-            <el-tooltip :content="$t('detail.connect')" placement="top">
-              <button
-                type="button"
-                class="recent-connect-btn"
-                @click.stop="connectRecent(r)"
-              >
-                <svg-icon name="link" />
-              </button>
-            </el-tooltip>
-            <el-tooltip :content="$t('home.removeRecent')" placement="top">
-              <button
-                type="button"
-                class="recent-delete-btn"
-                @click.stop="removeRecentRecord(r)"
-              ><i class="el-icon-delete"></i></button>
-            </el-tooltip>
-          </div>
-          </div>
-          <div class="recent-foot">{{ $t('home.recentLimit', { n: recentLimit }) }}</div>
+            <div class="recent-foot">{{ $t('home.recentLimit', { n: recentLimit }) }}</div>
           </el-scrollbar>
         </div>
         <div v-else class="empty">{{ $t('home.recentEmpty') }}</div>
@@ -77,13 +72,25 @@
 </template>
 
 <script>
-import * as echarts from 'echarts';
-import { store, findAsset, connectAsset, connectionErrorMessage, removeRecent } from '../../store';
+import * as echarts from 'echarts/core';
+import { PieChart } from 'echarts/charts';
+import { LegendComponent, TooltipComponent } from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
+import { store, findAsset, enabledMethods, connectAsset, connectionErrorMessage, removeRecent } from '../../store';
+import { protocolLabel } from '../../protocols';
 import { OS_SVG, RECENT_LIMIT_DEFAULT, RECENT_LIMIT_MAX } from '../../constants';
 import { t, formatTime } from '../../i18n';
 
+echarts.use([PieChart, LegendComponent, TooltipComponent, CanvasRenderer]);
+
 export default {
   name: 'HomeView',
+  data() {
+    return {
+      nowMs: Date.now(),
+      busyKey: null,
+    };
+  },
   computed: {
     groups() {
       return store.snapshot.groups || [];
@@ -114,26 +121,38 @@ export default {
     localeTick() {
       return store.localeTick;
     },
-    isLight() {
-      return (
-        typeof document !== 'undefined' &&
-        (document.documentElement.classList.contains('theme-light') ||
-          (document.getElementById('app') &&
-            document.getElementById('app').classList.contains('theme-light')))
-      );
+    themeTick() {
+      return store.themeTick;
+    },
+    /** 名称、主机、端口与系统都取资产现值：连接当时存下的快照会随改名、改端口一起过期 */
+    recentRows() {
+      const index = new Map();
+      this.groups.forEach((g) => g.nodes.forEach((n) => index.set(n.id, n)));
+      return this.recent.map((r) => {
+        const asset = index.get(r.id);
+        const method = asset ? enabledMethods(asset).find((m) => m.id === r.method) : null;
+        return {
+          key: r.id + '-' + (r.method || ''),
+          id: r.id,
+          methodId: r.method,
+          method,
+          name: (asset && asset.name) || r.name,
+          os: (asset && asset.os) || r.os,
+          host: (asset && asset.host) || r.host,
+          port: (method && method.port) || r.port,
+          protoText: protocolLabel(r.method),
+          timeText: formatTime(r.time, this.nowMs),
+          timeFull: r.time ? new Date(r.time).toLocaleString() : '',
+        };
+      });
+    },
+    pieSignature() {
+      const c = this.osCount;
+      return [this.assetCount, c.win, c.mac, c.linux, this.localeTick, this.themeTick].join('|');
     },
   },
   watch: {
-    osCount: {
-      deep: true,
-      handler() {
-        this.renderPie();
-      },
-    },
-    assetCount() {
-      this.renderPie();
-    },
-    localeTick() {
+    pieSignature() {
       this.renderPie();
     },
   },
@@ -142,8 +161,13 @@ export default {
       this.initPie();
     });
     window.addEventListener('resize', this.resizePie);
+    // 相对时间只到分钟粒度，不自己走就会一直停在渲染那一刻
+    this._timeTimer = setInterval(() => {
+      this.nowMs = Date.now();
+    }, 60000);
   },
   beforeDestroy() {
+    clearInterval(this._timeTimer);
     window.removeEventListener('resize', this.resizePie);
     if (this._pieRO) {
       try {
@@ -159,16 +183,20 @@ export default {
     }
   },
   methods: {
-    formatTime,
     osSvg(os) {
       return OS_SVG[os] || '';
     },
-    protoLabel(r) {
-      const p = r.proto || r.method || '';
-      return String(p).toUpperCase();
+    /** 主题类写在 DOM 上，必须是每次现读的方法：computed 没有响应依赖，会被永久缓存 */
+    isLight() {
+      return (
+        typeof document !== 'undefined' &&
+        (document.documentElement.classList.contains('theme-light') ||
+          (document.getElementById('app') &&
+            document.getElementById('app').classList.contains('theme-light')))
+      );
     },
     themeTokens() {
-      const light = this.isLight;
+      const light = this.isLight();
       return {
         text: light ? '#303133' : '#e6edf3',
         text2: light ? '#606266' : '#8b9bb0',
@@ -224,10 +252,11 @@ export default {
         };
         const assetsLabel = t('home.assets');
         const total = this.assetCount;
+        // 0 值传 NaN 而不是删掉数据项：删项会让图例点掉色并报 series not exists，NaN 只跳过扇区
         const raw = [
-          { name: names.win, value: this.osCount.win, itemStyle: { color: th.win } },
-          { name: names.mac, value: this.osCount.mac, itemStyle: { color: th.mac } },
-          { name: names.linux, value: this.osCount.linux, itemStyle: { color: th.linux } },
+          { name: names.win, value: this.osCount.win || NaN, itemStyle: { color: th.win } },
+          { name: names.mac, value: this.osCount.mac || NaN, itemStyle: { color: th.mac } },
+          { name: names.linux, value: this.osCount.linux || NaN, itemStyle: { color: th.linux } },
         ];
         const pieData = total
           ? raw
@@ -260,7 +289,6 @@ export default {
               textStyle: { color: th.text2, fontSize: 10 },
               data: [names.win, names.mac, names.linux],
             },
-            title: { show: false },
             series: [
               {
                 type: 'pie',
@@ -306,27 +334,22 @@ export default {
       const size = this.fitPieSquare();
       if (this._pie) this._pie.resize({ width: size, height: size });
     },
-    /** Click the connect icon on a recent item → connect directly by its recorded method */
-    async connectRecent(r) {
-      const hit = findAsset(r.id);
-      if (!hit) return;
-      const method = String(r.method || 'rdp').toLowerCase();
-      // 从资产读取真实方法配置，确保 RDP advanced.engine（ironrdp/external）随最近入口一起生效
-      const conf = (hit.asset.methods && hit.asset.methods[method]) || {};
+    /** Click the connect icon on a recent item → connect through the asset's current method config */
+    async connectRecent(row) {
+      const hit = findAsset(row.id);
+      if (!hit || !row.method) return;
+      this.busyKey = row.key;
       try {
-        await connectAsset(hit.asset, {
-          id: method,
-          name: this.protoLabel(r),
-          port: conf.port || r.port,
-          advanced: conf.advanced || null,
-        });
+        await connectAsset(hit.asset, row.method);
       } catch (e) {
         this.$message.error(connectionErrorMessage(e));
+      } finally {
+        this.busyKey = null;
       }
     },
-    async removeRecentRecord(r) {
+    async removeRecentRecord(row) {
       try {
-        await removeRecent(r.id, r.method);
+        await removeRecent(row.id, row.methodId);
       } catch (e) {
         this.$message.error(e.message || String(e));
       }

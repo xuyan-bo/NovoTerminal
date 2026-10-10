@@ -178,6 +178,10 @@ class AssetStore {
       if (g.pid && !ids.has(g.pid)) g.pid = '';
     });
     this.breakParentCycles();
+    // 记录只在资产存在时才有意义：还原备份或手改数据后，指向已消失资产的记录一并收敛掉
+    const alive = new Set();
+    this.data.groups.forEach((g) => g.nodes.forEach((n) => alive.add(n.id)));
+    this.data.recent = (this.data.recent || []).filter((r) => alive.has(r.id));
   }
 
   /** pid 链成环（手改数据或导入异常）时断掉成环的那一条 */
@@ -510,6 +514,7 @@ class AssetStore {
     const hit = this.findAsset(aid);
     if (!hit) throw new Error('asset not found');
     hit.group.nodes = hit.group.nodes.filter((n) => n.id !== aid);
+    this.data.recent = (this.data.recent || []).filter((r) => r.id !== aid);
     this.persist();
     this.logEvent('info', 'asset deleted', { assetId: aid, gid: hit.group.id, name: hit.asset.name });
     return this.snapshot();
@@ -524,10 +529,8 @@ class AssetStore {
 
   pushRecent(asset, method) {
     if (!asset || !asset.id) return this.snapshot();
-    const mid = (method && (method.id || method.protocol)) || 'rdp';
-    const proto =
-      (method && (method.proto || method.protocol)) ||
-      String(mid).toUpperCase();
+    const mid = method && (method.id || method.protocol);
+    if (!mid) return this.snapshot();
     const defaultPort = mid === 'ssh' || mid === 'sftp' ? 22 : mid === 'vnc' ? 5900 : 3389;
     const item = {
       id: asset.id,
@@ -535,7 +538,6 @@ class AssetStore {
       os: asset.os,
       host: asset.host,
       method: mid,
-      proto: String(proto).toUpperCase(),
       port: (method && method.port) || defaultPort,
       time: Date.now(),
     };

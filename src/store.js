@@ -29,6 +29,8 @@ export const store = Vue.observable({
   },
   methodAdvancedResult: null,
   localeTick: 0,
+  /** 跟随系统主题被 OS 翻转时由 App.vue 递增；只改 DOM 类不会惊动任何渲染依赖 */
+  themeTick: 0,
   tabRefreshKeys: {},
 });
 

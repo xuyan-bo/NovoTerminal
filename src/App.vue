@@ -207,7 +207,10 @@ export default {
       const mq = window.matchMedia('(prefers-color-scheme: light)');
       const onChange = () => {
         const th = (store.snapshot.settings || {}).theme;
-        if (th === 'system') applySettings({ ...store.snapshot.settings, theme: 'system' });
+        if (th !== 'system') return;
+        applySettings({ ...store.snapshot.settings, theme: 'system' });
+        // 主题类写在 DOM 上，跟随系统换肤不经过 store 刷新，界面靠这个 tick 重取颜色
+        store.themeTick++;
       };
       if (mq.addEventListener) mq.addEventListener('change', onChange);
       this._mq = mq;

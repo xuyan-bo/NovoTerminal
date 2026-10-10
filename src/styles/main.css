@@ -866,7 +866,6 @@ button {
   flex: 0 0 auto;
   display: grid;
   grid-template-columns: 1fr 1.4fr;
-  grid-template-rows: auto auto;
   gap: 14px;
   align-items: start;
 }
@@ -896,10 +895,6 @@ button {
   grid-row: 1;
   min-height: 240px;
   height: calc(50vh - 17.5px);
-}
-
-.dash-card.dash-top {
-  /* legacy alias */
 }
 
 .dash-card h3 {
@@ -1039,6 +1034,11 @@ button {
   border: 1px solid var(--border);
 }
 
+.recent-item .ri-main {
+  flex: 1;
+  min-width: 0;
+}
+
 .recent-item:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
@@ -1061,10 +1061,17 @@ button {
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
-.recent-connect-btn:hover {
+.recent-connect-btn:not(:disabled):hover {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+/* 资产已删或该访问方式停用时不可点：只压暗，不隐藏，行还在原位 */
+.recent-connect-btn:disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .recent-delete-btn:hover {
@@ -1081,18 +1088,25 @@ button {
 .recent-item .ri-name {
   font-size: 12.5px;
   font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .recent-item .ri-sub {
   font-size: 10.5px;
   color: var(--text-3);
   font-family: Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .recent-item .ri-time {
   margin-left: auto;
   font-size: 10px;
   color: var(--text-3);
+  flex-shrink: 0;
 }
 
 .empty {

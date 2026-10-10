@@ -995,7 +995,7 @@ function registerIpc() {
       sshSessions.disconnect(result.sessionId);
       throw Object.assign(new Error('SSH connection canceled'), { code: 'SSH_CANCELED' });
     }
-    store.pushRecent(hit.asset, { id: 'ssh', proto: 'SSH', port: method.port || 22 });
+    store.pushRecent(hit.asset, { id: 'ssh', port: method.port || 22 });
     send('store:changed', { reason: 'recent' });
     return result;
   }, true);
@@ -1176,18 +1176,18 @@ function registerIpc() {
     if (!hit) throw new Error('asset not found');
     const method = hit.asset.methods && hit.asset.methods[req.methodId];
     if (!method || !method.enabled) throw new Error('method not enabled');
-    store.pushRecent(hit.asset, {
-      id: 'vnc',
-      proto: 'VNC',
-      port: method.port || 5900,
-    });
-    send('store:changed', { reason: 'recent' });
     const result = await vncSessions.connect({
       assetId: hit.asset.id,
       asset: { host: hit.asset.host, user: hit.asset.user, pass: hit.asset.pass },
       method: { id: req.methodId, port: method.port || 5900, advanced: method.advanced },
       advanced: method.advanced,
     });
+    // 与 ssh:connect 一致：失败的握手不留「最近连接」
+    store.pushRecent(hit.asset, {
+      id: 'vnc',
+      port: method.port || 5900,
+    });
+    send('store:changed', { reason: 'recent' });
     return result;
   });
   handle('vnc:disconnect', (sid) => vncSessions.disconnect(sid));
@@ -1199,18 +1199,17 @@ function registerIpc() {
     if (!hit) throw new Error('asset not found');
     const method = hit.asset.methods && hit.asset.methods[req.methodId];
     if (!method || !method.enabled) throw new Error('method not enabled');
-    store.pushRecent(hit.asset, {
-      id: 'rdp',
-      proto: 'RDP',
-      port: method.port || 3389,
-    });
-    send('store:changed', { reason: 'recent' });
     const result = await rdpSessions.connect({
       assetId: hit.asset.id,
       asset: { host: hit.asset.host, user: hit.asset.user, pass: hit.asset.pass },
       method: { id: req.methodId, port: method.port || 3389, advanced: method.advanced },
       advanced: method.advanced,
     });
+    store.pushRecent(hit.asset, {
+      id: 'rdp',
+      port: method.port || 3389,
+    });
+    send('store:changed', { reason: 'recent' });
     return result;
   });
   handle('rdp:disconnect', (sid) => rdpSessions.disconnect(sid));
@@ -1466,7 +1465,7 @@ function registerIpc() {
     const hit = store.findAsset(assetId);
     if (!hit) throw new Error('asset not found');
     const meta = sftpManager.sessionMeta(hit.asset);
-    store.pushRecent(hit.asset, { id: 'sftp', proto: 'SFTP', port: meta.port });
+    store.pushRecent(hit.asset, { id: 'sftp', port: meta.port });
     send('store:changed', { reason: 'recent' });
     // 目录探测与建窗/加载并行；探测本身出任何问题都不能挡住面板打开
     const initialPath = resolveSftpInitialPath(sender, req, assetId).catch(() => null);
