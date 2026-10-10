@@ -240,8 +240,9 @@ export async function deleteGroup(gid) {
 }
 
 export async function createAsset(gid, payload) {
-  unwrap(await api.createAsset(gid, payload));
+  const res = unwrap(await api.createAsset(gid, payload));
   await refresh();
+  return res.asset;
 }
 
 export async function updateAsset(aid, payload) {

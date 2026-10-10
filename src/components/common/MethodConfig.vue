@@ -23,15 +23,15 @@
       </div>
       <div class="port-cell">
         <span class="hint port-label">{{ $t('asset.port') }}</span>
-        <el-input
+        <el-input-number
           :value="draftRow(m).port"
-          size="mini"
           class="port-input"
-          :disabled="!draftRow(m).enabled"
-          type="number"
+          size="mini"
           :min="1"
           :max="65535"
-          @input="onPortInput(m, $event)"
+          controls-position="right"
+          :disabled="!draftRow(m).enabled"
+          @change="$emit('port-change', m, $event)"
         />
       </div>
       <el-radio
@@ -90,11 +90,6 @@ export default {
       const row = this.draft[id];
       return !!(row && row.advanced && Object.keys(row.advanced).length);
     },
-    onPortInput(method, value) {
-      // Match Vue's v-model.number conversion, including empty input.
-      const port = parseFloat(value);
-      this.$emit('port-change', method, isNaN(port) ? value : port);
-    },
   },
 };
 </script>
@@ -126,7 +121,8 @@ export default {
   white-space: nowrap;
 }
 .port-input {
-  width: 80px;
+  /* el-input-number--mini 主题宽 130px，右侧箭头要占 50px 内边距，低于 101px 时 5 位端口会被裁掉 */
+  width: 110px;
   flex-shrink: 0;
 }
 /* primary radio + gear/test icons — keep tight */

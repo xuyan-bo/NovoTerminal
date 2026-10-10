@@ -2,10 +2,11 @@ const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const { BaseAdapter } = require('./BaseAdapter');
 
+// 同 mstsc：裸 IPv6 要补方括号，端口只来自访问方式配置
 function targetSpec(host, port) {
   const p = Number(port) || 3389;
-  if (/^(?:\[[^\]]+\]|[^:]+):\d+$/.test(host)) return host;
-  return `${host}:${p}`;
+  const h = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  return `${h}:${p}`;
 }
 
 /**

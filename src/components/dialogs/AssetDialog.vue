@@ -108,7 +108,8 @@ import {
   store,
   api,
   unwrap,
-  refresh,
+  createAsset,
+  updateAsset,
   findAsset,
   openAssetDetail,
   openMethodAdvanced,
@@ -118,8 +119,40 @@ import { cascaderOptions, folderIdPath } from '../../lib/assetTree';
 import { t } from '../../i18n';
 import MethodConfig from '../common/MethodConfig.vue';
 
-const HOST_RE =
-  /^(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*|\d{1,3}(\.\d{1,3}){3})(:\d{1,5})?$/;
+// 主机字段只收主机名、IPv4 与 IPv6，端口一律来自各访问方式的端口框
+const HOSTNAME_RE =
+  /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+const HEX_GROUP_RE = /^[0-9a-fA-F]{1,4}$/;
+
+// `[fe80::1]` 只是命令行写法，持久化与 socket 都用裸地址，外部 RDP 适配器再补回方括号
+function normalizeHost(value) {
+  const v = String(value || '').trim();
+  return v.startsWith('[') && v.endsWith(']') ? v.slice(1, -1) : v;
+}
+
+/** IPv6：完整 8 段，或用 `::` 省略一段（最多一处，被省略的段可以位于任意位置） */
+function isIpv6(host) {
+  const sides = host.split('::');
+  if (sides.length > 2) return false;
+  const groups = (side) => (side === '' ? [] : side.split(':'));
+  if (sides.length === 1) {
+    const all = groups(host);
+    return all.length === 8 && all.every((g) => HEX_GROUP_RE.test(g));
+  }
+  const all = groups(sides[0]).concat(groups(sides[1]));
+  return all.length <= 7 && all.every((g) => HEX_GROUP_RE.test(g));
+}
+
+function isHost(value) {
+  const v = normalizeHost(value);
+  return !!v && (HOSTNAME_RE.test(v) || isIpv6(v));
+}
+
+/** 端口收进 1–65535 的整数；越界、空值或脏数据一律回落到协议默认端口 */
+function normalizePort(value, fallback) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : fallback;
+}
 
 export default {
   name: 'AssetDialog',
@@ -195,7 +228,7 @@ export default {
             validator(rule, value, cb) {
               const v = String(value || '').trim();
               if (!v) cb(new Error(t('msg.hostRequired')));
-              else if (!HOST_RE.test(v)) cb(new Error(t('msg.hostInvalid')));
+              else if (!isHost(v)) cb(new Error(t('msg.hostInvalid')));
               else cb();
             },
             trigger: 'blur',
@@ -330,13 +363,16 @@ export default {
       return d;
     },
     setType(tp) {
+      // 点已选中的卡片不能清空端口和高级设置，只有真正换系统才重建默认配置
+      if (this.form.os === tp) return;
       this.form.os = tp;
       this.draft = this.defaultDraft(tp);
       this.$nextTick(() => this.validateMethods());
     },
     onPortChange(m, port) {
       const row = this.draftRow(m.id);
-      if (row) this.$set(row, 'port', port);
+      // 清空数字框时 Element 给出 undefined，回落到协议默认端口
+      if (row) this.$set(row, 'port', normalizePort(port, m.defaultPort));
     },
     onToggle(m, enabled) {
       const conf = this.draftRow(m.id);
@@ -423,11 +459,9 @@ export default {
       this.passVisible = false;
       const editId = store.assetDialog.editId;
       const cloneId = store.assetDialog.cloneId;
-      const sourceId = editId || cloneId;
       const fallbackGid = store.assetDialog.gid || '';
-      if (sourceId) {
-        const hit = findAsset(sourceId);
-        if (!hit) return;
+      const hit = editId || cloneId ? findAsset(editId || cloneId) : null;
+      if (hit) {
         const a = hit.asset;
         this.form = {
           name: cloneId && !editId ? `${a.name} ${t('asset.cloneSuffix')}` : a.name,
@@ -445,6 +479,7 @@ export default {
         );
         this.primaryId = pri || Object.keys(this.draft)[0] || '';
       } else {
+        // 源资产已不在快照里时按新增表单打开，不留下一次编辑的残留内容
         this.form = {
           name: '',
           os: 'win',
@@ -457,7 +492,10 @@ export default {
         };
         this.draft = this.defaultDraft('win');
       }
-      (CATALOG[this.form.os] || []).forEach((m) => this.draftRow(m.id));
+      (CATALOG[this.form.os] || []).forEach((m) => {
+        const row = this.draftRow(m.id);
+        if (row) this.$set(row, 'port', normalizePort(row.port, m.defaultPort));
+      });
       this.$nextTick(() => {
         if (this.$refs.form) this.$refs.form.clearValidate();
       });
@@ -490,7 +528,7 @@ export default {
         const r = unwrap(
           await api.sessionTest({
             asset: {
-              host: this.form.host,
+              host: normalizeHost(this.form.host),
               user: this.form.user,
               pass: this.form.pass,
             },
@@ -555,7 +593,7 @@ export default {
           const payload = {
             name: this.form.name.trim(),
             os: this.form.os,
-            host: this.form.host.trim(),
+            host: normalizeHost(this.form.host),
             user: this.form.user.trim(),
             pass: this.form.pass,
             note: this.form.note,
@@ -563,22 +601,10 @@ export default {
             gid: this.form.gid,
           };
           if (this.isEdit) {
-            unwrap(
-              await api.updateAsset(store.assetDialog.editId, payload)
-            );
-            await refresh();
+            await updateAsset(store.assetDialog.editId, payload);
             this.$message.success(t('msg.assetUpdated'));
           } else {
-            unwrap(await api.createAsset(payload.gid, payload));
-            await refresh();
-            const snap = store.snapshot;
-            let created = null;
-            snap.groups.forEach((g) =>
-              g.nodes.forEach((n) => {
-                if (n.name === payload.name && n.host === payload.host)
-                  created = n;
-              })
-            );
+            const created = await createAsset(payload.gid, payload);
             if (created) openAssetDetail(created);
             this.$message.success(t('msg.assetCreated'));
           }

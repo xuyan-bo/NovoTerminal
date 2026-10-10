@@ -479,6 +479,12 @@ class AssetStore {
       this.logEvent('info', 'asset moved', { assetId: aid, fromGid, toGid: ng.id });
     }
     this.persist();
+    this.logEvent('info', 'asset updated', {
+      assetId: aid,
+      gid: group.id,
+      name: asset.name,
+      host: asset.host,
+    });
     return this.snapshot();
   }
 

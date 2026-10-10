@@ -4,8 +4,10 @@ const { spawn, execFile } = require('child_process');
 const { BaseAdapter } = require('./BaseAdapter');
 const { tcpProbe } = require('../testers');
 
+// 资产里存的是裸 IPv6，mstsc 的 /v 与 cmdkey 的 TERMSRV 要加方括号才能和端口区分开
 function mstscTarget(host, port) {
-  return /^(?:\[[^\]]+\]|[^:]+):\d+$/.test(host) ? host : `${host}:${port || 3389}`;
+  const h = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  return `${h}:${port || 3389}`;
 }
 
 class RdpWindowsMstscAdapter extends BaseAdapter {
