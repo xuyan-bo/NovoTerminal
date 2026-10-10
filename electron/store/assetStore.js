@@ -223,6 +223,22 @@ class AssetStore {
     return JSON.parse(JSON.stringify(this.data));
   }
 
+  /** 展开/折叠这类高频小改动合并落盘，避免每次点击都同步重写整个数据文件 */
+  persistSoon() {
+    if (this._persistTimer) clearTimeout(this._persistTimer);
+    this._persistTimer = setTimeout(() => {
+      this._persistTimer = null;
+      this.persist();
+    }, 300);
+  }
+
+  flushPersist() {
+    if (!this._persistTimer) return;
+    clearTimeout(this._persistTimer);
+    this._persistTimer = null;
+    this.persist();
+  }
+
   /** 高级设置里的数据存储目录：附件类数据（AI 会话记录）都以此为根。 */
   dataDir() {
     return path.dirname(this.file);
@@ -334,7 +350,9 @@ class AssetStore {
     if (input.name) g.name = input.name;
     if (input.color) g.color = input.color;
     if (typeof input.open === 'boolean') g.open = input.open;
-    this.persist();
+    const openOnly = typeof input.open === 'boolean' && Object.keys(input).length === 1;
+    if (openOnly) this.persistSoon();
+    else this.persist();
     return this.snapshot();
   }
 

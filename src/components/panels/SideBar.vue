@@ -102,6 +102,7 @@ export default {
   data() {
     return {
       filter: '',
+      appliedFilter: '',
       treeProps: { children: 'children', label: 'name' },
       expandedKeys: [],
       treeRev: 0,
@@ -122,12 +123,12 @@ export default {
       return active ? active.id : '';
     },
     canDrag() {
-      return !this.filter.trim();
+      return !this.appliedFilter.trim();
     },
     treeData() {
       // el-tree 拖放会就地改写它拿到的那份数组，失败时没有刷新，靠 treeRev 强制重建回真实数据
       const _ = this.treeRev;
-      return filterTree(buildAssetTree(this.groups), this.filter);
+      return filterTree(buildAssetTree(this.groups), this.appliedFilter);
     },
   },
   watch: {
@@ -136,12 +137,20 @@ export default {
       this.syncExpansion();
     },
     filter() {
+      clearTimeout(this._filterTimer);
+      this._filterTimer = setTimeout(() => {
+        this._filterTimer = null;
+        this.appliedFilter = this.filter;
+      }, 200);
+    },
+    appliedFilter() {
       this.syncExpansion();
     },
   },
   created() {
     // el-tree 不给拖拽源加类名，只能自己记住那一行并在 dragend 还原
     this._dragEl = null;
+    this._filterTimer = null;
   },
   mounted() {
     this._openSettings = () => {
@@ -151,6 +160,7 @@ export default {
     this.syncExpansion();
   },
   beforeDestroy() {
+    clearTimeout(this._filterTimer);
     this.$root.$off('open-settings', this._openSettings);
   },
   methods: {
@@ -173,7 +183,7 @@ export default {
      */
     syncExpansion() {
       const open = this.groups.filter((g) => g.open !== false).map((g) => 'f:' + g.id);
-      const keys = this.filter.trim() ? Array.from(new Set(open.concat(folderKeys(this.treeData)))) : open;
+      const keys = this.appliedFilter.trim() ? Array.from(new Set(open.concat(folderKeys(this.treeData)))) : open;
       this.expandedKeys = keys;
       this.$nextTick(() => {
         const tree = this.$refs.tree;
@@ -259,14 +269,21 @@ export default {
     persistOpen(gid, open) {
       const g = this.groups.find((x) => x.id === gid);
       if (g) g.open = open;
-      api.updateGroup(gid, { open }).catch(() => {});
+      api.updateGroup(gid, { open }).catch((e) => {
+        if (api.logWrite) {
+          api.logWrite({
+            level: 'warn', source: 'store', message: 'update group open failed',
+            meta: { gid, open, message: e.message || String(e) },
+          }).catch(() => {});
+        }
+      });
     },
     onNodeExpand(data) {
-      if (this.filter.trim()) return;
+      if (this.appliedFilter.trim()) return;
       this.persistOpen(data.gid, true);
     },
     onNodeCollapse(data) {
-      if (this.filter.trim()) return;
+      if (this.appliedFilter.trim()) return;
       this.persistOpen(data.gid, false);
     },
 

@@ -1747,6 +1747,7 @@ app.on('before-quit', (e) => {
   // before-quit fires for both tray-initiated quit AND programmatic quit.
   // Clean up sessions always. Tray cleanup must happen so macOS doesn't leak it.
   resetAuthCache();
+  if (store) store.flushPersist();
   if (vncSessions) vncSessions.destroyAll();
   if (rdpSessions) rdpSessions.destroyAll();
   if (sshSessions) sshSessions.destroyAll();

@@ -34,6 +34,10 @@ export const store = Vue.observable({
 
 export async function refresh() {
   const snap = await api.getSnapshot();
+  // recent 等无关变更也会广播刷新；groups 未变时沿用旧引用，避免侧边栏资产树整棵重建
+  if (snap && JSON.stringify(snap.groups) === JSON.stringify(store.snapshot.groups)) {
+    snap.groups = store.snapshot.groups;
+  }
   store.snapshot = snap;
   if (snap && snap.settings) applySettings(snap.settings);
   store.localeTick++;
