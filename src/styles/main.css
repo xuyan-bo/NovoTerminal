@@ -56,13 +56,14 @@ html.theme-light .el-button--default {
 }
 
 /* append/prepend 内嵌按钮必须保持 Element 的无边框嵌入样式，否则被上面的默认按钮样式盖成浮块 */
-html.theme-light .el-input-group__append button.el-button--default,
-html.theme-light .el-input-group__prepend button.el-button--default {
+.el-input-group__append button.el-button--default,
+.el-input-group__prepend button.el-button--default {
   background: transparent;
   border-color: transparent;
   color: inherit;
 }
-html.theme-light .el-input-group__append button.el-button--default:hover {
+.el-input-group__append button.el-button--default:hover,
+.el-input-group__prepend button.el-button--default:hover {
   color: var(--accent);
 }
 
@@ -218,6 +219,24 @@ button {
   background: var(--bg-panel) !important;
   border-color: var(--border) !important;
   color: var(--text) !important;
+}
+
+/* append/prepend 槽跟随主题：Element 把它写死成浅灰 #F5F7FA，深色主题下会在暗输入框末端留一块亮斑 */
+.el-input-group__append,
+.el-input-group__prepend {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  color: var(--text-2);
+}
+
+/* 进行中的旋转图标（身份验证、保存）：<svg-icon> 把 icons/spinner.svg 遮成 currentColor，这里只负责转 */
+.spin-icon {
+  animation: spin-icon 0.8s linear infinite;
+}
+
+@keyframes spin-icon {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .el-tree {

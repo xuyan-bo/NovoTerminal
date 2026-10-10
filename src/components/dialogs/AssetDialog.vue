@@ -69,8 +69,8 @@
             @click="onTogglePassVisible"
           >
             <svg-icon v-if="authChecking" class="spin-icon" name="spinner" :size="14" />
-            <img v-else-if="!passVisible" :src="'icons/eye-open.svg'" alt="" width="20" height="20" aria-hidden="true">
-            <img v-else :src="'icons/eye-closed.svg'" alt="" width="20" height="20" aria-hidden="true">
+            <svg-icon v-else-if="!passVisible" name="eye-open" :size="20" />
+            <svg-icon v-else name="eye-closed" :size="20" />
           </button>
         </el-input>
       </el-form-item>
@@ -677,21 +677,11 @@ export default {
   color: var(--text-2, #9aa7b8);
   cursor: pointer;
 }
-.pass-reveal-btn img {
-  pointer-events: none;
-}
 .pass-reveal-btn:hover:not(:disabled) {
   color: var(--accent, #409eff);
 }
 .pass-reveal-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-.spin-icon {
-  animation: auth-spin 0.8s linear infinite;
-}
-@keyframes auth-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 </style>
