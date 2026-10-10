@@ -689,7 +689,7 @@ const dict = {
     'detail.kindCount': '{count} 种',
     'settings.themeRequired': '请选择主题',
     'settings.langRequired': '请选择语言',
-    'settings.previewDataPath': '(预览模式，无 Electron）',
+    'settings.previewDataPath': '（预览模式，无 Electron）',
     'clipboard.copied': '已复制',
     'clipboard.copyFail': '复制失败',
     'clipboard.empty': '剪贴板为空',

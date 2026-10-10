@@ -104,6 +104,7 @@
               :min="1"
               :max="RECENT_LIMIT_MAX"
               :step="1"
+              controls-position="right"
             />
           </el-form-item>
           <el-form-item>
@@ -119,9 +120,10 @@
               :min="LOG_TOTAL_MIN_MB"
               :max="LOG_TOTAL_MAX_MB"
               :step="5"
+              controls-position="right"
             />
           </el-form-item>
-          <el-form-item prop="dataPath">
+          <el-form-item>
             <template slot="label">
               {{ $t('settings.dataPath') }}
               <el-tooltip :content="$t('settings.dataPathTip')" placement="top">
@@ -172,21 +174,21 @@
               {{ $t('settings.ai.temperature') }}
               <el-tooltip :content="$t('settings.ai.temperatureTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
             </template>
-            <el-input-number v-model="ai.temperature" size="mini" :min="AI_LIMITS.temperature[0]" :max="AI_LIMITS.temperature[1]" :step="0.1" :precision="1" />
+            <el-input-number v-model="ai.temperature" size="mini" :min="AI_LIMITS.temperature[0]" :max="AI_LIMITS.temperature[1]" :step="0.1" :precision="1" controls-position="right" />
           </el-form-item>
           <el-form-item>
             <template slot="label">
               {{ $t('settings.ai.timeout') }}
               <el-tooltip :content="$t('settings.ai.timeoutTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
             </template>
-            <el-input-number v-model="ai.commandTimeoutSec" size="mini" :min="AI_LIMITS.commandTimeoutSec[0]" :max="AI_LIMITS.commandTimeoutSec[1]" :step="10" />
+            <el-input-number v-model="ai.commandTimeoutSec" size="mini" :min="AI_LIMITS.commandTimeoutSec[0]" :max="AI_LIMITS.commandTimeoutSec[1]" :step="10" controls-position="right" />
           </el-form-item>
           <el-form-item>
             <template slot="label">
               {{ $t('settings.ai.turns') }}
               <el-tooltip :content="$t('settings.ai.turnsTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
             </template>
-            <el-input-number v-model="ai.maxTurns" size="mini" :min="AI_LIMITS.maxTurns[0]" :max="AI_LIMITS.maxTurns[1]" />
+            <el-input-number v-model="ai.maxTurns" size="mini" :min="AI_LIMITS.maxTurns[0]" :max="AI_LIMITS.maxTurns[1]" controls-position="right" />
           </el-form-item>
 
           <el-form-item>
@@ -195,7 +197,7 @@
               <el-tooltip :content="$t('settings.ai.servicesTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
             </template>
             <div class="svc-list">
-              <div v-for="(svc, i) in ai.services" :key="svc.id" class="svc-card">
+              <div v-for="(svc, i) in ai.services" :key="svc.id" class="svc-card" :class="{ 'is-bad': svc._bad }">
                 <div class="svc-top">
                   <el-input v-model="svc.name" size="mini" class="svc-name" maxlength="60" :placeholder="$t('settings.ai.serviceName')" />
                   <el-tooltip v-if="svc.test" :content="svc.test.text" placement="top">
@@ -219,7 +221,7 @@
                 <div class="svc-grid">
                   <label class="svc-field">
                     <span>{{ $t('settings.ai.baseUrl') }}</span>
-                    <el-input v-model="svc.baseUrl" size="mini" class="mono" maxlength="300" placeholder="https://api.example.com/v1" />
+                    <el-input v-model="svc.baseUrl" size="mini" class="mono" maxlength="300" placeholder="https://api.example.com/v1" @input="svc._bad = false" />
                     <span v-if="isInsecureUrl(svc.baseUrl)" class="svc-warn">{{ $t('settings.ai.baseUrlInsecure') }}</span>
                   </label>
                   <label class="svc-field">
@@ -234,9 +236,9 @@
                         :title="svc._keyChecking ? $t('auth.verifying') : (svc._keyVisible ? $t('auth.hidePass') : $t('auth.revealPass'))"
                         @click="onToggleKeyVisible(svc)"
                       >
-                        <svg v-if="svc._keyChecking" class="spin-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="28 28"/></svg>
-                        <img v-else-if="!svc._keyVisible" :src="'icons/eye-open.svg'" alt="" width="18" height="18" aria-hidden="true">
-                        <img v-else :src="'icons/eye-closed.svg'" alt="" width="18" height="18" aria-hidden="true">
+                        <svg-icon v-if="svc._keyChecking" class="spin-icon" name="spinner" :size="14" />
+                        <svg-icon v-else-if="!svc._keyVisible" name="eye-open" :size="18" />
+                        <svg-icon v-else name="eye-closed" :size="18" />
                       </button>
                     </el-input>
                   </label>
@@ -603,10 +605,6 @@ export default {
       appVersion: import.meta.env.VITE_APP_VERSION || '0.1.0',
       newSvcIds: new Set(),
       permissions: AI_PERMISSIONS,
-      AI_LIMITS,
-      RECENT_LIMIT_MAX,
-      LOG_TOTAL_MIN_MB,
-      LOG_TOTAL_MAX_MB,
       draft: {},
       manual: {},
       editing: {},
@@ -688,6 +686,9 @@ export default {
     backupMode() {
       return store.backupDialog;
     },
+    persistedSettings() {
+      return store.snapshot.settings;
+    },
   },
   watch: {
     visible(v) {
@@ -699,6 +700,17 @@ export default {
     backupMode(v) {
       if (!v && this.visible) this.load();
     },
+    /** 任何 store:changed 都会 refresh() 并按已落盘值重贴外观，弹窗开着时未保存的预览不能被它打回。 */
+    persistedSettings() {
+      if (this.visible) this.applyAppearance(this.form);
+    },
+  },
+  created() {
+    // 模板里引用的静态界限值：普通实例字段，不需要 Vue 观测
+    this.AI_LIMITS = AI_LIMITS;
+    this.RECENT_LIMIT_MAX = RECENT_LIMIT_MAX;
+    this.LOG_TOTAL_MIN_MB = LOG_TOTAL_MIN_MB;
+    this.LOG_TOTAL_MAX_MB = LOG_TOTAL_MAX_MB;
   },
   methods: {
     // 最近连接数量始终落在 1–100，与主进程 recentCap 的收敛一致
@@ -746,8 +758,18 @@ export default {
       }).then(() => { this.ai.permission = 'full'; }).catch(() => {});
     },
     async load() {
+      // 读失败就保留当前表单：把错误当成「配置为空」会让下一次保存用默认值盖掉真实配置
+      let s;
+      try {
+        s = unwrap(await api.getSettings());
+      } catch (e) {
+        this.$message.error(e.message);
+        return;
+      }
+      if (!s) return;
       this.newSvcIds = new Set();
-      const s = (await api.getSettings()) || store.snapshot.settings || {};
+      this.draft = {};
+      this.ctxTouched = {};
       this.form = {
         theme: s.theme || 'system',
         lang: s.lang || 'zh',
@@ -809,7 +831,7 @@ export default {
       }
       this.browsing = true;
       try {
-        const s = await api.browseDataPath();
+        const s = unwrap(await api.browseDataPath());
         if (s && s.dataPath) this.form.dataPath = s.dataPath;
         await refresh();
       } catch (e) {
@@ -872,6 +894,9 @@ export default {
       if (!gone) return;
       this.$delete(this.draft, gone.id);
       this.$delete(this.manual, gone.id);
+      this.$delete(this.ctxTouched, gone.id);
+      this.newSvcIds.delete(gone.id);
+      for (const m of gone.models) this.$delete(this.editing, gone.id + '#' + m.id);
       if (this.ai.defaultRef && this.ai.defaultRef.serviceId === gone.id) this.ai.defaultRef = null;
       if (this.picker.service && this.picker.service.id === gone.id) this.picker.visible = false;
     },
@@ -1116,10 +1141,12 @@ export default {
     /** 主进程 normalize 会整条丢掉没有 http(s) 前缀的服务，连带它下面的模型一起消失；
      *  不前端拦一下，用户看到的是「保存成功」，重开设置却发现服务没了。 */
     checkAiServices() {
-      const bad = this.ai.services.find((svc) => {
-        const url = String(svc.baseUrl || '').trim();
-        return !isEmptyService(svc) && !/^https?:\/\//i.test(url);
-      });
+      let bad = null;
+      for (const svc of this.ai.services) {
+        const ok = isEmptyService(svc) || /^https?:\/\//i.test(String(svc.baseUrl || '').trim());
+        if (!ok && !bad) bad = svc;
+        this.$set(svc, '_bad', !ok);
+      }
       if (!bad) return true;
       const name = String(bad.name || '').trim();
       this.$message.error(name
@@ -1133,9 +1160,14 @@ export default {
     },
     save() {
       this.$refs.form.validate(async (valid) => {
-        if (!valid) return;
-        if (!this.commitPendingAi()) return;
-        if (!this.checkAiServices()) return;
+        if (!valid) {
+          this.activeMenu = 'general';
+          return;
+        }
+        if (!this.commitPendingAi() || !this.checkAiServices()) {
+          this.activeMenu = 'ai';
+          return;
+        }
         this.saving = true;
         try {
           unwrap(
@@ -1243,6 +1275,7 @@ export default {
 .mono { font-family: Consolas, "Courier New", monospace; }
 .svc-list { display: flex; flex-direction: column; gap: 10px; }
 .svc-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.svc-card.is-bad { border-color: var(--danger); }
 .svc-top { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
 .svc-name { max-width: 150px; flex: none; }
 .svc-tag { font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; flex: none; }
@@ -1525,21 +1558,11 @@ html.theme-light .brand-github {
   color: var(--text-2);
   cursor: pointer;
 }
-.svc-key-reveal img {
-  pointer-events: none;
-}
 .svc-key-reveal:hover:not(:disabled) {
   color: var(--accent);
 }
 .svc-key-reveal:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-.svc-key-reveal .spin-icon {
-  animation: auth-spin 0.8s linear infinite;
-}
-@keyframes auth-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 </style>
