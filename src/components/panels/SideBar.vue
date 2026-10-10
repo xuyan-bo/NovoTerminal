@@ -207,11 +207,11 @@ export default {
       const d = dragNode.data;
       const t = dropNode.data;
       if (d.kind === 'asset') {
-        // 文件夹只接受「放入内部」，整行都是落点；资产之间才是前/后排序
-        return t.kind === 'folder' ? type === 'inner' : type !== 'inner';
+        // 文件夹只接受「放入内部」，整行都是落点；资产之间才是前/后排序；放回自己所在文件夹不算落点
+        return t.kind === 'folder' ? type === 'inner' && t.gid !== d.gid : type !== 'inner';
       }
       if (t.kind !== 'folder') return false;
-      if (type === 'inner') return !isDescendantOf(this.groups, t.gid, d.gid);
+      if (type === 'inner') return t.gid !== d.pid && !isDescendantOf(this.groups, t.gid, d.gid);
       // 文件夹的前后位置只在同一父级内成立，改变从属请拖进文件夹内部
       return t.pid === d.pid;
     },
