@@ -208,12 +208,6 @@ export function moveTab(id, beforeId) {
   const [tab] = tabs.splice(from, 1);
   tabs.splice(to, 0, tab);
   store.tabs = tabs;
-  if (api.logWrite) {
-    api.logWrite({
-      level: 'info', source: 'tabs', message: 'tab reordered',
-      meta: { kind: tab.kind, fromIndex: from, toIndex: to },
-    }).catch((error) => console.warn('Tab reorder log failed', error.code));
-  }
 }
 
 export async function createGroup(payload) {

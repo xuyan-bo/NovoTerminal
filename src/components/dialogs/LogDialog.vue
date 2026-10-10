@@ -2,7 +2,7 @@
   <el-dialog
     :title="$t('log.title')"
     :visible.sync="modalVisible"
-    width="1120px"
+    width="min(1120px, 94vw)"
     top="7vh"
     :close-on-click-modal="false"
     class="log-dialog"
@@ -45,6 +45,7 @@
       size="small"
       height="min(600px, calc(100vh - 300px))"
       class="log-table"
+      :default-sort="{ prop: 'time', order: 'descending' }"
       @cell-contextmenu="onCellCtx"
       @sort-change="onSortChange"
     >
@@ -93,7 +94,7 @@
 </template>
 
 <script>
-import { store, api } from '../../store';
+import { store, api, unwrap } from '../../store';
 import { t } from '../../i18n';
 import CtxMenu from '../common/CtxMenu.vue';
 
@@ -150,7 +151,7 @@ export default {
       const value = this._ctxText;
       try {
         if (api.clipboardWriteText) {
-          const ok = await api.clipboardWriteText(value);
+          const ok = unwrap(await api.clipboardWriteText(value));
           if (ok) {
             this.$message.success(t('log.copied'));
             return;
@@ -170,15 +171,17 @@ export default {
       }
       this.loading = true;
       try {
-        const r = await api.logList({
-          level: this.level || undefined,
-          keyword: this.keyword || undefined,
-          order: this.order,
-          limit: this.pageSize,
-          offset: (this.page - 1) * this.pageSize,
-        });
-        this.total = (r && r.total) || 0;
-        this.rows = (r && r.entries) || [];
+        const r = unwrap(
+          await api.logList({
+            level: this.level || undefined,
+            keyword: this.keyword || undefined,
+            order: this.order,
+            limit: this.pageSize,
+            offset: (this.page - 1) * this.pageSize,
+          })
+        );
+        this.total = r.total || 0;
+        this.rows = r.entries || [];
         const maxPage = Math.max(1, Math.ceil(this.total / this.pageSize));
         if (this.page > maxPage) {
           this.page = maxPage;
@@ -209,7 +212,8 @@ export default {
       this.reload();
     },
     push(entry) {
-      if (!entry || typeof entry !== 'object' || !entry.time) return;
+      // el-dialog 关闭不销毁内容，弹窗没打开时不能每条日志都去重排隐藏表格
+      if (!this.modalVisible || !entry || typeof entry !== 'object' || !entry.time) return;
       this.total++;
       // 仅在第一页且未筛选时实时插入，避免分页偏移错乱；正序时新条目属于最后一页，插不进去
       if (this.order === 'asc') return;
@@ -225,7 +229,7 @@ export default {
         return;
       }
       try {
-        if (api.logClear) await api.logClear();
+        if (api.logClear) unwrap(await api.logClear());
         this.rows = [];
         this.total = 0;
         this.page = 1;
