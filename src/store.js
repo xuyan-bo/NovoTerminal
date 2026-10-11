@@ -92,6 +92,8 @@ export function closeTab(id) {
   if (store.activeTab === id) {
     store.activeTab = store.tabs[Math.max(0, i - 1)].id;
   }
+  // 独立窗口里的页签归主进程记账：主窗口那份副本要靠这条广播一起消失。
+  if (hostedGroupId && api.sessionTabClose) api.sessionTabClose({ tabId: id }).catch(() => {});
 }
 
 export async function removeRecent(id, method) {
@@ -132,13 +134,18 @@ function isDetachable(tab) {
 }
 
 /**
- * Insertion slot captured while a detached window hovers the tab bar. The drop-hint clear event
- * arrives before the merge broadcast, so this survives it and is consumed once by applyDetached.
+ * Insertion slot recorded when a detached tab is dropped on the bar. The merge broadcast that
+ * re-hosts the session consumes it once, so a cancelled drag leaves nothing behind.
  */
 let dockTarget = null;
 
 export function setDockTarget(tabId, beforeId) {
   dockTarget = { tabId, beforeId };
+}
+
+/** A rejected dock request must not leave a slot behind for some later merge to consume. */
+export function clearDockTarget(tabId) {
+  if (dockTarget && dockTarget.tabId === tabId) dockTarget = null;
 }
 
 /**
@@ -167,20 +174,141 @@ export function applyDetached(tabId, detached) {
   store.activeTab = next ? next.id : 'home';
 }
 
-export async function detachTab(tabId, fromDrag) {
+/**
+ * 独立窗口也是页签宿主：主进程按组保存成员与顺序，窗口用下面这组动作读写自己那一份。
+ * hostedGroupId 为空表示当前渲染进程是主窗口（它持有全量页签，拆出去的那些只是停在那儿）。
+ */
+let hostedGroupId = '';
+
+export function setHostedGroup(gid) {
+  hostedGroupId = String(gid || '');
+  if (!hostedGroupId) return;
+  // 组快照到达前，本地那份（含主窗口的首页）必须先清空，否则独立窗口会先闪出一条"首页"页签。
+  store.tabs = [];
+  store.activeTab = '';
+}
+
+/** 跨窗口搬运只带这几个字段，视图重建够用即可，不把整个页签对象灌进 IPC。 */
+export function tabPayload(tab) {
+  if (!tab) return null;
+  return {
+    id: tab.id,
+    kind: tab.kind,
+    title: tab.title || '',
+    icon: tab.icon || '',
+    os: tab.os || '',
+    assetId: tab.assetId || '',
+    methodId: tab.methodId || tab.kind,
+    host: tab.host || '',
+    port: tab.port === undefined || tab.port === null ? '' : String(tab.port),
+    connState: tab.connState || 'idle',
+    liveSessionId: tab.liveSessionId || null,
+  };
+}
+
+/**
+ * 主进程发来的组快照就是本窗口的页签真相。已经在本窗口承载的页签保留本地实时状态：
+ * 快照里那份要等一次回灌才会更新，直接覆盖会让小圆点倒退，也会把刚拿到的 liveSessionId 冲掉。
+ * 新来的那一条（复制或拖进来）成为当前页签，和浏览器一致；原来的活动页签被搬走才退回第一枚。
+ */
+export function applyGroupTabs(tabs) {
+  const previous = new Map(store.tabs.map((tab) => [tab.id, tab]));
+  const list = (Array.isArray(tabs) ? tabs : []).map((tab) => {
+    const held = previous.get(tab.id);
+    return {
+      ...tab,
+      closable: true,
+      detached: false,
+      port: tab.port === '' ? undefined : tab.port,
+      connState: held ? held.connState : tab.connState || 'idle',
+      liveSessionId: held ? held.liveSessionId || null : tab.liveSessionId || null,
+    };
+  });
+  store.tabs = list;
+  const added = list.filter((tab) => !previous.has(tab.id));
+  if (added.length === 1 && previous.has(store.activeTab)) store.activeTab = added[0].id;
+  else if (!list.some((tab) => tab.id === store.activeTab)) store.activeTab = list.length ? list[0].id : '';
+}
+
+export function reportTabState(tabId) {
+  if (!hostedGroupId || !api.sessionTabState) return;
+  const tab = findTab(tabId);
+  if (!tab) return;
+  api.sessionTabState({ tabId, connState: tab.connState, liveSessionId: tab.liveSessionId || null }).catch(() => {});
+}
+
+/** 组内顺序只有主进程记着才在下一次搬入时不跑偏；只由本模块的 moveTab 触发。 */
+function reportGroupOrder() {
+  if (!hostedGroupId || !api.sessionGroupOrder) return;
+  api.sessionGroupOrder({ tabIds: store.tabs.map((tab) => tab.id) }).catch(() => {});
+}
+
+export function reportActiveTab(tabId) {
+  if (!hostedGroupId || !api.sessionTabActive || !tabId) return;
+  api.sessionTabActive({ tabId }).catch(() => {});
+}
+
+/** 独立窗口里的"复制会话"：本窗口只提请求，页签由主窗口代建后再交回来。 */
+export async function copySessionToGroup(tabId) {
+  unwrap(await api.sessionTabCopy({ tabId }));
+}
+
+/**
+ * 主窗口替某个独立窗口建一条会话页签。页签 id 只能在这里分配（本窗口看得见全部页签，含停放的那些），
+ * 但连接必须交给最终宿主发起：建好就立刻标成停放，本窗口既不显示它也不挂载视图，
+ * 那个窗口拿到的是一条「连接中」的新页签，与在主窗口里点复制的动作完全一致。
+ */
+export async function openCopyForGroup(source, groupId) {
+  const gid = String(groupId || '');
+  if (!gid) return;
+  const hit = findAsset(source && source.assetId);
+  if (!hit) return;
+  const method = enabledMethods(hit.asset).find((m) => m.id === (source.methodId || source.kind));
+  if (!method) return;
+  const protocol = getProtocol(method.id);
+  if (!protocol || !protocol.component) return;
+  const tab = buildSessionTab(hit.asset, method, protocol);
+  tab.detached = true;
+  store.tabs.push(tab);
+  try {
+    unwrap(await api.sessionDetach({ tab: tabPayload(tab), fromDrag: false, groupId: gid }));
+  } catch (e) {
+    // 交不出去就当场撤销这条代建页签：它没连过任何东西，留着只会是一条谁都看不见的记录。
+    const i = store.tabs.findIndex((t) => t.id === tab.id);
+    if (i >= 0) store.tabs.splice(i, 1);
+    if (api.logWrite) {
+      api
+        .logWrite({
+          level: 'warn',
+          source: 'session',
+          message: 'copy session handoff failed',
+          meta: { tabId: tab.id, groupId: gid, message: e.message },
+        })
+        .catch(() => {});
+    }
+  }
+}
+
+/** 页签归哪个窗口由主进程定；这里只发请求，本窗口的落位靠回推的组快照。 */
+export async function detachTab(tabId, fromDrag, groupId) {
   const tab = findTab(tabId);
   if (!tab || !isDetachable(tab) || tab.detached) return;
   unwrap(
     await api.sessionDetach({
-      tabId: tab.id,
-      kind: tab.kind,
-      assetId: tab.assetId,
-      methodId: tab.methodId,
-      host: tab.host,
-      port: tab.port,
-      title: tab.title,
-      liveSessionId: tab.liveSessionId,
+      tab: tabPayload(tab),
       fromDrag: !!fromDrag,
+      groupId: groupId ? String(groupId) : undefined,
+    })
+  );
+}
+
+/** 丢到主窗口页签栏＝收回；丢到另一个独立窗口页签栏＝换宿主，beforeTabId 只对新宿主有意义。 */
+export async function moveTabToWindow(tabId, beforeTabId, toHost) {
+  unwrap(
+    await api.sessionTabMove({
+      tabId,
+      beforeTabId: beforeTabId === null || beforeTabId === undefined ? null : String(beforeTabId),
+      to: toHost ? 'host' : 'self',
     })
   );
 }
@@ -200,16 +328,28 @@ export function dropDetachedTab(tabId) {
   if (store.activeTab === tabId) store.activeTab = store.tabs[Math.max(0, i - 1)].id;
 }
 
+/** 连接状态只存在于当前宿主窗口，回灌给主窗口的副本，否则收回后小圆点与关闭确认都是旧的。 */
+export function applyTabState(payload) {
+  if (!payload || !payload.tabId) return;
+  const tab = findTab(payload.tabId);
+  if (!tab || !tab.detached) return;
+  tab.connState = payload.connState || 'idle';
+  if (payload.liveSessionId !== undefined) tab.liveSessionId = payload.liveSessionId || null;
+}
+
 export function moveTab(id, beforeId) {
   const from = store.tabs.findIndex((tab) => tab.id === id);
   const before = beforeId === null ? store.tabs.length : store.tabs.findIndex((tab) => tab.id === beforeId);
   if (from < 0 || !store.tabs[from].closable || before < 0 || id === beforeId) return;
-  const to = Math.max(1, before > from ? before - 1 : before);
+  // 主窗口首页恒在首位；独立窗口没有首页，第一条就可以被插到它前面。
+  const floor = store.tabs[0] && store.tabs[0].id === 'home' ? 1 : 0;
+  const to = Math.max(floor, before > from ? before - 1 : before);
   if (from === to) return;
   const tabs = store.tabs.slice();
   const [tab] = tabs.splice(from, 1);
   tabs.splice(to, 0, tab);
   store.tabs = tabs;
+  reportGroupOrder();
 }
 
 export async function createGroup(payload) {

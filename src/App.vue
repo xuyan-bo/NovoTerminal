@@ -1,7 +1,7 @@
 <template>
-  <div class="app-root" :class="{ 'is-sftp': isSftpRoute, 'is-session': isSessionRoute }">
+  <div class="app-root" :class="{ 'is-sftp': isSftpRoute, 'is-window': isGroupRoute }">
     <sftp-page v-if="isSftpRoute" />
-    <session-window v-else-if="isSessionRoute" :query="sessionQuery" />
+    <session-window v-else-if="isGroupRoute" :group-id="groupQuery.gid || ''" />
     <template v-else>
     <div class="body-row">
       <side-bar v-show="!treeHidden" :style="sidebarStyle" />
@@ -76,7 +76,7 @@ import MethodAdvancedDialog from './components/dialogs/MethodAdvancedDialog.vue'
 import ClosePromptDialog from './components/dialogs/ClosePromptDialog.vue';
 import UpdateDialog from './components/dialogs/UpdateDialog.vue';
 import SshAuthDialog from './components/dialogs/SshAuthDialog.vue';
-import { store, api, refresh, applyDetached, dropDetachedTab, checkForUpdates } from './store';
+import { store, api, refresh, applyDetached, dropDetachedTab, applyTabState, openCopyForGroup, checkForUpdates } from './store';
 import { t, applySettings } from './i18n';
 import { getProtocol } from './protocols';
 
@@ -137,8 +137,8 @@ export default {
       resizing: false,
       treeHidden: false,
       isSftpRoute: !!parseHashRoute('sftp'),
-      sessionQuery: parseHashRoute('session') || {},
-      isSessionRoute: !!parseHashRoute('session'),
+      groupQuery: parseHashRoute('window') || {},
+      isGroupRoute: !!parseHashRoute('window'),
     };
   },
   computed: {
@@ -169,16 +169,16 @@ export default {
     this._onHash = () => {
       const q = parseHashRoute('sftp');
       this.isSftpRoute = !!q;
-      const s = parseHashRoute('session');
-      this.sessionQuery = s || {};
-      this.isSessionRoute = !!s;
+      const g = parseHashRoute('window');
+      this.groupQuery = g || {};
+      this.isGroupRoute = !!g;
     };
     window.addEventListener('hashchange', this._onHash);
     try {
       const saved = Number(localStorage.getItem(SIDEBAR_W_KEY));
       if (saved >= MIN_SIDEBAR_W && saved <= MAX_SIDEBAR_W) this.sidebarWidth = saved;
     } catch (_) {}
-    if (!this.isSftpRoute && !this.isSessionRoute) {
+    if (!this.isSftpRoute && !this.isGroupRoute) {
       if (store.snapshot.settings) applySettings(store.snapshot.settings);
       this._off = api.onSessionState && api.onSessionState((payload) => this.onSession(payload));
       this._offDetached =
@@ -191,6 +191,16 @@ export default {
         api.onSessionClosed &&
         api.onSessionClosed((payload) => {
           if (payload && payload.tabId) dropDetachedTab(payload.tabId);
+        });
+      // 独立窗口才是页签的连接宿主；这里同步它回灌的状态，收回后小圆点与关闭确认才是新的。
+      this._offTabState =
+        api.onSessionTabState &&
+        api.onSessionTabState((payload) => applyTabState(payload));
+      // 独立窗口的"复制会话"由本窗口分配页签 id，建好立刻交回那个窗口，连接由它自己发起。
+      this._offTabCopy =
+        api.onSessionTabCopyRequest &&
+        api.onSessionTabCopyRequest((payload) => {
+          if (payload && payload.tab) openCopyForGroup(payload.tab, payload.groupId);
         });
       this._offStore =
         api.onStoreChanged &&
@@ -223,6 +233,8 @@ export default {
     if (this._off) this._off();
     if (this._offDetached) this._offDetached();
     if (this._offClosedWindow) this._offClosedWindow();
+    if (this._offTabState) this._offTabState();
+    if (this._offTabCopy) this._offTabCopy();
     if (this._offStore) this._offStore();
     if (this._mq && this._mqHandler && this._mq.removeEventListener) {
       this._mq.removeEventListener('change', this._mqHandler);

@@ -88,13 +88,49 @@ export const api = hasBridge
       async sessionTabbarBounds() {
         return { ok: false, code: 'NO_BRIDGE' };
       },
+      async sessionDockPrepare() {
+        return { ok: false, code: 'NO_BRIDGE' };
+      },
+      async sessionDockAbort() {
+        return { ok: false, code: 'NO_BRIDGE' };
+      },
+      async sessionTabMove() {
+        return { __error: true, message: t('msg.previewDetach'), code: 'NO_BRIDGE' };
+      },
+      async sessionGroupTabs() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async sessionGroupOrder() {
+        return { ok: false, code: 'NO_BRIDGE' };
+      },
+      async sessionTabState() {
+        return { ok: false, code: 'NO_BRIDGE' };
+      },
+      async sessionTabCopy() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async sessionTabClose() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async sessionTabActive() {
+        return { ok: false, code: 'NO_BRIDGE' };
+      },
+      onSessionGroup() {
+        return () => {};
+      },
+      onSessionTabCopyRequest() {
+        return () => {};
+      },
+      onSessionTabState() {
+        return () => {};
+      },
+      onSessionDockClear() {
+        return () => {};
+      },
       onSessionDetached() {
         return () => {};
       },
       onSessionClosed() {
-        return () => {};
-      },
-      onSessionDropHint() {
         return () => {};
       },
       onSessionHandover() {

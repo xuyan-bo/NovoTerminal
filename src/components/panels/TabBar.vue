@@ -1,6 +1,12 @@
 <template>
-  <div class="tabbar-row">
+  <div
+    class="tabbar-row"
+    @dragover="onRowDragOver"
+    @dragleave="onRowDragLeave"
+    @drop="onRowDrop"
+  >
     <button
+      v-if="!detached"
       class="tab-arrow tab-toggle"
       :aria-label="$t('tab.toggleTree')"
       :title="$t('tab.toggleTree')"
@@ -16,7 +22,6 @@
     <div
       ref="tabbarWrap"
       class="tabbar-wrap"
-      :class="{ 'drop-hint': dropHint }"
       @scroll.passive="updateTabArrows"
       @dragover="onTabDragOver"
       @dragleave="onTabDragLeave"
@@ -93,23 +98,24 @@
 
 <script>
 import CtxMenu from '../common/CtxMenu.vue';
-import { store, closeTab, moveTab, refreshSessionTab, api, detachTab, setDockTarget, findAsset, enabledMethods, openSshSession } from '../../store';
+import { store, closeTab, moveTab, refreshSessionTab, api, detachTab, moveTabToWindow, copySessionToGroup, setDockTarget, clearDockTarget, tabPayload, findAsset, enabledMethods, openSshSession } from '../../store';
 import { t } from '../../i18n';
-import { OS_SVG } from '../../constants';
+import { OS_SVG, TAB_DRAG_TYPE } from '../../constants';
 import { getProtocol } from '../../protocols';
 
-const TAB_DRAG_TYPE = 'application/x-novoterminal-tab';
-/** How often the tab bar rect is re-published for the detached window's hit test. */
-const BOUNDS_REPORT_MS = 150;
 /** Preview size of the detached-window outline shown while a tab is dragged out. */
 const GHOST_W = 320;
 const GHOST_H = 190;
+/** How often the tab bar rect is re-published for the drag-out drop test in the main process. */
+const BOUNDS_REPORT_MS = 150;
 
 export default {
   name: 'TabBar',
   components: { CtxMenu },
   props: {
     treeHidden: { type: Boolean, default: false },
+    /** 'host' 主窗口页签栏，'group' 独立窗口页签栏：同一份外观，两处不同的宿主语义。 */
+    scope: { type: String, default: 'host' },
   },
   data() {
     return {
@@ -119,16 +125,18 @@ export default {
       tabOverflow: false,
       tabScrollLeft: false,
       tabScrollRight: false,
-      dropHint: false,
       dragGhost: { show: false, left: 0, top: 0, title: '' },
       dockGhostIndex: -1,
     };
   },
   computed: {
+    detached() {
+      return this.scope === 'group';
+    },
     tabs() {
-      // A detached session lives in its own window and is not represented here at all; dragging
-      // that window onto this row is what brings the tab back.
-      return store.tabs.filter((t) => !t.detached);
+      // 主窗口里拆出去的页签不出现（它只是留给收回时落位的停放副本）；
+      // 独立窗口的 store.tabs 就是它自己承载的那些，全部显示。
+      return this.detached ? store.tabs : store.tabs.filter((t) => !t.detached);
     },
     activeTab() {
       return store.activeTab;
@@ -154,25 +162,23 @@ export default {
     this._dragDetachable = false;
     this._dragTitle = '';
     this._boundsTimer = 0;
-    this._offDropHint = null;
+    this._dragPrepared = false;
+    this._offDockClear = null;
   },
   mounted() {
     this.observeTabbar();
     this.$nextTick(this.updateTabArrows);
     this.reportTabbarBounds();
-    if (api.onSessionDropHint) {
-      this._offDropHint = api.onSessionDropHint((payload) => {
-        this.dropHint = !!(payload && payload.active);
-        if (this.dropHint) this.updateDockGhost(payload.tabId, payload.x);
-        else this.dockGhostIndex = -1;
-      });
-    }
     window.addEventListener('resize', this.scheduleReportBounds);
+    // 源窗口取消拖放或渲染进程中途死掉时不会给本窗口发 dragleave，落点提示只能由主进程统一收回。
+    if (api.onSessionDockClear) {
+      this._offDockClear = api.onSessionDockClear(() => this.clearDockGhost());
+    }
   },
   beforeDestroy() {
     this.endTabDrag();
     if (this._tabResizeObs) this._tabResizeObs.disconnect();
-    if (this._offDropHint) this._offDropHint();
+    if (this._offDockClear) this._offDockClear();
     if (this._boundsTimer) clearTimeout(this._boundsTimer);
     window.removeEventListener('resize', this.scheduleReportBounds);
   },
@@ -202,6 +208,12 @@ export default {
       this._dragDetachable = !!(protocol && protocol.component);
       this._dragTitle = this.tabTitle(tab);
       this.dragGhost.show = false;
+      // Chromium 只把拖放交给光标下最上层的窗口，也就是起手这个窗口自己；
+      // 先把描述符交给主进程并让它抬起其他宿主窗口，别处的页签栏才可能收到这次 drop。
+      if (this._dragDetachable && api.sessionDockPrepare) {
+        this._dragPrepared = true;
+        api.sessionDockPrepare({ tab: tabPayload(tab) }).catch(() => {});
+      }
       document.addEventListener('dragover', this.onDocDragOver, true);
     },
     onDocDragOver(event) {
@@ -221,13 +233,45 @@ export default {
       this.dragGhost.show = true;
     },
     onTabDragOver(event) {
-      if (!this.draggedTabId || !event.dataTransfer || !Array.from(event.dataTransfer.types).includes(TAB_DRAG_TYPE)) return;
+      if (!event.dataTransfer || !Array.from(event.dataTransfer.types).includes(TAB_DRAG_TYPE)) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = 'move';
+      if (!this.draggedTabId) {
+        this.updateDockGhost(event.clientX);
+        return;
+      }
       this.tabDragOver = true;
       this._tabDragX = event.clientX;
       this.updateTabDropTarget();
       if (!this._tabScrollFrame) this._tabScrollFrame = requestAnimationFrame(this.scrollTabsForDrag);
+    },
+    isForeignDrag(event) {
+      return (
+        !this.draggedTabId &&
+        !!event.dataTransfer &&
+        Array.from(event.dataTransfer.types).includes(TAB_DRAG_TYPE)
+      );
+    },
+    /**
+     * 上报给主进程做抬起判定的是整条页签栏（含折叠与左右滚动按钮），Chromium 却只把拖放事件交给
+     * 光标底下的元素：只监听 `.tabbar-wrap` 时，光标落在按钮区窗口会被抬起来却看不到落点，
+     * 而两种窗口的这条栏左边宽度不同（独立窗口没有折叠按钮），同一个位置就会一边有一边没有。
+     */
+    onRowDragOver(event) {
+      if (!this.isForeignDrag(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      this.updateDockGhost(event.clientX);
+    },
+    onRowDragLeave(event) {
+      if (this.draggedTabId) return;
+      if (event.relatedTarget && event.currentTarget.contains(event.relatedTarget)) return;
+      this.clearDockGhost();
+    },
+    onRowDrop(event) {
+      if (!this.isForeignDrag(event)) return;
+      event.preventDefault();
+      this.acceptForeignTab(event.dataTransfer.getData(TAB_DRAG_TYPE), event.clientX);
     },
     updateTabDropTarget() {
       const tabs = this.$refs.tabbarWrap.querySelectorAll('.tab[draggable="true"]');
@@ -253,13 +297,18 @@ export default {
     onTabDragLeave(event) {
       if (event.currentTarget.contains(event.relatedTarget)) return;
       this.tabDragOver = false;
+      // 落点提示不在这儿清：`.tabbar-wrap` 只是整条栏的一部分，跨到滚动按钮上仍算瞄准中。
       cancelAnimationFrame(this._tabScrollFrame);
       this._tabScrollFrame = 0;
     },
     onTabDrop(event) {
-      if (!this.draggedTabId || !event.dataTransfer || !Array.from(event.dataTransfer.types).includes(TAB_DRAG_TYPE)) return;
+      if (!event.dataTransfer || !Array.from(event.dataTransfer.types).includes(TAB_DRAG_TYPE)) return;
       event.preventDefault();
       event.stopPropagation();
+      if (!this.draggedTabId) {
+        this.acceptForeignTab(event.dataTransfer.getData(TAB_DRAG_TYPE), event.clientX);
+        return;
+      }
       this._tabDragX = event.clientX;
       this._dropHandled = true;
       this.updateTabDropTarget();
@@ -273,6 +322,10 @@ export default {
       // row comes back cancelled instead of detached.
       const detach = dragged && !this._dropHandled && this._dragDetachable;
       document.removeEventListener('dragover', this.onDocDragOver, true);
+      if (this._dragPrepared) {
+        this._dragPrepared = false;
+        if (api.sessionDockAbort) api.sessionDockAbort({}).catch(() => {});
+      }
       if (dragged) this._tabClickBlockedUntil = Date.now() + 150;
       this.draggedTabId = '';
       this.dropBeforeTabId = null;
@@ -285,17 +338,17 @@ export default {
       if (detach) this.detachSessionTab(dragged, true);
     },
     /**
-     * A detached window dragged over the bar reports the cursor's x in page CSS px; show the
-     * landing slot there. The store target survives the drop-hint clear because it arrives
-     * before the merge broadcast that consumes it.
+     * Landing slot for a tab dragged in from another window: highlight it and return the tab to
+     * insert before. Only the visual index is known while hovering, since dataTransfer values stay
+     * unreadable until the drop. 它只由事件清除（离开这条栏、落位、源窗口 dragend 的广播），
+     * 不用计时器过期——停下来瞄准落点时 Chromium 不再发 dragover，计时器会在松手前把提示吃掉。
      */
-    updateDockGhost(tabId, x) {
+    updateDockGhost(clientX) {
       const wrap = this.$refs.tabbarWrap;
-      if (!tabId || !wrap || !Number.isFinite(x) || !this.$el) {
-        this.dockGhostIndex = -1;
-        return;
+      if (!wrap || !Number.isFinite(clientX)) {
+        this.clearDockGhost();
+        return null;
       }
-      const clientX = this.$el.getBoundingClientRect().left + x;
       const slots = wrap.querySelectorAll('.tab[data-tab-id]');
       let index = this.tabs.length;
       for (let i = 0; i < slots.length; i += 1) {
@@ -305,16 +358,59 @@ export default {
           break;
         }
       }
-      index = Math.max(1, Math.min(index, this.tabs.length));
-      this.dockGhostIndex = index;
+      // 主窗口的首页恒在首位；独立窗口没有首页，第一条前也能落。
+      this.dockGhostIndex = Math.max(this.detached ? 0 : 1, Math.min(index, this.tabs.length));
       const visible = this.tabs;
-      setDockTarget(tabId, index < visible.length ? visible[index].id : null);
+      return this.dockGhostIndex < visible.length ? visible[this.dockGhostIndex].id : null;
+    },
+    clearDockGhost() {
+      this.dockGhostIndex = -1;
+    },
+    async acceptForeignTab(tabId, clientX) {
+      const beforeId = this.updateDockGhost(clientX);
+      this.clearDockGhost();
+      if (!tabId) return;
+      if (this.detached) {
+        try {
+          await moveTabToWindow(tabId, beforeId, false);
+        } catch (e) {
+          this.$message.error(e.code === 'DOCK_TAB' ? t('tab.dockFail') : e.message || t('tab.dockFail'));
+        }
+        return;
+      }
+      // 主窗口靠收回广播落位，dockTarget 必须等广播消费一次；只对本窗口确实托管的页签才登记，
+      // 否则主进程会当成"本来就在这儿"直接原样返回，留下一个没人消费的落点。
+      const parked = store.tabs.find((t) => t.id === tabId && t.detached);
+      if (!parked) return;
+      setDockTarget(tabId, beforeId);
+      try {
+        await moveTabToWindow(tabId, null, true);
+      } catch (e) {
+        clearDockTarget(tabId);
+        this.$message.error(e.code === 'DOCK_TAB' ? t('tab.dockFail') : e.message || t('tab.dockFail'));
+      }
     },
     async detachSessionTab(tabId, fromDrag) {
       try {
         await detachTab(tabId, fromDrag);
       } catch (e) {
         this.$message.error(e.code === 'DETACH_KIND' ? t('tab.detachBadKind') : e.message || t('tab.detachFail'));
+      }
+    },
+    /** 独立窗口的"收回主窗口"没有落点，按原相对位置回去：不预存 dockTarget。 */
+    async dockTabToHost(tabId) {
+      try {
+        await moveTabToWindow(tabId, null, true);
+      } catch (e) {
+        this.$message.error(e.code === 'DOCK_TAB' ? t('tab.dockFail') : e.message || t('tab.dockFail'));
+      }
+    },
+    async copySessionInWindow(tabId) {
+      try {
+        await copySessionToGroup(tabId);
+      } catch (e) {
+        // 失败原因都是主进程内部判定（页签刚被接走之类），只给一句本地化结论，不抛英文原文。
+        this.$message.error(t('tab.copyFail'));
       }
     },
     /** Keep the main process telling the detached windows where the tab bar currently is. */
@@ -420,6 +516,9 @@ export default {
         if (tab.kind === 'ssh' && this.sshSessionTarget(tab)) {
           items.push({ label: t('tab.copySession'), icon: 'el-icon-document-copy', action: 'copySession', tabId: tab.id });
         }
+        if (this.detached) {
+          items.push({ label: t('tab.dockToHost'), icon: 'el-icon-position', action: 'dock', tabId: tab.id });
+        }
         items.push(
           { label: t('tab.detachToWindow'), icon: 'el-icon-rank', action: 'detach', tabId: tab.id },
           { sep: true }
@@ -447,9 +546,14 @@ export default {
       if (index < 0) return;
       if (item.action === 'refresh') refreshSessionTab(item.tabId);
       else if (item.action === 'copySession') {
-        const target = this.sshSessionTarget(store.tabs.find((tb) => tb.id === item.tabId));
-        if (target) openSshSession(target.asset, target.method);
-      } else if (item.action === 'detach') this.detachSessionTab(item.tabId);
+        // 独立窗口不能自己分配页签 id：交给主窗口建好再搬回来。
+        if (this.detached) this.copySessionInWindow(item.tabId);
+        else {
+          const target = this.sshSessionTarget(store.tabs.find((tb) => tb.id === item.tabId));
+          if (target) openSshSession(target.asset, target.method);
+        }
+      } else if (item.action === 'dock') this.dockTabToHost(item.tabId);
+      else if (item.action === 'detach') this.detachSessionTab(item.tabId);
       else if (item.action === 'closeCurrent') this.closeTabById(item.tabId);
       else if (item.action === 'closeOthers') {
         this.closeTabsBulk(visible.filter((tb) => tb.id !== item.tabId));

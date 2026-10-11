@@ -285,7 +285,7 @@ button {
 }
 
 .app-root.is-sftp,
-.app-root.is-session {
+.app-root.is-window {
   height: 100%;
   overflow: hidden;
 }
@@ -713,13 +713,6 @@ button {
   color: var(--accent);
   background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-}
-
-/* Dragging a detached session window back over this row merges it into the tab bar. */
-.tabbar-wrap.drop-hint {
-  outline: 1px dashed var(--accent);
-  outline-offset: -3px;
-  background: var(--accent-soft);
 }
 
 .tab[draggable='true'] {

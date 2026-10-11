@@ -1,156 +1,170 @@
 <template>
-  <div class="detached-root">
-    <component
-      :is="viewComponent"
-      v-if="viewComponent"
-      :session-id="tabId"
-      :asset-id="assetId"
-      :method-id="methodId"
-      :title="hostLabel"
-      :active="true"
-      :attach-session-id="attachSessionId || undefined"
-      @session="onSession"
-      @connection="connected = $event"
-    />
-    <div v-else class="detached-empty">{{ emptyText }}</div>
-  </div>
+  <section class="main group-root">
+    <tab-bar scope="group" />
+    <div class="views">
+      <div
+        v-for="t in tabs"
+        :key="t.id + ':' + (refreshKeys[t.id] || 0)"
+        class="view"
+        :class="[t.kind + '-view', { show: activeTab === t.id }]"
+      >
+        <component
+          :is="sessionComponent(t)"
+          v-show="activeTab === t.id"
+          :session-id="t.id"
+          :asset-id="t.assetId"
+          :method-id="t.methodId"
+          :title="(t.host || '') + (t.port ? ':' + t.port : '')"
+          :active="activeTab === t.id"
+          :attach-session-id="attachSessionIdOf(t)"
+          @session="onViewSession(t, $event)"
+        />
+      </div>
+    </div>
+  </section>
 </template>
 
 <script>
-import { api, markSessionHandover } from '../../store';
+import TabBar from '../panels/TabBar.vue';
+import {
+  store,
+  api,
+  unwrap,
+  setHostedGroup,
+  applyGroupTabs,
+  reportTabState,
+  reportActiveTab,
+  markSessionHandover,
+} from '../../store';
 import { t } from '../../i18n';
 import { getProtocol } from '../../protocols';
 
 /**
- * Host of one session tab that was dragged out into its own window. The window keeps the native
- * title bar, so moving it, closing it and the drag back onto the tab bar are all main process
- * concerns; this page only renders the protocol view and releases it without dropping the main
- * process connection when the host asks for it back.
+ * 独立窗口也是页签宿主：它用同一个 store、同一个页签栏组件管自己那几条页签，
+ * 成员与顺序由主进程下发的组快照决定，所以外观与交互和主窗口天然一致。
  */
 export default {
   name: 'SessionWindow',
+  components: { TabBar },
   props: {
-    query: { type: Object, default: () => ({}) },
-  },
-  data() {
-    return {
-      attachSessionId: '',
-      connected: false,
-    };
+    groupId: { type: String, default: '' },
   },
   computed: {
-    kind() {
-      return String(this.query.kind || '');
+    tabs() {
+      return store.tabs;
     },
-    tabId() {
-      return String(this.query.tabId || '');
+    activeTab() {
+      return store.activeTab;
     },
-    assetId() {
-      return String(this.query.assetId || '');
+    refreshKeys() {
+      return store.tabRefreshKeys;
     },
-    methodId() {
-      return String(this.query.methodId || this.kind || '');
+    // 协议视图直接写 tab.connState，这里只观察结果，不改它们的写法。
+    states() {
+      return store.tabs.map((tab) => tab.id + '|' + (tab.connState || '') + '|' + (tab.liveSessionId || '')).join(',');
     },
-    hostLabel() {
-      const host = this.query.host || '';
-      return host ? host + (this.query.port ? ':' + this.query.port : '') : '';
+  },
+  watch: {
+    activeTab(id) {
+      reportActiveTab(id);
     },
-    confirmName() {
-      return this.query.name || this.hostLabel || this.tabId;
-    },
-    viewComponent() {
-      const protocol = getProtocol(this.kind);
-      return protocol && protocol.component ? protocol.component : null;
-    },
-    emptyText() {
-      return this.kind ? t('msg.notImpl', { name: this.kind }) : t('tab.detachBadKind');
+    states() {
+      store.tabs.forEach((tab) => reportTabState(tab.id));
     },
   },
   created() {
+    setHostedGroup(this.groupId);
+    this._offGroup = null;
     this._offHandover = null;
     this._offConfirm = null;
-    // The main window can ask for the session back at any time, and this instance must then
-    // release its view without tearing the main-process connection down.
+    if (api.onSessionGroup) {
+      this._offGroup = api.onSessionGroup((payload) => {
+        if (payload && String(payload.groupId || '') === this.groupId) applyGroupTabs(payload.tabs);
+      });
+    }
+    // 页签交给别的窗口时，本侧销毁视图不能断开那条连接。
     if (api.onSessionHandover) {
       this._offHandover = api.onSessionHandover((payload) => {
-        if (this.kind === 'ssh' && payload && payload.tabId === this.tabId) markSessionHandover(this.tabId);
+        if (payload && payload.tabId) markSessionHandover(payload.tabId);
       });
     }
-    // The native close button ends the session, so the main process defers the decision to us.
     if (api.onSessionConfirmClose) {
-      this._offConfirm = api.onSessionConfirmClose((payload) => {
-        if (payload && payload.tabId === this.tabId) this.confirmClose();
-      });
+      this._offConfirm = api.onSessionConfirmClose((payload) => this.confirmClose(payload));
     }
-  },
-  mounted() {
-    this.attachSessionId = this.kind === 'ssh' ? String(this.query.sid || '') : '';
+    this.loadGroup();
   },
   beforeDestroy() {
+    if (this._offGroup) this._offGroup();
     if (this._offHandover) this._offHandover();
     if (this._offConfirm) this._offConfirm();
+    setHostedGroup('');
   },
   methods: {
-    onSession(sid) {
-      if (this.kind === 'ssh') this.attachSessionId = sid || '';
+    async loadGroup() {
+      if (!api.sessionGroupTabs) return;
+      try {
+        applyGroupTabs(unwrap(await api.sessionGroupTabs({ groupId: this.groupId })).tabs);
+      } catch (e) {
+        this.logFailure('group tabs failed', e);
+      }
     },
-    /** Same prompt the tab bar shows for a live session; declining keeps the window open. */
-    confirmClose() {
-      if (!this.connected) {
-        this.answerClose(true);
+    sessionComponent(tab) {
+      const protocol = getProtocol(tab.kind);
+      return protocol && protocol.component ? protocol.component : null;
+    },
+    // 只有 SSH 会把活连接跨窗口带走，其余视图总是重新连。
+    attachSessionIdOf(tab) {
+      return tab.kind === 'ssh' ? tab.liveSessionId || undefined : undefined;
+    },
+    onViewSession(tab, sessionId) {
+      tab.liveSessionId = sessionId || null;
+    },
+    /**
+     * 关窗＝关掉这个窗口里的全部页签，问法和主窗口的批量关闭一模一样：
+     * 说清有几条活动会话、断开后内容丢失，确认后由主进程关窗，会话随该窗口的 webContents 一起释放。
+     */
+    confirmClose(payload) {
+      const wanted = payload && Array.isArray(payload.tabIds) ? payload.tabIds : [];
+      const live = store.tabs.filter(
+        (tab) => wanted.includes(tab.id) && (tab.connState === 'connecting' || tab.connState === 'ready')
+      ).length;
+      if (!live) {
+        this.answerClose(true, 0);
         return;
       }
       this.$confirm(
-        t('tab.closeConfirmMsg', { name: this.confirmName }),
+        t('tab.closeBulkConfirmMsg', { count: live }),
         t('tab.closeConfirmTitle'),
         { confirmButtonText: t('msg.confirm'), cancelButtonText: t('msg.cancel'), type: 'warning' }
       ).then(
-        () => this.endSession(),
-        () => this.answerClose(false)
+        () => this.answerClose(true, live),
+        () => this.answerClose(false, live)
       );
     },
-    /** Ends the session in the same click, exactly like the tab bar's close button, then closes. */
-    endSession() {
-      if (this.kind === 'ssh' && this.attachSessionId && api.sshDisconnect) {
-        api.sshDisconnect(this.attachSessionId).catch(() => {});
-      }
-      this.answerClose(true);
-    },
-    /** A failed reply must not be read as a decline, so the decision is never taken from the chain. */
-    answerClose(confirmed) {
-      api.sessionCloseAnswer({ tabId: this.tabId, confirmed }).catch((e) => {
-        if (api.logWrite) {
-          api.logWrite({
-            level: 'warn', source: 'session', message: 'detached window close answer failed',
-            meta: { tabId: this.tabId, confirmed, message: e.message },
-          }).catch(() => {});
-        }
+    // 答复失败不能被当成"不关"，否则窗口再也关不掉。
+    answerClose(confirmed, liveCount) {
+      if (!api.sessionCloseAnswer) return;
+      api.sessionCloseAnswer({ groupId: this.groupId, confirmed }).catch((e) => {
+        this.logFailure('detached window close answer failed', e, { confirmed, liveCount });
       });
+    },
+    logFailure(message, e, extra) {
+      if (!api.logWrite) return;
+      api
+        .logWrite({
+          level: 'warn',
+          source: 'session',
+          message,
+          meta: { groupId: this.groupId, message: e && e.message, ...(extra || {}) },
+        })
+        .catch(() => {});
     },
   },
 };
 </script>
 
 <style scoped>
-.detached-root {
-  display: flex;
-  flex-direction: column;
+.group-root {
   height: 100%;
-  background: var(--bg-app);
-  color: var(--text);
-}
-
-.detached-root > * {
-  flex: 1 1 auto;
-  min-height: 0;
-  min-width: 0;
-}
-
-.detached-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-3);
-  font-size: 13px;
 }
 </style>

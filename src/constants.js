@@ -9,6 +9,9 @@ export const OS_SVG = {
 
 export const OS_NAME = { win: 'Windows', mac: 'macOS', linux: 'Linux' };
 
+/** Payload type a dragged tab carries: 栏内重排与独立窗口拖回共用它，落点按它识别本页签拖放。 */
+export const TAB_DRAG_TYPE = 'application/x-novoterminal-tab';
+
 /** 最近连接保存数量上限，与 electron/store/assetStore.js 的 RECENT_LIMIT_* 保持一致 */
 export const RECENT_LIMIT_DEFAULT = 20;
 export const RECENT_LIMIT_MAX = 100;

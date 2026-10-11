@@ -41,7 +41,7 @@
 | `electron/store/`、`electron/auth/` | 持久化与系统身份验证；UI 不绕过这些边界自行实现 |
 | `scripts/` | 构建钩子与工具（`build-mac-auth.cjs`、`afterPack.cjs`、`gen-os-icons.js`）及开发期 SSH 检查脚本；不参与运行时，新增文件须同步 `.gitignore` 的 `/scripts/*` 例外 |
 
-- 普通页面使用 store 页签；SFTP 使用独立窗口的 `#sftp?assetId=...` 入口，拆分出去的会话窗口使用 `#session?kind=...&tabId=...`，两者都不擅自迁移为另一套路由。
+- 普通页面使用 store 页签；SFTP 使用独立窗口的 `#sftp?assetId=...` 入口，拆分出去的会话窗口使用 `#window?gid=…`（一个窗口承载多条页签），两者都不擅自迁移为另一套路由。
 - SSH 实际使用主进程 ssh2 与渲染进程 xterm；VNC 使用主进程代理与 noVNC；不能把 `SessionManager` 的 SSH/VNC 占位适配器当作真实连接实现。
 - 重型会话组件通过异步 import 按需加载，不能为了读取常量反向引入整个视图或主进程模块。
 - `README.md` 可作背景参考，实现与其不一致时应核对代码；项目不再维护设计说明、路线图与交互原型，历史目标一律以当前代码为准，不得据此推断已实现功能。
@@ -106,12 +106,19 @@
 - 使用 `kind: 'asset'` 标识资产详情，协议页签使用协议 ID；不能仅靠 `assetId` 将会话误渲染成资产详情。
 - 保持稳定页签 ID、组件类型及 key；重复打开同一页签仅激活，不覆盖已存在连接状态。
 - 栏内拖动排序只经 `store.moveTab` 调整原页签对象顺序，首页保持首位，活动页签不变；保留溢出滚动、关闭确认和协议实例。
-- 会话页签（`protocols.js` 注册了 component 的 ssh/vnc/rdp）拖出栏外或经右键菜单可拆成独立窗口：`electron/main.js` 的 `detachedWindows` 是唯一权威状态，经 `session:detached` 广播后由 `store.applyDetached` 落到页签；资产详情、外置 RDP 和首页页签不可拆分，拖出保持原样取消。拖出过程中显示跟随光标的独立窗口轮廓预览（仅可拆分的会话页签）；拖拽松手由渲染端发 `fromDrag: true` 的 `session:detach`，主进程用 `screen.getCursorScreenPoint()` 实时光标裁决——光标在页签栏矩形内则返回 cancelled 不改宿主，否则以光标为中心创建窗口并 clamp 到所在显示器工作区（Chromium 在光标离开窗口后不再给出可靠坐标，判定必须留在主进程）；右键菜单拆分不带 `fromDrag`，保持默认摆位。
+- 会话页签（`protocols.js` 注册了 component 的 ssh/vnc/rdp）拖出栏外或经右键菜单可拆成独立窗口：`electron/main.js` 的 `detachedGroups` + `tabGroup` 是唯一权威状态，经 `session:detached` 落到主窗口的停放副本；资产详情、外置 RDP 和首页页签不可拆分，拖出保持原样取消。拖出过程中显示跟随光标的独立窗口轮廓预览（仅可拆分的会话页签）；拖拽松手由渲染端发 `fromDrag: true` 的 `session:detach`，主进程用 `screen.getCursorScreenPoint()` 实时光标裁决——光标在**起手窗口自己**的页签栏矩形内则返回 cancelled 不改宿主，否则以光标为中心创建窗口并 clamp 到所在显示器工作区（Chromium 在光标离开窗口后不再给出可靠坐标，判定必须留在主进程）；右键菜单拆分不带 `fromDrag`，保持默认摆位。
 - 拆分期间页签不在页签栏出现（`TabBar` 过滤 `detached`），活动页签随之交给邻近可见页签；不得改成“空白内容区 + 保留占位页签”。
-- 拆分只切换宿主窗口，不改变连接：SSH 在 `ssh:attach` 里转移 `ownerId` 并重放该会话的输出尾巴；VNC 与内置 RDP 的代理是单客户端的，拆分与合并都会重新握手，凭据已保存所以无需用户输入。
-- 独立窗口保留原生标题栏，移动、缩放和关闭都交给系统，不在渲染进程用鼠标位移驱动 `setPosition`（会与系统移动/缩放互相抖动）。合并回页签栏的唯一手势是拖动该窗口使光标停在页签栏上松开：主进程用 `move`/`moved` 事件配合 `session:tabbar-bounds` 报告的页签栏矩形做光标命中判定，跨窗口 HTML5 拖放不可依赖。命中期间 `session:drop-hint` 附带光标在页签栏内的相对 x（CSS px），`TabBar` 据此显示虚拟页签占位并经 `store.setDockTarget` 记录落位；drop-hint 的清除广播早于合并后的 `session:detached:false`，故 dockTarget 不随清除失效，只在 `applyDetached` 合并分支消费一次（经 `moveTab` 落到光标位置）。
-- 合并（拖回页签栏）必须先 `rehostToTabbar` 转移 SSH 所有权并发 `session:handover`，再等该窗口 `closed` 事件广播 `session:detached:false`，主窗口届时才新建视图实例；`closed` 的其他分支只广播 `session:closed`，由 `store.dropDetachedTab` 移除页签，VNC/RDP 代理由 `onEnd` 停止监听。两条路径不得混淆；主窗口不再主动关闭独立窗口（批量关闭只作用于页签栏内可见页签，见 `TabBar.onTabCtxSelect`）。
-- 独立窗口关闭前要弹与页签栏相同的“活动会话”确认：只有该窗口的视图知道连接状态，主进程在 `close` 里 `preventDefault` 并发 `session:confirm-close`，由 `SessionWindow` 用 `tab.closeConfirmMsg` 判断，确认后先 `ssh:disconnect` 再回 `session:close-answer`；页签侧 `store.closeTab` 同样在点击时就发起断开，不等视图销毁，否则连接会在无人管理的状态下继续运行。未加载完成、已标记 reason 或渲染进程已死时必须跳过确认，否则窗口将无法关闭。
+- 拆分只切换宿主窗口，不改变连接：SSH 在 `ssh:attach` 里转移 `ownerId` 并重放该会话的输出尾巴；VNC 与内置 RDP 的代理是单客户端的，拆分与合并都会重新握手，凭据已保存所以无需用户输入。握手途中被转走所有权也算正常交接：`ssh:connect` 返回后只有在发起方 webContents 已销毁时才收回这条连接，**不得**按"自己不再拥有它"断开，否则把一条连接中的页签搬去另一个窗口只会留下"已断开"（实测踩过）；渲染端自己丢弃结果时（重连、关页签）都按 `liveSessionId` 显式断开。
+- 独立窗口保留原生标题栏，移动、缩放和关闭都交给系统，不在渲染进程用鼠标位移驱动 `setPosition`（会与系统移动/缩放互相抖动）。独立窗口也是页签宿主：`electron/main.js` 用 `detachedGroups`（`groupId → {window, tabIds}`）+ `detachedTabs`（页签描述符）记录归属，路由 `#window?gid=…`，`SessionWindow` 拿 `session:group-tabs` 快照写进**本窗口自己的** `store.tabs` 并渲染 `TabBar scope="group"`，成员或顺序一变主进程就 `session:group` 重推；组内最后一个页签离开时窗口自动关闭（`closeGroupIfEmpty`）。页签跨窗口搬运只有一条原语 `session:tab-move`（`to:'host'` 就是收回主窗口），SSH 按页签 `liveSessionId` 转移所有权并给源窗口发 `session:handover`，VNC/RDP 由新宿主重新握手。
+- 跨窗口拖放必须抬层：Chromium 只把拖放交给光标下最上层的窗口，而光标必然落在起手的那个窗口里，所以 `dragstart` 经 `session:dock-prepare`（同时把页签描述符交给主进程）后，主进程以 90ms 轮询 `screen.getCursorScreenPoint()`，**只把光标正压在其页签栏上的那一个窗口** `moveTop()`（起手窗口自己的栏也算，回到自己栏就把自己抬回去）。不要在 `dragstart` 一次性抬起所有其他宿主窗口——那会让子窗口内部的排序被误投到主窗口（实测踩过）。只用 `moveTop`，不要 `setAlwaysOnTop`，否则拖完会把窗口压到其他应用下面。Wayland 拿不到全局光标，这条轮询不成立，需要另给不依赖拖放的入口。
+- 拖放结束时的落点分两种，别再合并写：`session:tab-move` 成功即 `restoreDockTargets(toWindow)`，**把接收方抬到最前并 `focus()`**（投放成功后用户要看的就是它），不再把起手窗口放回去；只有 `session:dock-abort`、源窗口 `closed` 或渲染进程死亡才停止轮询、把起手窗口抬回并还原焦点，同时广播 `session:dock-clear` 让所有宿主窗口收回落点提示。
+- 落点接受区必须等于上报的抬起判定矩形：`session:tabbar-bounds` 上报的是整条 `.tabbar-row`（含折叠与左右滚动按钮），所以 `dragover/dragleave/drop` 也要绑在 `.tabbar-row` 上——只绑 `.tabbar-wrap` 会出现"窗口被抬起来却看不到占位、松手也没反应"，而且独立窗口没有折叠按钮，同一个屏幕位置在两种窗口里一边有落点一边没有（实测踩过）。落点提示只由事件清除（离开这条栏、落位、`session:dock-clear`），不得加计时器过期：停下来瞄准间隙 Chromium 不再发 `dragover`，计时器会在松手前把提示吃掉。
+- 独立窗口里"复制会话"不得自己分配页签 id（id 由 `store.tabs` 推instance，只有主窗口看得见全量页签）：`session:tab-copy` → 主窗口 `openCopyForGroup` 用 `buildSessionTab` 建页签并**立刻标 `detached:true` 停放**（本窗口不显示、不挂载视图）→ 带 `groupId` 的 `session:detach` 交回原窗口，**连接由那个窗口的视图发起**，所以点下去立刻出现一条「连接中」的新页签，与主窗口同源。绝不在主窗口先连好再搬过去：那样那个窗口只会"过一会儿凭空冒出一条已连好的"，而且搬走一条还在握手的连接时主进程 `ssh:connect` 回来发现所有权已换窗口，会把这条刚建好的会话直接 `disconnect`（实测踩过）。交不出去时当场撤销这条停放页签。
+- 组快照到达时，新加入的那一条成为该窗口的当前页签（`applyGroupTabs`，复制和拖入都算，与浏览器一致）；原来的活动页签被搬走才退回第一枚。
+- 独立窗口的原生关闭按钮走一次确认，问法与主窗口批量关闭完全一致（`tab.closeBulkConfirmMsg` + `tab.closeConfirmTitle`）：还有 `connecting`/`ready` 页签就提示"有 N 个活动会话"，确认后答复 `confirmed:true` 由主进程关窗，全部会话随该窗口 webContents 一起释放；全空闲直接关。应用退出（`appQuitting`）、渲染进程已死或页面未就绪时必须跳过拦截，否则窗口与进程都退不掉。
+- 主窗口那份"停放副本"（`detached:true` 的页签对象）始终保留，用于收回落位、批量关闭与关闭确认；独立窗口回灌的连接状态走 `session:tab-state` → `applyTabState`，否则收回后小圆点与活动会话判定都是旧的。页签栏矩形上报 `session:tabbar-bounds` 按上报窗口分别存进 `tabbarRects`，只用于"拖出栏外"的落点裁决。
+- 合并（页签丢进主窗口页签栏）走 `session:tab-move` 的 `to:'host'` 分支 `dockToHost`：先按该页签的 `liveSessionId` 转移 SSH 所有权并向源窗口发 `session:handover`，再把页签从组里摘掉并回推组快照，最后广播 `session:detached:false`；主窗口在自己那次 drop 里用 `store.setDockTarget` 记下插入位置，收回广播到达时消费一次。源窗口被摘空时由 `closeGroupIfEmpty` 关闭；页签跟着窗口一起消失才走 `session:closed` → `store.dropDetachedTab`，VNC/RDP 代理由视图 `onEnd` 停止监听。两条路径不得混淆；主窗口不主动关闭独立窗口（批量关闭只作用于当前窗口页签栏里可见的页签，见 `TabBar.onTabCtxSelect`）。
+- 独立窗口的关闭确认只回答"关或不关"（见前面的关窗确认条目），渲染端不在那里逐个断会话：确认后留下的页签统一随该窗口 webContents 结束（主进程 `closeSshOwner`），单条页签的关闭仍由 `store.closeTab` 在点击时就发起断开，不等视图销毁。未加载完成、已标记 reason 或渲染进程已死时必须跳过拦截，否则窗口将无法关闭。
 - 会话切换用 `v-show` 保留实例，不改成切换时销毁的 `v-if`；移除页签才触发相应销毁清理。
 - 区分 UI 页签 ID 与主进程返回的实际连接 ID，事件和断开调用必须绑定正确会话。
 - connected 状态应反映实际连接；保留关闭确认，连接中关闭不能让晚返回结果创建无人管理的会话。

@@ -202,6 +202,15 @@ const api = {
   sessionDetach: (req) => ipcRenderer.invoke('session:detach', req),
   sessionCloseAnswer: (req) => ipcRenderer.invoke('session:close-answer', req),
   sessionTabbarBounds: (req) => ipcRenderer.invoke('session:tabbar-bounds', req),
+  sessionDockPrepare: (req) => ipcRenderer.invoke('session:dock-prepare', req),
+  sessionDockAbort: (req) => ipcRenderer.invoke('session:dock-abort', req),
+  sessionTabMove: (req) => ipcRenderer.invoke('session:tab-move', req),
+  sessionGroupTabs: (req) => ipcRenderer.invoke('session:group-tabs', req),
+  sessionGroupOrder: (req) => ipcRenderer.invoke('session:group-order', req),
+  sessionTabState: (req) => ipcRenderer.invoke('session:tab-state', req),
+  sessionTabCopy: (req) => ipcRenderer.invoke('session:tab-copy', req),
+  sessionTabClose: (req) => ipcRenderer.invoke('session:tab-close', req),
+  sessionTabActive: (req) => ipcRenderer.invoke('session:tab-active', req),
   onSessionConfirmClose: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('session:confirm-close', handler);
@@ -212,15 +221,30 @@ const api = {
     ipcRenderer.on('session:detached', handler);
     return () => ipcRenderer.removeListener('session:detached', handler);
   },
+  onSessionGroup: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:group', handler);
+    return () => ipcRenderer.removeListener('session:group', handler);
+  },
+  onSessionTabCopyRequest: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:tab-copy-request', handler);
+    return () => ipcRenderer.removeListener('session:tab-copy-request', handler);
+  },
+  onSessionTabState: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:tab-state', handler);
+    return () => ipcRenderer.removeListener('session:tab-state', handler);
+  },
+  onSessionDockClear: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:dock-clear', handler);
+    return () => ipcRenderer.removeListener('session:dock-clear', handler);
+  },
   onSessionClosed: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('session:closed', handler);
     return () => ipcRenderer.removeListener('session:closed', handler);
-  },
-  onSessionDropHint: (cb) => {
-    const handler = (_e, payload) => cb(payload);
-    ipcRenderer.on('session:drop-hint', handler);
-    return () => ipcRenderer.removeListener('session:drop-hint', handler);
   },
   onSessionHandover: (cb) => {
     const handler = (_e, payload) => cb(payload);

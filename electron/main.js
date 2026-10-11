@@ -258,7 +258,19 @@ async function switchDataPath(dir) {
   });
   return moved;
 }
-const detachedWindows = new Map(); // tabId -> { window, kind, reason }
+/**
+ * 会话页签的宿主模型：主窗口之外，每个独立窗口可以承载多个会话页签。
+ * groupId 只在主进程内有意义；页签归属查 groupOfTab，描述符查 detachedTabs，
+ * 二者合起来足够让任意窗口重建自己该显示哪些页签、按什么顺序。
+ */
+const detachedGroups = new Map(); // gid -> { id, window, tabIds, ready, confirming, dead, reason }
+const tabGroup = new Map(); // tabId -> gid
+const detachedTabs = new Map(); // tabId -> 页签描述符（跨窗口搬运与重建页签栏的唯一来源）
+/** 各窗口自己上报的页签栏矩形（页面 CSS px）；"拖出栏外"的落点裁决按上报方查表。 */
+const tabbarRects = new Map(); // webContents id -> { window, rect }
+let detachedGroupSeq = 0;
+/** 应用正在退出：独立窗口的关窗确认必须让路，否则带着活动会话的子窗口会把退出卡在确认上。 */
+let appQuitting = false;
 /** SFTP 面板是单实例窗口，多个远端会话作为面板内页签共存。 */
 let sftpPanel = null;
 /** 面板渲染层完成订阅后置位；此前到达的会话先排队，由 sftp:sessions-ready 一次交出。 */
@@ -312,10 +324,6 @@ async function resolveSftpInitialPath(sender, req, assetId) {
   }
 }
 
-/** Page-space rect of the main window's tab bar, resolved to screen px on each drop hit test. */
-let tabbarDropRect = null;
-/** Last drop-hint state, so we only broadcast when the highlight should change. */
-let dropHintActive = false;
 const sshPrompts = new SshPrompts();
 const sshOwners = new Set();
 const sshTests = new Map();
@@ -409,50 +417,132 @@ function sendToOwner(channel, payload, ownerId) {
   } catch (_) {}
 }
 
-/** Which window currently owns a session tab's view: its detached window, else the main window. */
-function sessionHostWindow(tabId) {
-  const entry = detachedWindows.get(tabId);
-  return entry && !entry.window.isDestroyed() ? entry.window : win;
+/** The detached group hosting a session tab, or null while it lives in the main window. */
+function groupOf(tabId) {
+  const group = detachedGroups.get(tabGroup.get(tabId));
+  return group && !group.window.isDestroyed() ? group : null;
 }
 
-function tabbarScreenRect() {
-  // A hidden or minimized main window has no visible drop target, even if its last rect is stale.
-  if (!tabbarDropRect || !win || win.isDestroyed() || win.isMinimized() || !win.isVisible()) return null;
-  const content = win.getContentBounds();
-  const zoom = win.webContents.isDestroyed() ? 1 : win.webContents.getZoomFactor();
+/** Which window hosts a session tab's view: its detached group window, else the main window. */
+function sessionHostWindow(tabId) {
+  const group = groupOf(tabId);
+  return group ? group.window : win;
+}
+
+/**
+ * A drag-detach resolves the release point from the live OS cursor here: Chromium delivers no
+ * usable coordinates once the pointer has left the window, but dragend still reaches the renderer.
+ * A release over the bar of the window the drag started from is a reorder/cancel, never a detach,
+ * and every host window has a bar now — so each window publishes its own rect and hit tests use it.
+ */
+function tabbarScreenRect(wcId) {
+  const held = tabbarRects.get(wcId);
+  if (!held) return null;
+  const w = held.window;
+  if (!w || w.isDestroyed() || w.isMinimized() || !w.isVisible()) return null;
+  const content = w.getContentBounds();
+  const zoom = w.webContents.isDestroyed() ? 1 : w.webContents.getZoomFactor();
+  const rect = held.rect;
   return {
-    x: content.x + Math.round(tabbarDropRect.x * zoom),
-    y: content.y + Math.round(tabbarDropRect.y * zoom),
-    width: Math.round(tabbarDropRect.width * zoom),
-    height: Math.round(tabbarDropRect.height * zoom),
+    x: content.x + Math.round(rect.x * zoom),
+    y: content.y + Math.round(rect.y * zoom),
+    width: Math.round(rect.width * zoom),
+    height: Math.round(rect.height * zoom),
   };
 }
 
 /**
- * While a detached window is dragged, the cursor — not the window rect — is the drop point.
- * Returns the cursor's x inside the tab bar in page CSS px (so the renderer can show the landing
- * slot), or null when the cursor is outside the bar.
+ * Chromium hands a drag to whichever window is on top under the cursor, so a bar can only accept a
+ * tab from another window while that window sits forward. Bringing *every* other host window forward
+ * at dragstart made in-window reordering drop onto whoever happened to cover the bar, so the drag
+ * instead polls the OS cursor and moves forward only the window whose bar the cursor is over — the
+ * bar it started from counts too, so pulling back re-localises the reorder. Only moveTop is used:
+ * toggling always-on-top would leave the window below the rest of the OS after the drag.
  */
-function tabbarDropX() {
-  const rect = tabbarScreenRect();
-  if (!rect) return null;
+const DOCK_POLL_MS = 90;
+let dockRaise = null;
+
+const hostWindows = () =>
+  [win, ...Array.from(detachedGroups.values()).map((group) => group.window)].filter((w) => w && !w.isDestroyed());
+
+const overBar = (w, point) => {
+  if (!w || w.isDestroyed() || w.webContents.isDestroyed()) return false;
+  const rect = tabbarScreenRect(w.webContents.id);
+  return !!rect && point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
+};
+
+function pollDockTarget() {
+  if (!dockRaise) return;
+  const source = dockRaise.source;
+  if (source.isDestroyed()) { restoreDockTargets(); return; }
   const point = screen.getCursorScreenPoint();
-  if (
-    point.x < rect.x ||
-    point.x > rect.x + rect.width ||
-    point.y < rect.y ||
-    point.y > rect.y + rect.height
-  ) {
-    return null;
-  }
-  const zoom = win.webContents.isDestroyed() ? 1 : win.webContents.getZoomFactor();
-  return (point.x - rect.x) / zoom;
+  const hit = overBar(source, point)
+    ? source
+    : hostWindows().find((w) => w !== source && overBar(w, point));
+  if (!hit || hit === dockRaise.forward) return;
+  hit.moveTop();
+  dockRaise.forward = hit;
 }
 
-function clearDropHint() {
-  if (!dropHintActive) return;
-  dropHintActive = false;
-  send('session:drop-hint', { tabId: null, active: false });
+function raiseDockTargets(source) {
+  if (dockRaise || !source) return;
+  if (hostWindows().length < 2) return;
+  dockRaise = { source, forward: null, focusBack: BrowserWindow.getFocusedWindow(), timer: setInterval(pollDockTarget, DOCK_POLL_MS) };
+}
+
+/** 把窗口提到最前并交给它焦点——投放成功后用户要看的正是接收方。 */
+function raiseWindow(w) {
+  if (!w || w.isDestroyed()) return;
+  if (w.isMinimized()) w.restore();
+  w.moveTop();
+  w.focus();
+}
+
+/** 拖放结束时所有宿主窗口都可能还留着落点提示，统一收回（源窗口没了就不会发 dragleave）。 */
+function clearDockGhosts() {
+  for (const w of hostWindows()) {
+    if (!w.webContents.isDestroyed()) w.webContents.send('session:dock-clear', {});
+  }
+}
+
+function restoreDockTargets(keepTop) {
+  if (!dockRaise) return;
+  const held = dockRaise;
+  dockRaise = null;
+  clearInterval(held.timer);
+  if (keepTop && !keepTop.isDestroyed()) {
+    raiseWindow(keepTop);
+    return;
+  }
+  if (held.source && !held.source.isDestroyed()) held.source.moveTop();
+  // 抬层不能把键盘从正在拖的窗口抢走。
+  const back = held.focusBack;
+  if (back && !back.isDestroyed() && !back.isFocused()) back.focus();
+}
+
+/** 主窗口可能正在关闭，回灌与广播都要先确认它还在。 */
+function sendToHost(channel, payload) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+  win.webContents.send(channel, payload);
+}
+
+/** Snapshot of one group's tabs, in bar order, for the window that hosts them. */
+function groupSnapshot(group) {
+  const tabs = group.tabIds.map((tabId) => detachedTabs.get(tabId)).filter(Boolean);
+  return { groupId: group.id, tabs: tabs.map((tab) => ({ ...tab })) };
+}
+
+function sendGroup(group) {
+  if (!group || group.window.isDestroyed()) return;
+  group.window.webContents.send('session:group', groupSnapshot(group));
+}
+
+function sendHostTabState(tab) {
+  sendToHost('session:tab-state', {
+    tabId: tab.id,
+    connState: tab.connState,
+    liveSessionId: tab.liveSessionId,
+  });
 }
 
 function showMainWindow() {
@@ -991,7 +1081,12 @@ function registerIpc() {
       method: { id: 'ssh', port: method.port || 22, advanced: method.advanced },
       cols: req.cols, rows: req.rows,
     });
-    if (sender.isDestroyed() || !sshSessions.owns(result.sessionId, sender.id)) {
+    /**
+     * 只有发起方窗口已经没了才收回这条连接：那时没人接手。所有权在握手中被 `ssh:attach` 转走
+     * 是正常交接（页签被搬到另一个窗口），不能当成取消——否则刚接手的窗口只会拿到一条已断开的会话。
+     * 渲染端自己丢弃结果时（重连、关页签）都按 liveSessionId 显式断开，不需要这里兜底。
+     */
+    if (sender.isDestroyed()) {
       sshSessions.disconnect(result.sessionId);
       throw Object.assign(new Error('SSH connection canceled'), { code: 'SSH_CANCELED' });
     }
@@ -1166,7 +1261,7 @@ function registerIpc() {
     const cols = Number(req.cols), rows = Number(req.rows);
     sshSessions.resize(sid, cols, rows);
     const tail = sshSessions.tail(sid);
-    logger.info('ssh', 'ssh session re-hosted', { sessionId: sid, tabId, detached: detachedWindows.has(tabId), tailChunks: tail.chunks.length });
+    logger.info('ssh', 'ssh session re-hosted', { sessionId: sid, tabId, detached: groupOf(tabId) !== null, tailChunks: tail.chunks.length });
     return { ok: true, sessionId: sid, ready: tail.ready, tail: tail.chunks };
   }, true);
 
@@ -1232,62 +1327,86 @@ function registerIpc() {
     }
   };
 
-  handle('session:detach', async (sender, req) => {
-    if (BrowserWindow.fromWebContents(sender) !== win) {
-      throw Object.assign(new Error('Untrusted detach request'), { code: 'SSH_OWNER' });
-    }
-    const tabId = req && req.tabId;
+  /**
+   * 页签描述符是跨窗口搬运的唯一载体：只认白名单字段，其余一概不收。
+   * liveSessionId / connState 由宿主窗口通过 session:tab-state 现报现存。
+   */
+  const readTab = (req) => {
+    const id = String((req && req.id) || '');
     const kind = String((req && req.kind) || '');
-    if (typeof tabId !== 'string' || !tabId) throw new Error('tabId required');
-    if (!DETACHABLE_KINDS.includes(kind)) {
-      throw Object.assign(new Error('Session kind cannot be detached'), { code: 'DETACH_KIND' });
+    if (!id || !DETACHABLE_KINDS.includes(kind)) {
+      throw Object.assign(new Error('Not a detachable session tab'), { code: 'DETACH_KIND' });
     }
-    const existing = detachedWindows.get(tabId);
-    if (existing && existing.window && !existing.window.isDestroyed()) {
-      existing.window.focus();
-      return { ok: true, reused: true };
-    }
-    const assetId = String(req.assetId || '');
-    const host = String(req.host || '');
-    const port = req.port === undefined || req.port === null ? '' : String(req.port);
-    const title = String(req.title || host || assetId);
-    const parts = [
-      'kind=' + kind,
-      'tabId=' + encodeURIComponent(tabId),
-      'assetId=' + encodeURIComponent(assetId),
-      'methodId=' + encodeURIComponent(String(req.methodId || kind)),
-      'host=' + encodeURIComponent(host),
-      'port=' + encodeURIComponent(port),
-      'name=' + encodeURIComponent(title),
-    ];
-    if (kind === 'ssh' && req.liveSessionId) parts.push('sid=' + encodeURIComponent(String(req.liveSessionId)));
+    return {
+      id,
+      kind,
+      title: String(req.title || ''),
+      icon: String(req.icon || ''),
+      os: String(req.os || ''),
+      assetId: String(req.assetId || ''),
+      methodId: String(req.methodId || kind),
+      host: String(req.host || ''),
+      port: req.port === undefined || req.port === null ? '' : String(req.port),
+      connState: String(req.connState || 'idle'),
+      liveSessionId: req.liveSessionId ? String(req.liveSessionId) : null,
+    };
+  };
 
-    // A drag-detach resolves the release point from the live OS cursor here: Chromium delivers no
-    // usable coordinates once the pointer has left the window, but dragend still reaches the
-    // renderer. A release over the tab bar row is a reorder/cancel gesture, never a detach.
-    let dropAt = null;
-    let dropArea = null;
-    if (req && req.fromDrag) {
-      const point = screen.getCursorScreenPoint();
-      const bar = tabbarScreenRect();
-      const overBar =
-        bar &&
-        point.x >= bar.x &&
-        point.x <= bar.x + bar.width &&
-        point.y >= bar.y &&
-        point.y <= bar.y + bar.height;
-      if (overBar) return { ok: true, cancelled: true };
-      dropAt = point;
-      // getDisplayMatching requires a full rect (x/y/width/height) in Electron 33.
-      dropArea = screen.getDisplayMatching({ x: point.x, y: point.y, width: 1, height: 1 }).workArea;
+  const senderGroup = (sender) => {
+    for (const group of detachedGroups.values()) {
+      if (!group.window.isDestroyed() && group.window.webContents === sender) return group;
     }
-    const { width: detachedW, height: detachedH } = sizedToWorkArea(0.55, 0.65, 900, 560, dropArea);
-    const detachedOptions = {
-      width: detachedW,
-      height: detachedH,
+    return null;
+  };
+
+  /** 独立窗口为空即关闭；页签全部搬走后不留空壳，和浏览器一致。 */
+  function closeGroupIfEmpty(group) {
+    if (!group || group.tabIds.length || group.window.isDestroyed()) return;
+    group.reason = 'emptied';
+    group.window.close();
+  }
+
+  /** SSH 连接跟着页签走：换宿主只转移该页签那条会话的所有权，其余会话不受影响。 */
+  function handoverTab(tab, fromWindow, toWindow) {
+    const sid = tab.kind === 'ssh' ? tab.liveSessionId : null;
+    if (sid && sshSessions && sshSessions.sessions.has(sid)) {
+      sshSessions.transferOwner(sid, toWindow.webContents.id);
+    }
+    if (fromWindow && !fromWindow.isDestroyed() && fromWindow !== toWindow) {
+      // 交出的那一侧销毁视图时必须不断开连接，VNC/RDP 由新宿主重新握手。
+      fromWindow.webContents.send('session:handover', { tabId: tab.id });
+    }
+    return sid;
+  }
+
+  /**
+   * 页签回到主窗口页签栏。落点位置由主窗口自己在 drop 时记下（store.setDockTarget），
+   * 收回广播到达时消费一次；主窗口不需要主进程再告诉它顺序。
+   */
+  function dockToHost(tabId) {
+    const tab = detachedTabs.get(tabId);
+    if (!tab) throw Object.assign(new Error('Unknown session tab'), { code: 'DOCK_TAB' });
+    const group = groupOf(tabId);
+    if (!group) return { ok: true, same: true };
+    const sid = handoverTab(tab, group.window, win);
+    group.tabIds = group.tabIds.filter((id) => id !== tabId);
+    tabGroup.delete(tabId);
+    detachedTabs.delete(tabId);
+    sendGroup(group);
+    closeGroupIfEmpty(group);
+    sendToHost('session:detached', { tabId, detached: false });
+    logger.info('session', 'session tab rehosted to host window', { tabId, kind: tab.kind, sessionId: sid || '' });
+    return { ok: true };
+  }
+
+  async function createGroup(tab, dropAt, dropArea) {
+    const { width, height } = sizedToWorkArea(0.55, 0.65, 900, 560, dropArea);
+    const options = {
+      width,
+      height,
       minWidth: 520,
       minHeight: 320,
-      title,
+      title: tab.title || tab.host || tab.id,
       autoHideMenuBar: true,
       backgroundColor: '#0f1419',
       icon: path.join(__dirname, 'assets', 'icon.png'),
@@ -1298,149 +1417,316 @@ function registerIpc() {
         sandbox: false,
       },
     };
-    if (dropAt) {
-      detachedOptions.x = Math.max(dropArea.x, Math.min(dropAt.x - detachedW / 2, dropArea.x + dropArea.width - detachedW));
-      detachedOptions.y = Math.max(dropArea.y, Math.min(dropAt.y - detachedH / 2, dropArea.y + dropArea.height - detachedH));
+    if (dropAt && dropArea) {
+      options.x = Math.max(dropArea.x, Math.min(dropAt.x - width / 2, dropArea.x + dropArea.width - width));
+      options.y = Math.max(dropArea.y, Math.min(dropAt.y - height / 2, dropArea.y + dropArea.height - height));
     }
-    const detached = new BrowserWindow(detachedOptions);
-    const entry = { window: detached, kind };
-    detachedWindows.set(tabId, entry);
+    const gid = 'w' + (++detachedGroupSeq);
+    const group = { id: gid, window: new BrowserWindow(options), tabIds: [tab.id], ready: false, confirming: false, dead: false, reason: '' };
+    detachedGroups.set(gid, group);
+    tabGroup.set(tab.id, gid);
+    detachedTabs.set(tab.id, tab);
+
+    const detached = group.window;
+    const wcId = detached.webContents.id;
     detached.on('page-title-updated', (e) => {
       e.preventDefault();
     });
     detached.on('closed', () => {
-      const current = detachedWindows.get(tabId);
-      // Only this window's own registration; a retry may already have installed a newer one.
-      if (!current || current.window !== detached) return;
-      detachedWindows.delete(tabId);
-      clearDropHint();
-      logger.info('session', 'detached window closed', { tabId, kind, reason: current.reason || 'window' });
-      // Only dragging the window back onto the tab bar re-hosts it; any other close ends the session.
-      if (current.reason === 'merge') send('session:detached', { tabId, detached: false });
-      else {
+      if (detachedGroups.get(gid) !== group) return;
+      detachedGroups.delete(gid);
+      // closed 之后 webContents 已经没了，只能用创建时记下的 id 摘掉它上报的页签栏矩形。
+      tabbarRects.delete(wcId);
+      restoreDockTargets();
+      clearDockGhosts();
+      // 还留在这里的页签是跟着窗口一起没的；搬走的页签早已从 tabIds 里摘掉。
+      for (const tabId of group.tabIds) {
+        tabGroup.delete(tabId);
+        detachedTabs.delete(tabId);
         monitorUi.delete(tabId);
-        send('session:closed', { tabId });
+        sendToHost('session:closed', { tabId });
       }
+      logger.info('session', 'detached window closed', { groupId: gid, reason: group.reason || 'window', tabs: group.tabIds.length });
     });
     /**
-     * Closing this window ends the session, so it asks first with the same prompt the tab bar
-     * shows. Only that window knows whether it still holds a live connection, so the decision
-     * comes back over IPC instead of being guessed here. Until its page has loaded there is
-     * nothing to confirm, and the prompt must not make that window unclosable.
+     * 关窗先问该窗口：只有它知道每个页签的连接状态，所以拦截 close 并把页签清单交给页面答复；
+     * 页面确认后由这里真关，留下的会话随该窗口 webContents 一起释放。
+     * 渲染进程已死、尚未就绪或应用正在退出时不能弹这个确认，否则窗口永远关不掉。
      */
     detached.on('close', (e) => {
-      if (!entry.ready || entry.reason || entry.confirming || entry.dead) return;
+      if (!group.ready || group.reason || group.confirming || group.dead || appQuitting) return;
       e.preventDefault();
-      entry.confirming = true;
-      detached.webContents.send('session:confirm-close', { tabId });
+      group.confirming = true;
+      detached.webContents.send('session:confirm-close', { tabIds: group.tabIds.slice() });
     });
     detached.webContents.on('render-process-gone', () => {
-      // A dead renderer can never answer, so its window must stay closable.
-      entry.dead = true;
-    });
-    /**
-     * The native title bar moves the window, so the merge-back gesture is detected here: the tab
-     * bar highlights while the cursor is over it and releasing there re-hosts the session, while
-     * the frame's own close button ends the session.
-     */
-    detached.on('move', () => {
-      const x = tabbarDropX();
-      if (x === null) {
-        clearDropHint();
-        return;
-      }
-      dropHintActive = true;
-      send('session:drop-hint', { tabId, active: true, x: Math.round(x) });
-    });
-    detached.on('moved', () => {
-      if (!dropHintActive) return;
-      clearDropHint();
-      rehostToTabbar(tabId);
+      // 渲染进程死了就没人能答复关闭确认，也没人能报告拖放结束，三件事都在这里收尾。
+      group.dead = true;
+      restoreDockTargets();
+      clearDockGhosts();
     });
     try {
-      await loadSessionRoute(detached, 'session?' + parts.join('&'));
+      await loadSessionRoute(detached, 'window?gid=' + gid);
     } catch (e) {
-      detachedWindows.delete(tabId);
+      detachedGroups.delete(gid);
+      tabGroup.delete(tab.id);
+      detachedTabs.delete(tab.id);
       if (!detached.isDestroyed()) detached.destroy();
-      logger.error('session', 'detach window load failed', { tabId, kind, message: e.message, code: e.code });
+      logger.error('session', 'detach window load failed', { groupId: gid, tabId: tab.id, message: e.message, code: e.code });
       throw e;
     }
-    entry.ready = true;
-    send('session:detached', { tabId, detached: true });
-    logger.info('session', 'session detached into its own window', { tabId, kind, host, port });
-    return { ok: true, reused: false };
+    group.ready = true;
+    return group;
+  }
+
+  /**
+   * 拖出栏外＝把页签交给新建的独立窗口。请求方可以是主窗口，也可以是某个独立窗口
+   * （从它的页签栏再拆出去），所以只校验"请求方当前确实持有这个页签"。
+   */
+  handle('session:detach', async (sender, req) => {
+    const fromWindow = BrowserWindow.fromWebContents(sender);
+    if (!fromWindow) throw Object.assign(new Error('Untrusted detach request'), { code: 'SSH_OWNER' });
+    const tab = readTab(req && req.tab);
+    const ownGroup = senderGroup(sender);
+    if (ownGroup && !ownGroup.tabIds.includes(tab.id)) {
+      // 这个窗口已经不再持有它了（刚被别的窗口接走）：想要的结果已经成立，不再报错。
+      return { ok: true, cancelled: true };
+    }
+    if (!ownGroup) {
+      const existing = groupOf(tab.id);
+      if (existing) {
+        existing.window.focus();
+        return { ok: true, reused: true };
+      }
+    }
+
+    let dropAt = null;
+    let dropArea = null;
+    if (req && req.fromDrag) {
+      const point = screen.getCursorScreenPoint();
+      const bar = tabbarScreenRect(sender.id);
+      const overOwnBar =
+        bar &&
+        point.x >= bar.x &&
+        point.x <= bar.x + bar.width &&
+        point.y >= bar.y &&
+        point.y <= bar.y + bar.height;
+      if (overOwnBar) return { ok: true, cancelled: true };
+      dropAt = point;
+      // getDisplayMatching requires a full rect (x/y/width/height) in Electron 33.
+      dropArea = screen.getDisplayMatching({ x: point.x, y: point.y, width: 1, height: 1 }).workArea;
+    }
+
+    const dropInto = req && req.groupId ? String(req.groupId) : '';
+    const group = dropInto
+      ? detachedGroups.get(dropInto)
+      : await createGroup(tab, dropAt, dropArea);
+    if (dropInto && (!group || group.window.isDestroyed())) {
+      throw Object.assign(new Error('Unknown target group'), { code: 'SSH_OWNER' });
+    }
+    if (ownGroup) {
+      ownGroup.tabIds = ownGroup.tabIds.filter((id) => id !== tab.id);
+      // createGroup 已经把这条页签记到新组名下了，只有归属还指向旧组时才需要摘掉。
+      if (tabGroup.get(tab.id) === ownGroup.id) tabGroup.delete(tab.id);
+      sendGroup(ownGroup);
+      closeGroupIfEmpty(ownGroup);
+    }
+    if (dropInto) {
+      const at = req.beforeTabId ? group.tabIds.indexOf(String(req.beforeTabId)) : -1;
+      if (at >= 0) group.tabIds.splice(at, 0, tab.id);
+      else group.tabIds.push(tab.id);
+      tabGroup.set(tab.id, group.id);
+      detachedTabs.set(tab.id, tab);
+      sendGroup(group);
+    }
+    if (!ownGroup) sendToHost('session:detached', { tabId: tab.id, detached: true });
+    logger.info('session', 'session tab handed to a detached window', {
+      groupId: group.id, tabId: tab.id, kind: tab.kind, host: tab.host, port: tab.port, from: ownGroup ? ownGroup.id : 'host',
+    });
+    return { ok: true, reused: false, groupId: group.id };
+  }, true);
+
+  /** 独立窗口启动时领取自己该显示哪些页签；主窗口不需要（它持有全量 store.tabs）。 */
+  handle('session:group-tabs', (sender, req) => {
+    const group = senderGroup(sender);
+    if (!group || String((req && req.groupId) || '') !== group.id) {
+      throw Object.assign(new Error('No group for this window'), { code: 'SSH_OWNER' });
+    }
+    return groupSnapshot(group);
+  }, true);
+
+  /** 独立窗口内部重排：顺序只有主进程记着才在下一次搬入时不跑偏。 */
+  handle('session:group-order', (sender, req) => {
+    const group = senderGroup(sender);
+    if (!group) throw Object.assign(new Error('Not a detached window'), { code: 'SSH_OWNER' });
+    const ids = Array.isArray(req && req.tabIds) ? req.tabIds.map(String) : [];
+    if (ids.length !== group.tabIds.length || ids.some((id) => !group.tabIds.includes(id))) return { ok: false };
+    group.tabIds = ids;
+    return { ok: true };
   }, true);
 
   /**
-   * Hand hosting back to the main window before the detached window tears down. SSH must be
-   * re-owned synchronously here: that window's destroy would otherwise close its owner sessions
-   * before the main window gets a chance to re-attach. The host only learns the session is back
-   * from the window's closed event, so VNC/RDP reconnect starts once that renderer, and with it
-   * the old proxy client, is gone.
+   * 连接状态与实际会话 id 只存在于当前宿主窗口。回灌给主进程缓存，再转给主窗口那份副本，
+   * 否则页签收回后小圆点是旧的、关闭确认也会判错。
    */
-  function rehostToTabbar(tabId) {
-    const entry = detachedWindows.get(tabId);
-    if (!entry || entry.reason || entry.window.isDestroyed()) return;
-    entry.reason = 'merge';
-    const host = entry.window;
-    const detachedId = host.webContents.id;
-    const transferred = [];
-    for (const sid of sshSessions.sessions.keys()) {
-      if (sshSessions.owns(sid, detachedId) && sshSessions.transferOwner(sid, win.webContents.id)) transferred.push(sid);
-    }
-    // Tell that window to keep its session alive while it tears down.
-    host.webContents.send('session:handover', { tabId });
-    clearDropHint();
-    host.close();
-    logger.info('session', 'session reattached to tab bar', { tabId, kind: entry.kind, sessionIds: transferred });
-  }
-
-  const detachedSenderWindow = (sender) => {
-    for (const [tabId, entry] of detachedWindows) {
-      if (!entry.window.isDestroyed() && entry.window.webContents === sender) return { tabId, entry };
-    }
-    return null;
-  };
+  handle('session:tab-state', (sender, req) => {
+    const tabId = String((req && req.tabId) || '');
+    const group = senderGroup(sender);
+    const cached = detachedTabs.get(tabId);
+    // 状态回灌是 fire-and-forget：页签刚被别的窗口接走时这条会晚到，静默丢弃即可。
+    if (!group || !cached || !group.tabIds.includes(tabId)) return { ok: false };
+    const connState = String(req.connState || 'idle');
+    cached.connState = ['connecting', 'ready', 'error', 'idle'].includes(connState) ? connState : 'idle';
+    if (req.liveSessionId !== undefined) cached.liveSessionId = req.liveSessionId ? String(req.liveSessionId) : null;
+    sendHostTabState(cached);
+    return { ok: true };
+  }, true);
 
   /**
-   * The detached window's own answer to its close prompt. Confirming only closes the window: the
-   * session goes with its host webContents, exactly like closing the tab in the main window.
+   * 独立窗口里的"复制会话"：页签 id 只能由主窗口分配（它看得见全部页签，含停放的那些），
+   * 主进程只把请求转给它。主窗口建好这条页签后立刻按 groupId 交回本窗口，连接由本窗口的视图发起，
+   * 所以点下去就能看到一条「连接中」的新页签，和在主窗口里复制一模一样。
    */
+  handle('session:tab-copy', (sender, req) => {
+    const group = senderGroup(sender);
+    const tabId = String((req && req.tabId) || '');
+    const source = detachedTabs.get(tabId);
+    if (!group || !group.tabIds.includes(tabId) || !source) {
+      throw Object.assign(new Error('This window does not host that tab'), { code: 'SSH_OWNER' });
+    }
+    sendToHost('session:tab-copy-request', { tab: { ...source }, groupId: group.id });
+    logger.info('session', 'session copy requested', { groupId: group.id, tabId, kind: source.kind });
+    return { ok: true };
+  }, true);
+
+  /** 独立窗口里关掉一个页签：会话随该窗口的 webContents 结束，主窗口那份副本也要删除。 */
+  handle('session:tab-close', (sender, req) => {
+    const group = senderGroup(sender);
+    const tabId = String((req && req.tabId) || '');
+    // 页签刚被别的窗口接走时这条会晚到，重复关闭按已完成处理。
+    if (!group || !group.tabIds.includes(tabId)) return { ok: true, same: true };
+    group.tabIds = group.tabIds.filter((id) => id !== tabId);
+    tabGroup.delete(tabId);
+    detachedTabs.delete(tabId);
+    monitorUi.delete(tabId);
+    sendGroup(group);
+    sendToHost('session:closed', { tabId });
+    closeGroupIfEmpty(group);
+    logger.info('session', 'session tab closed inside a detached window', { groupId: group.id, tabId });
+    return { ok: true };
+  }, true);
+
+  /** 活动页签决定独立窗口的标题，和浏览器一样跟着切。 */
+  handle('session:tab-active', (sender, req) => {
+    const group = senderGroup(sender);
+    const tab = detachedTabs.get(String((req && req.tabId) || ''));
+    if (!group || !tab || !group.tabIds.includes(tab.id)) return { ok: false };
+    if (!group.window.isDestroyed()) group.window.setTitle(tab.title || tab.host || tab.id);
+    return { ok: true };
+  }, true);
+
+  /** 该窗口的答复：confirmed 为真才真关；页面取消确认时只解除这次拦截。 */
   handle('session:close-answer', (sender, req) => {
-    const owner = detachedSenderWindow(sender);
-    if (!owner) throw Object.assign(new Error('Not a detached window'), { code: 'SSH_OWNER' });
-    const entry = owner.entry;
-    if (!entry.confirming) return { ok: true, closed: false };
-    entry.confirming = false;
+    const group = senderGroup(sender);
+    if (!group) throw Object.assign(new Error('Not a detached window'), { code: 'SSH_OWNER' });
+    if (!group.confirming) return { ok: true, closed: false };
+    group.confirming = false;
     if (req && req.confirmed === true) {
-      entry.reason = 'window';
-      entry.window.close();
-      logger.info('session', 'detached window closed after confirm', { tabId: owner.tabId, kind: entry.kind });
+      group.reason = 'window';
+      group.window.close();
+      logger.info('session', 'detached window closed after confirm', { groupId: group.id, tabs: group.tabIds.length });
       return { ok: true, closed: true };
     }
-    logger.info('session', 'detached window close cancelled', { tabId: owner.tabId, kind: entry.kind });
+    logger.info('session', 'detached window close refused', { groupId: group.id, live: (req && req.liveCount) || 0 });
     return { ok: true, closed: false };
   }, true);
 
-  /** Main window publishes its tab bar rect so a dragged detached window can hit-test it. */
+  /** 每个宿主窗口都上报自己的页签栏矩形，"拖出栏外"只跟自己那条栏比。 */
   handle('session:tabbar-bounds', (sender, req) => {
-    if (!win || win.isDestroyed() || win.webContents !== sender) {
+    const w = BrowserWindow.fromWebContents(sender);
+    if (!w || (w !== win && !senderGroup(sender))) {
       throw Object.assign(new Error('Untrusted tab bar bounds'), { code: 'SSH_OWNER' });
     }
     const width = Number(req && req.width);
     const height = Number(req && req.height);
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-      tabbarDropRect = null;
+      tabbarRects.delete(sender.id);
       return { ok: true };
     }
-    // Page CSS px map 1:1 to screen px at zoom 1; the window offset is resolved on every hit test
-    // so moving the main window mid-drag does not stale the target.
-    tabbarDropRect = {
-      x: Math.round(Number(req.x || 0)),
-      y: Math.round(Number(req.y || 0)),
-      width: Math.round(width),
-      height: Math.round(height),
-    };
+    // 页面 CSS px 在缩放 1 时与屏幕 px 一比一；窗口偏移每次命中判定现取，搬动主窗口不会让落点过期。
+    tabbarRects.set(sender.id, {
+      window: w,
+      rect: {
+        x: Math.round(Number(req.x || 0)),
+        y: Math.round(Number(req.y || 0)),
+        width: Math.round(width),
+        height: Math.round(height),
+      },
+    });
+    return { ok: true };
+  }, true);
+
+  /**
+   * 页签拖放是唯一搬运入口：源窗口 dragstart 时交来描述符并抬起其他宿主窗口，
+   * 目标窗口 drop 时发 tab-move，Chromium 才会把拖放判给它。
+   */
+  handle('session:dock-prepare', (sender, req) => {
+    const fromWindow = BrowserWindow.fromWebContents(sender);
+    if (!fromWindow) throw Object.assign(new Error('Untrusted dock request'), { code: 'SSH_OWNER' });
+    const tab = readTab(req && req.tab);
+    const group = senderGroup(sender);
+    if (group && !group.tabIds.includes(tab.id)) {
+      throw Object.assign(new Error('This window does not host that tab'), { code: 'SSH_OWNER' });
+    }
+    // 目标窗口只有描述符就能重建页签；宿主关系不变，取消拖放也不会留下任何痕迹。
+    detachedTabs.set(tab.id, { ...(detachedTabs.get(tab.id) || {}), ...tab });
+    raiseDockTargets(fromWindow);
+    return { ok: true };
+  }, true);
+
+  handle('session:dock-abort', (sender) => {
+    // 只有起手那个窗口的 dragend 才有权收回这次抬层。
+    if (dockRaise && dockRaise.source === BrowserWindow.fromWebContents(sender)) {
+      restoreDockTargets();
+      clearDockGhosts();
+    }
+    // 描述符不在这里清：源窗口的 dragend 可能早于目标窗口的 drop 到达，清了会把一次正常投放
+    // 误判成"未知页签"。它只会被下一次同 id 的 prepare 覆盖，留着不影响任何判定。
+    return { ok: true };
+  }, true);
+
+  /** 落点在哪个窗口，哪个窗口来报；主窗口收到就是收回，独立窗口收到就是换宿主。 */
+  handle('session:tab-move', (sender, req) => {
+    const toWindow = req && req.to === 'host' ? win : BrowserWindow.fromWebContents(sender);
+    // 投放成功就到此为止：停止轮询、把接收方抬到最前并交给它焦点，而不是把起手窗口放回去。
+    restoreDockTargets(toWindow);
+    const tabId = String((req && req.tabId) || '');
+    const tab = detachedTabs.get(tabId);
+    if (!toWindow || toWindow.isDestroyed()) throw Object.assign(new Error('Unknown target window'), { code: 'SSH_OWNER' });
+    if (!tab) throw Object.assign(new Error('Unknown session tab'), { code: 'DOCK_TAB' });
+    if (toWindow === win) return dockToHost(tabId);
+    const toGroup = senderGroup(sender);
+    if (!toGroup) throw Object.assign(new Error('Unknown target window'), { code: 'SSH_OWNER' });
+    const fromGroup = groupOf(tabId);
+    if (fromGroup === toGroup) return { ok: true, same: true };
+    if (fromGroup) {
+      handoverTab(tab, fromGroup.window, toWindow);
+      fromGroup.tabIds = fromGroup.tabIds.filter((id) => id !== tabId);
+      sendGroup(fromGroup);
+      closeGroupIfEmpty(fromGroup);
+    } else {
+      // 从主窗口页签栏拖进来：主窗口那份副本要标成已拆出，否则同一条页签会出现在两处。
+      handoverTab(tab, win, toWindow);
+      sendToHost('session:detached', { tabId, detached: true });
+    }
+    const at = req && req.beforeTabId ? toGroup.tabIds.indexOf(String(req.beforeTabId)) : -1;
+    if (at >= 0) toGroup.tabIds.splice(at, 0, tabId);
+    else toGroup.tabIds.push(tabId);
+    tabGroup.set(tabId, toGroup.id);
+    sendGroup(toGroup);
+    logger.info('session', 'session tab moved between windows', {
+      tabId, kind: tab.kind, from: fromGroup ? fromGroup.id : 'host', to: toGroup.id,
+    });
     return { ok: true };
   }, true);
 
@@ -1775,6 +2061,8 @@ app.whenReady().then(() => {
 
 app.on('before-quit', (e) => {
   // before-quit fires for both tray-initiated quit AND programmatic quit.
+  // 独立窗口的关窗拦截在这里让路，否则带着活动会话的子窗口会把退出卡在确认上。
+  appQuitting = true;
   // Clean up sessions always. Tray cleanup must happen so macOS doesn't leak it.
   resetAuthCache();
   if (store) store.flushPersist();
