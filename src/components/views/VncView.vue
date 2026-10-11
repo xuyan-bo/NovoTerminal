@@ -149,6 +149,8 @@ export default {
         const method = asset && asset.asset && asset.asset.methods && asset.asset.methods[this.methodId];
         const advPassword = (method && method.advanced && method.advanced.password) || '';
         const password = advPassword || (asset && asset.asset && asset.asset.pass) || '';
+        // RA2ne/ARD/MSLogonII 这几类安全类型必须带用户名，标准 VNC 认证会忽略它
+        const username = (asset && asset.asset && asset.asset.user) || '';
 
         const r = unwrap(
           await api.vncConnect({
@@ -189,7 +191,7 @@ export default {
 
         const isFit = !r.scale || r.scale === 'fit';
         const rfb = new RFB(screenEl, r.wsUrl, {
-          credentials: { password },
+          credentials: { username, password },
           wsProtocols: ['binary'],
           shared: r.shared !== false,
         });
@@ -233,7 +235,7 @@ export default {
         });
 
         rfb.addEventListener('credentialsrequired', () => {
-          rfb.sendCredentials({ password });
+          rfb.sendCredentials({ username, password });
         });
 
         this.rfb = rfb;

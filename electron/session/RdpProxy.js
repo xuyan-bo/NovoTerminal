@@ -367,7 +367,8 @@ function tryRDPHandshake(host, port, x224Request, tls12only) {
       tcpSocket.setTimeout(0);
       const tlsOpts = {
         socket: tcpSocket,
-        servername: host,
+        // RDP 不使用 SNI，mstsc 也不发；带上主机名会让按名字拒绝的对端直接重置握手
+        servername: '',
         rejectUnauthorized: false, // RDP servers use self-signed certs
       };
       if (tls12only) {

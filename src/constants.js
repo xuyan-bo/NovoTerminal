@@ -168,7 +168,7 @@ export const ADVANCED_FIELDS = {
       engines: ['external', 'ironrdp'],
       clients: ['mstsc', 'xfreerdp', 'wfreerdp'],
       options: [
-        { value: 'auto', labelKey: 'adv.rdp.resolution.auto', externalLabelKey: 'adv.rdp.resolution.system' },
+        { value: 'auto', labelKey: 'adv.rdp.resolution.auto' },
         { value: '1024x768', label: '1024 × 768' },
         { value: '1280x800', label: '1280 × 800' },
         { value: '1366x768', label: '1366 × 768' },
@@ -215,7 +215,7 @@ export const ADVANCED_FIELDS = {
       clients: ['mstsc'],
     },
     { key: 'adminSession', type: 'switch', labelKey: 'adv.rdp.adminSession', engines: ['external'], clients: ['mstsc', 'xfreerdp', 'wfreerdp'] },
-    // IronRDP-WASM 引擎专属能力；xfreerdp/wfreerdp 通过 /sec:rdp 亦可关闭 NLA 协商
+    // IronRDP-WASM 引擎专属能力；xfreerdp/wfreerdp 通过 /sec:nla:off 单独关掉 NLA
     { key: 'nla', type: 'switch', labelKey: 'adv.rdp.nla', engines: ['ironrdp', 'external'], clients: ['xfreerdp', 'wfreerdp'] },
   ],
   ssh: [
@@ -339,9 +339,6 @@ export const ADVANCED_FIELDS = {
     },
   ],
 };
-
-/** 表单顶部说明：该方式的凭据/认证由谁提供 */
-export const ADVANCED_NOTES = { sftp: 'adv.sftp.authNote' };
 
 export function advancedKey(methodId) {
   const id = String(methodId || '').toLowerCase();

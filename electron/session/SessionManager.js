@@ -22,7 +22,7 @@ class SessionManager {
       }
     };
     this.rdpAdapters = {
-      mstsc: new RdpWindowsMstscAdapter(onRdpEvent),
+      mstsc: new RdpWindowsMstscAdapter(onRdpEvent, log),
       xfreerdp: new RdpXfreerdpAdapter(onRdpEvent),
       wfreerdp: new RdpWfreerdpAdapter(onRdpEvent),
     };

@@ -4,14 +4,24 @@ const { spawn, execFile } = require('child_process');
 const { BaseAdapter } = require('./BaseAdapter');
 const { tcpProbe } = require('../testers');
 
-// 资产里存的是裸 IPv6，mstsc 的 /v 与 cmdkey 的 TERMSRV 要加方括号才能和端口区分开
+// 资产里存的是裸 IPv6，mstsc 的 /v 要加方括号才能和端口区分开
+function bracketedHost(host) {
+  const h = String(host || '');
+  return h.includes(':') && !h.startsWith('[') ? `[${h}]` : h;
+}
+
 function mstscTarget(host, port) {
-  const h = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-  return `${h}:${port || 3389}`;
+  return `${bracketedHost(host)}:${port || 3389}`;
+}
+
+// mstsc 认领的是 TERMSRV/<主机>（斜杠、不带端口）；与我们写的条目同名但类型不同（generic），
+// 回收时只清掉自己这一条。
+function credentialTarget(host) {
+  return `TERMSRV/${bracketedHost(host)}`;
 }
 
 class RdpWindowsMstscAdapter extends BaseAdapter {
-  constructor(onEvent) {
+  constructor(onEvent, log) {
     super();
     this.id = 'rdp-windows-mstsc';
     this.candidates = [
@@ -21,6 +31,7 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
     ];
     this.sessions = new Map();
     this.onEvent = onEvent || (() => {});
+    this.log = log || null;
   }
 
   capabilities() {
@@ -63,14 +74,25 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
     }
     const args = this.buildMstscArgs(payload);
     const password = payload._password;
-    if (password && payload.auth && payload.auth.mode === 'cmdkey') {
-      const target = `TERMSRV:${mstscTarget(payload.asset.host, payload.method.port)}`;
+    const credTarget =
+      password && payload.auth && payload.auth.mode === 'cmdkey'
+        ? credentialTarget(payload.asset.host)
+        : '';
+    if (credTarget) {
+      const cmdArgs = ['/generic:' + credTarget];
+      if (payload.asset.user) cmdArgs.push(`/user:${payload.asset.user}`);
+      cmdArgs.push('/pass:' + password);
       await new Promise((resolveStep) => {
-        execFile(
-          'cmdkey.exe',
-          ['/generic:' + target, '/user:' + (payload.asset.user || ''), '/pass:' + password],
-          () => resolveStep()
-        );
+        execFile('cmdkey.exe', cmdArgs, (error) => {
+          if (error && this.log) {
+            this.log.warn('rdp', 'cmdkey credential write failed', {
+              host: payload.asset.host,
+              port: payload.method.port,
+              message: error.message,
+            });
+          }
+          resolveStep();
+        });
       });
     }
 
@@ -95,7 +117,7 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
 
       child.once('spawn', () => {
         child.unref();
-        this.sessions.set(sessionId, { sessionId, pid: child.pid, args, child });
+        this.sessions.set(sessionId, { sessionId, pid: child.pid, args, child, credTarget });
         this.onEvent({ type: 'connected', sessionId, pid: child.pid, embeddable: false });
         resolve({ pid: child.pid, args, note: 'mstsc launched via CLI' });
       });
@@ -108,7 +130,18 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
   }
 
   cleanupSession(sessionId) {
+    const entry = this.sessions.get(sessionId);
     this.sessions.delete(sessionId);
+    if (!entry || !entry.credTarget) return;
+    // 只回收我们自己写的那条 generic 凭据，用户在 mstsc 里勾「记住我的凭据」留下的条目不动
+    execFile('cmdkey.exe', ['/delete:' + entry.credTarget], (error) => {
+      if (error && this.log) {
+        this.log.warn('rdp', 'cmdkey credential cleanup failed', {
+          target: entry.credTarget,
+          message: error.message,
+        });
+      }
+    });
   }
 
   async disconnect(sessionId) {

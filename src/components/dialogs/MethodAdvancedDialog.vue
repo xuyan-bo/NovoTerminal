@@ -9,7 +9,6 @@
     :show-close="!saving"
     append-to-body
   >
-    <div v-if="note" class="hint adv-note">{{ note }}</div>
     <el-form
       ref="advForm"
       :model="form"
@@ -87,7 +86,8 @@
           <el-select
             v-else-if="f.type === 'select'"
             v-model="form[f.key]"
-            style="width: 100%"
+            class="adv-select"
+            :disabled="blockedField(f)"
           >
           <el-option
             v-for="opt in f.options"
@@ -125,7 +125,6 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <span class="hint adv-default-tip">{{ $t('adv.defaultTip') }}</span>
       <el-button size="mini" :disabled="saving" @click="reset">{{ $t('adv.reset') }}</el-button>
       <el-button size="mini" :disabled="saving" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
       <el-button size="mini" type="primary" :loading="saving" :disabled="saving" @click="confirm">{{ $t('settings.save') }}</el-button>
@@ -138,7 +137,6 @@ import { store, api, unwrap, refresh, findAsset } from '../../store';
 import {
   ADVANCED_FIELDS,
   ADVANCED_DEFAULTS,
-  ADVANCED_NOTES,
   advancedKey,
   resolveAdvanced,
   requiredRule,
@@ -212,10 +210,6 @@ export default {
     title() {
       return t('adv.title', { name: this.methodName });
     },
-    note() {
-      const key = ADVANCED_NOTES[this.schemaKey];
-      return key ? t(key) : '';
-    },
   },
   watch: {
     dlg(v) {
@@ -227,12 +221,16 @@ export default {
       return t(f.labelKey);
     },
     optLabel(opt) {
-      const key = this.form.engine === 'external' && opt.externalLabelKey ? opt.externalLabelKey : opt.labelKey;
-      return key ? t(key) : opt.label;
+      return opt.labelKey ? t(opt.labelKey) : opt.label;
     },
     ph(f) {
       if (!f.placeholderKey) return '';
       return t(f.placeholderKey);
+    },
+    blockedField(f) {
+      // 外部客户端只有「窗口 + 单屏」才用分辨率：/f 与 /multimon 会拿本地屏幕尺寸覆盖 /size、/w /h
+      return f.key === 'resolution' && this.form.engine === 'external' &&
+        (this.form.screenMode !== 'window' || this.form.monitors !== 'single');
     },
     defaults() {
       return { ...(ADVANCED_DEFAULTS[this.schemaKey] || {}) };
@@ -368,7 +366,6 @@ export default {
               pass: hit.asset.pass,
               tags: hit.asset.tags,
               note: hit.asset.note,
-              display: hit.asset.display,
               gid: hit.group.id,
             })
           );
@@ -423,10 +420,9 @@ export default {
   margin-top: 6px;
   font-size: 12px;
 }
-.adv-note {
-  margin: -8px 0 12px;
-  padding-left: 4px;
-  line-height: 1.6;
+.adv-select {
+  width: 100%;
+  max-width: 220px;
 }
 .client-select {
   width: 100%;
@@ -445,12 +441,5 @@ export default {
 .client-path-row .client-path-input {
   flex: 1;
   min-width: 0;
-}
-.adv-default-tip {
-  float: left;
-  font-size: 11px;
-  line-height: 28px;
-  max-width: 240px;
-  text-align: left;
 }
 </style>

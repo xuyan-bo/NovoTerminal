@@ -9,9 +9,17 @@ function targetSpec(host, port) {
   return `${h}:${p}`;
 }
 
+// DOMAIN\user 要拆成 /u 与 /d；UPN（user@domain）按 FreeRDP 的 /u 原样处理
+function splitLogon(value) {
+  const raw = String(value || '');
+  const sep = raw.indexOf('\\');
+  if (sep <= 0) return { user: raw, domain: '' };
+  return { user: raw.slice(sep + 1), domain: raw.slice(0, sep) };
+}
+
 /**
  * FreeRDP CLI 适配器基类：xfreerdp（macOS/Linux，X11）和 wfreerdp（Windows 原生 GUI）
- * 共用同一套 /v /size /f /multimon /admin /clipboard /sec /cert 参数语义，
+ * 共用同一套 /v /u /d /size /f /multimon /admin /clipboard /sec /cert /bpp /network 参数语义，
  * 差异只在候选路径与平台门槛，由子类提供。
  */
 class FreeRdpAdapterBase extends BaseAdapter {
@@ -42,7 +50,9 @@ class FreeRdpAdapterBase extends BaseAdapter {
     const { asset, method, display, advanced } = payload;
     const adv = advanced || (method && method.advanced) || {};
     const args = [`/v:${targetSpec(asset.host, (method && method.port) || 3389)}`];
-    if (asset.user) args.push(`/u:${asset.user}`);
+    const logon = splitLogon(asset.user);
+    if (logon.user) args.push(`/u:${logon.user}`);
+    if (logon.domain) args.push(`/d:${logon.domain}`);
     const password = payload._password;
     if (password) args.push(`/p:${password}`);
 
@@ -53,8 +63,10 @@ class FreeRdpAdapterBase extends BaseAdapter {
     if (adv.adminSession) args.push('/admin');
     // FreeRDP 默认开启剪贴板；显式关闭时才传 -clipboard
     if (adv.clipboard === false) args.push('-clipboard');
-    // FreeRDP 默认协商 NLA；用户关闭时传 /sec:rdp 兜底旧协议
-    if (adv.nla === false) args.push('/sec:rdp');
+    // /sec:rdp 会连 TLS 一起关掉，只关 NLA 要用开关形式
+    if (adv.nla === false) args.push('/sec:nla:off');
+    // 手册写 /bpp 默认 16 位色，/network 默认不按链路类型自适应，两者都显式请求
+    args.push('/bpp:32', '/network:auto');
     // 首次连接走 TOFU（本地保存指纹），避免误报但也不无脑放行
     args.push('/cert:tofu');
     return args;

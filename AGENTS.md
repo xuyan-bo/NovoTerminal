@@ -36,7 +36,7 @@
 | `src/i18n.js`、`src/styles/main.css` | 双语文案、主题入口、全局样式变量和公共样式 |
 | `electron/preload.js` | 通过 `contextBridge` 暴露具名、受限 API 和事件订阅 |
 | `electron/main.js` | 窗口、应用生命周期和 IPC 编排；具体协议逻辑交给对应模块 |
-| `electron/session/` | 外部会话适配及连接探测；当前实际 RDP 连接由 mstsc 适配器执行 |
+| `electron/session/` | 外部会话适配及连接探测；RDP 分内置（IronRDP-WASM，由渲染端连接）与外部客户端（mstsc/xfreerdp/wfreerdp，由本目录适配器启动）两条路径 |
 | `electron/ssh/`、`electron/vnc/`、`electron/sftp/` | 各自的连接、代理、资源和传输管理 |
 | `electron/store/`、`electron/auth/` | 持久化与系统身份验证；UI 不绕过这些边界自行实现 |
 | `scripts/` | 构建钩子与工具（`build-mac-auth.cjs`、`afterPack.cjs`、`gen-os-icons.js`）及开发期 SSH 检查脚本；不参与运行时，新增文件须同步 `.gitignore` 的 `/scripts/*` 例外 |
@@ -99,7 +99,7 @@
 - 渲染进程默认端口复用协议注册表；主进程具有独立运行边界，新增参数要核对所有实际消费者的默认值，不强行 import Vue 模块共享常量。
 - 当前高级默认值分散于 `src/constants.js`、`electron/main.js` 和对应协议管理器；不能只改表单就宣称参数生效。
 - 保存高级设置不能无意丢弃同一方法下的其他合法字段，例如 SSH 配色；数据格式变更应兼容已有持久化记录，不做无需求的兼容层。
-- RDP 当前通过 mstsc 命令行启动；有配置项不代表命令行支持，不得以成功启动代替验证高级能力。
+- RDP 有两条实现路径：内置 IronRDP-WASM（渲染端 SessionBuilder + 主进程 RDCleanPath 代理）与外部客户端命令行（mstsc/xfreerdp/wfreerdp）；有配置项不代表对应引擎支持该参数，不得以成功启动代替验证高级能力。
 
 ## 6. 页签、全屏和资源生命周期
 

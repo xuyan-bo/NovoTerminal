@@ -467,7 +467,6 @@ class AssetStore {
       ping: payload.ping || '—',
       pclass: payload.pclass || 'ok',
       methods: payload.methods || {},
-      display: payload.display || { layout: 'extend' },
     };
     g.nodes.push(asset);
     this.persist();
@@ -489,7 +488,6 @@ class AssetStore {
       tags: payload.tags != null ? payload.tags : asset.tags,
       note: payload.note != null ? payload.note : asset.note,
       methods: payload.methods != null ? payload.methods : asset.methods,
-      display: payload.display != null ? payload.display : asset.display,
     });
     if (targetGid && targetGid !== group.id) {
       const ng = this.requireGroup(targetGid);

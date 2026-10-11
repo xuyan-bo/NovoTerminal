@@ -147,7 +147,6 @@ export default {
             pass: hit.asset.pass,
             tags: hit.asset.tags,
             note: hit.asset.note,
-            display: hit.asset.display,
             gid: hit.group.id,
           })
         );

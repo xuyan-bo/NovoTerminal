@@ -3,7 +3,14 @@ const crypto = require('crypto');
 const { createSshConnection } = require('../ssh/connection');
 
 /** ssh2 的子系统请求没有自带超时，服务器接受请求却不响应时不能让探测一直挂着。 */
-const SFTP_HANDSHAKE_TIMEOUT_MS = 8000;
+const SFTP_TIMEOUT_DEFAULT_S = 20;
+
+/** 探测与 SftpManager 的真实会话共用同一条超时，设置缺失或越界都回落到默认值。 */
+function sftpTimeoutMs(advanced) {
+  const n = Number(advanced && advanced.connectTimeout);
+  const sec = Number.isFinite(n) ? Math.min(300, Math.max(5, Math.floor(n))) : SFTP_TIMEOUT_DEFAULT_S;
+  return sec * 1000;
+}
 
 /** Plain TCP reachability probe. */
 function tcpProbe(host, port, timeoutMs = 2500) {
@@ -70,15 +77,16 @@ async function testSsh({ host, port, username, password, advanced, verifyHostKey
 async function testSftp({ host, port, username, password, advanced, verifyHostKey, promptKeyboard, log, onConnection }) {
   const started = Date.now();
   const probePort = Number(port) || 22;
+  const timeoutMs = sftpTimeoutMs(advanced);
   let connection;
   try {
-    connection = createSshConnection({ host, port: probePort, username, password, advanced, verifyHostKey, promptKeyboard, log });
+    connection = createSshConnection({ host, port: probePort, username, password, advanced, verifyHostKey, promptKeyboard, log, readyTimeout: timeoutMs });
     if (onConnection) onConnection(connection);
     const client = await connection.ready;
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         reject(Object.assign(new Error('SFTP subsystem handshake timed out'), { code: 'SFTP_UNAVAILABLE' }));
-      }, SFTP_HANDSHAKE_TIMEOUT_MS);
+      }, timeoutMs);
       client.sftp((error, sftp) => {
         clearTimeout(timer);
         if (sftp) {
