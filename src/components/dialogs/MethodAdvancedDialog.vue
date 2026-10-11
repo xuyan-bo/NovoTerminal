@@ -105,13 +105,16 @@
           clearable
           :placeholder="ph(f)"
         />
-        <el-input
+        <el-input-number
           v-else-if="f.type === 'number'"
-          v-model.number="form[f.key]"
-          type="number"
+          v-model="form[f.key]"
+          size="mini"
           :min="f.min"
           :max="f.max"
+          :step="1"
+          :precision="f.integer ? 0 : undefined"
           :placeholder="ph(f)"
+          controls-position="right"
         />
         <el-input
           v-else
@@ -301,21 +304,12 @@ export default {
     },
     validate() {
       if (this.schemaKey !== 'ssh' && this.schemaKey !== 'sftp') return true;
-      const defaults = this.defaults();
       for (const f of this.fields) {
         const v = this.form[f.key];
         const blank = v == null || (typeof v === 'string' && v.trim() === '');
         let error = '';
         if (f.type === 'select' && !f.options.some((opt) => opt.value === v)) {
           error = t('adv.ssh.invalidOption', { name: t(f.labelKey) });
-        } else if (f.type === 'number') {
-          const n = blank ? defaults[f.key] : Number(v);
-          if (!Number.isFinite(n) || (f.integer && !Number.isInteger(n)) || n < f.min || n > f.max) {
-            error =
-              this.schemaKey === 'ssh' && f.key === 'keepAlive'
-                ? t('adv.ssh.keepAliveInvalid')
-                : t('adv.sftp.rangeInvalid', { name: t(f.labelKey), min: f.min, max: f.max });
-          }
         } else if (f.required && (typeof v !== 'string' || blank)) {
           error = t('adv.ssh.privateKeyRequired');
         }
@@ -340,9 +334,6 @@ export default {
         const v = this.form[f.key];
         if (v === undefined || v === null) {
           payload[f.key] = defaults[f.key];
-        } else if (f.type === 'number') {
-          const n = Number(v);
-          payload[f.key] = Number.isNaN(n) || String(v).trim() === '' ? defaults[f.key] : n;
         } else if (f.type === 'switch') {
           payload[f.key] = !!v;
         } else if (f.type === 'password' && this.schemaKey === 'ssh') {

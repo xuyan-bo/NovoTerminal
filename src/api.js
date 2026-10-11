@@ -235,9 +235,6 @@ export const api = hasBridge
       async rdpDisconnect() {
         return { ok: true };
       },
-      async rdpList() {
-        return [];
-      },
       onRdpState() {
         return () => {};
       },

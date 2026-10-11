@@ -8,7 +8,6 @@ const ADVANCED_VNC_DEFAULTS = {
   viewOnly: false,
   scale: 'fit',
   clipboard: true,
-  localCursor: true,
 };
 
 function resolveAdvanced(saved) {
@@ -43,10 +42,6 @@ class VncSessionManager {
     this.log = log;
     this.sessions = new Map();
     this._seq = 0;
-  }
-
-  _channel(sessionId) {
-    return 'vnc:state:' + sessionId;
   }
 
   _emit(sessionId, type, payload) {
@@ -105,12 +100,11 @@ class VncSessionManager {
         assetId: req.assetId,
         host,
         port,
-        wsPort,
-        adv,
+        ownerId: req.ownerId,
       });
 
-      this._emit(sessionId, 'ready', { sessionId, host, port, wsUrl });
-
+      // The proxy only listens locally at this point; the 'ready' state belongs to the moment the
+      // WebSocket client actually reaches the RFB server.
       return {
         sessionId,
         wsUrl,
@@ -120,7 +114,6 @@ class VncSessionManager {
         viewOnly: adv.viewOnly,
         scale: adv.scale,
         clipboard: adv.clipboard,
-        localCursor: adv.localCursor,
         shared: adv.shared,
         jpegQuality: adv.jpegQuality,
         compressLevel: adv.compressLevel,
@@ -135,25 +128,25 @@ class VncSessionManager {
     }
   }
 
-  disconnect(sessionId) {
+  disconnect(sessionId, ownerId) {
     const s = this.sessions.get(sessionId);
-    if (!s) return { ok: true };
+    if (!s) return { ok: true, existed: false };
+    if (ownerId !== undefined && s.ownerId !== ownerId) {
+      if (this.log) {
+        this.log.warn('vnc', 'vnc disconnect rejected, not the session owner', {
+          sessionId,
+          host: s.host,
+          port: s.port,
+        });
+      }
+      return { ok: true, existed: false };
+    }
     this.sessions.delete(sessionId);
     try {
       s.proxy.stop();
     } catch (_) {}
     this._emit(sessionId, 'ended', { host: s.host, port: s.port });
-    return { ok: true };
-  }
-
-  list() {
-    return [...this.sessions.entries()].map(([sessionId, s]) => ({
-      sessionId,
-      assetId: s.assetId,
-      host: s.host,
-      port: s.port,
-      wsPort: s.wsPort,
-    }));
+    return { ok: true, existed: true };
   }
 
   destroyAll() {
@@ -166,4 +159,4 @@ class VncSessionManager {
   }
 }
 
-module.exports = { VncSessionManager, resolveAdvanced, ADVANCED_VNC_DEFAULTS };
+module.exports = { VncSessionManager };

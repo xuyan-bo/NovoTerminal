@@ -34,14 +34,17 @@ class VncProxy {
       this._server.on('connection', (ws) => this._onWsConnection(ws));
       this._server.on('error', (err) => this._fail(err));
 
+      this._httpServer.once('error', (err) => {
+        reject(err);
+      });
+
       this._httpServer.listen(0, '127.0.0.1', () => {
+        this._httpServer.removeAllListeners('error');
+        // A later listener failure has no pending promise to reject, so it must end the session.
+        this._httpServer.on('error', (err) => this._fail(err));
         const addr = this._httpServer.address();
         this._wsPort = addr.port;
         resolve({ wsUrl: `ws://127.0.0.1:${this._wsPort}`, port: this._wsPort });
-      });
-
-      this._httpServer.on('error', (err) => {
-        reject(err);
       });
     });
   }
@@ -105,6 +108,7 @@ class VncProxy {
 
   stop() {
     if (this._closed && !this._server) return;
+    this._closed = true;
     try {
       if (this._wsClient) this._wsClient.close();
     } catch (_) {}

@@ -1266,16 +1266,19 @@ function registerIpc() {
   }, true);
 
   // ---- VNC terminal (noVNC via WebSocket proxy) ----
-  handle('vnc:connect', async (req) => {
+  handle('vnc:connect', async (sender, req) => {
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
     const method = hit.asset.methods && hit.asset.methods[req.methodId];
     if (!method || !method.enabled) throw new Error('method not enabled');
+    const host = String(hit.asset.host || '').trim();
+    if (!host) throw Object.assign(new Error('asset host is required'), { code: 'HOST_MISSING' });
     const result = await vncSessions.connect({
       assetId: hit.asset.id,
-      asset: { host: hit.asset.host, user: hit.asset.user, pass: hit.asset.pass },
+      asset: { host },
       method: { id: req.methodId, port: method.port || 5900, advanced: method.advanced },
       advanced: method.advanced,
+      ownerId: sender.id,
     });
     // 与 ssh:connect 一致：失败的握手不留「最近连接」
     store.pushRecent(hit.asset, {
@@ -1284,21 +1287,23 @@ function registerIpc() {
     });
     send('store:changed', { reason: 'recent' });
     return result;
-  });
-  handle('vnc:disconnect', (sid) => vncSessions.disconnect(sid));
-  handle('vnc:list', () => vncSessions.list());
+  }, true);
+  handle('vnc:disconnect', (sender, sid) => vncSessions.disconnect(sid, sender.id), true);
 
   // ---- RDP embedded sessions (IronRDP-WASM via RDCleanPath proxy) ----
-  handle('rdp:connect', async (req) => {
+  handle('rdp:connect', async (sender, req) => {
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
     const method = hit.asset.methods && hit.asset.methods[req.methodId];
     if (!method || !method.enabled) throw new Error('method not enabled');
+    const host = String(hit.asset.host || '').trim();
+    if (!host) throw Object.assign(new Error('asset host is required'), { code: 'HOST_MISSING' });
     const result = await rdpSessions.connect({
       assetId: hit.asset.id,
-      asset: { host: hit.asset.host, user: hit.asset.user, pass: hit.asset.pass },
+      asset: { host },
       method: { id: req.methodId, port: method.port || 3389, advanced: method.advanced },
       advanced: method.advanced,
+      ownerId: sender.id,
     });
     store.pushRecent(hit.asset, {
       id: 'rdp',
@@ -1306,9 +1311,8 @@ function registerIpc() {
     });
     send('store:changed', { reason: 'recent' });
     return result;
-  });
-  handle('rdp:disconnect', (sid) => rdpSessions.disconnect(sid));
-  handle('rdp:list', () => rdpSessions.list());
+  }, true);
+  handle('rdp:disconnect', (sender, sid) => rdpSessions.disconnect(sid, sender.id), true);
 
   // ---- Detached session windows ----
   const DETACHABLE_KINDS = ['ssh', 'vnc', 'rdp'];

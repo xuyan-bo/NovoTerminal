@@ -13,6 +13,15 @@
           <svg-icon :name="isFullscreen ? 'fullscreen-out' : 'fullscreen-in'" />
         </button>
       </el-tooltip>
+      <el-tooltip v-if="sftpAvailable" :content="$t('sftp.openTip')" placement="top">
+        <button
+          type="button"
+          class="gear-icon-btn"
+          @click="openSftp"
+        >
+          <svg-icon name="folder-download" />
+        </button>
+      </el-tooltip>
       <el-tooltip :content="connToggleTip" placement="top">
         <button
           type="button"
@@ -34,7 +43,7 @@
 </template>
 
 <script>
-import { api, unwrap, refresh, findAsset, store } from '../../store';
+import { api, unwrap, refresh, findAsset, enabledMethods, store } from '../../store';
 import { t } from '../../i18n';
 import RFB from '@novnc/novnc';
 import createFullscreenMixin from '../session/fullscreen';
@@ -86,6 +95,11 @@ export default {
     connToggleTip() {
       return this.isDisconnected ? t('vnc.reconnect') : t('vnc.disconnect');
     },
+    /** 与侧栏/详情页同一条件：资产启用了 SFTP 方式才给入口。 */
+    sftpAvailable() {
+      const hit = findAsset(this.assetId);
+      return !!(hit && enabledMethods(hit.asset).some((m) => m.id === 'sftp'));
+    },
   },
   watch: {
     status(val) {
@@ -104,9 +118,12 @@ export default {
   },
   mounted() {
     this._resizeObserver = null;
+    this._disposed = false;
+    this._connectVersion = 0;
     this.connect();
   },
   beforeDestroy() {
+    this._disposed = true;
     if (this._resizeObserver) {
       this._resizeObserver.disconnect();
       this._resizeObserver = null;
@@ -116,6 +133,7 @@ export default {
   methods: {
     async connect() {
       this.disconnectNow(true);
+      const version = ++this._connectVersion;
       this.status = 'connecting';
       this.statusDetail = '';
       this.desktopName = '';
@@ -141,12 +159,20 @@ export default {
 
         this.liveSessionId = r.sessionId;
 
+        // 关页签时握手还没回来：这条会话已经没有人接管，立刻释放，不能留下无人管理的代理。
+        if (this._disposed || version !== this._connectVersion) {
+          this.disconnectNow(true);
+          return;
+        }
+
         this.offState = api.onVncState((ev) => {
           if (!ev || ev.sessionId !== this.liveSessionId) return;
           if (ev.type === 'ready') {
             this.status = 'ready';
             this.statusDetail = '';
           } else if (ev.type === 'ended') {
+            // 代理在报错后紧接着也会结束，不能让随后的 ended 把失败原因抹成「已断开」。
+            if (this.status === 'error') return;
             this.status = 'ended';
             this.statusDetail = '';
           } else if (ev.type === 'error') {
@@ -158,7 +184,6 @@ export default {
         const screenEl = this.$refs.screenEl;
         if (!screenEl) {
           this.status = 'error';
-          this.statusDetail = 'no screen element';
           return;
         }
 
@@ -171,7 +196,6 @@ export default {
         rfb.scaleViewport = isFit;
         rfb.clipViewport = !isFit;
         rfb.viewOnly = !!r.viewOnly;
-        rfb.showDotCursor = r.localCursor !== false;
 
         this._vncScale = r.scale;
 
@@ -351,6 +375,18 @@ export default {
         }
         heldKeys.clear();
       };
+    },
+
+    async openSftp() {
+      if (!api.sftpOpenWindow) {
+        this.$message.error(t('msg.needElectron'));
+        return;
+      }
+      try {
+        unwrap(await api.sftpOpenWindow({ assetId: this.assetId }));
+      } catch (e) {
+        this.$message.error(e.message || String(e));
+      }
     },
 
     reconnect() {

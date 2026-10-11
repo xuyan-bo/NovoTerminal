@@ -125,7 +125,6 @@ export const ADVANCED_DEFAULTS = {
     viewOnly: false,
     scale: 'fit',
     clipboard: true,
-    localCursor: true,
   },
   // SFTP 复用同资产 SSH 行的认证、跳板机与主机密钥策略，此处只放传输专属参数
   sftp: {
@@ -285,8 +284,8 @@ export const ADVANCED_FIELDS = {
   ],
   vnc: [
     { key: 'password', type: 'password', labelKey: 'adv.vnc.password', placeholderKey: 'adv.vnc.passwordPh' },
-    { key: 'compressLevel', type: 'number', labelKey: 'adv.vnc.compressLevel', min: 0, max: 9, placeholderKey: 'adv.vnc.levelPh' },
-    { key: 'jpegQuality', type: 'number', labelKey: 'adv.vnc.jpegQuality', min: 0, max: 9, placeholderKey: 'adv.vnc.levelPh' },
+    { key: 'compressLevel', type: 'number', labelKey: 'adv.vnc.compressLevel', min: 0, max: 9, integer: true, placeholderKey: 'adv.vnc.levelPh' },
+    { key: 'jpegQuality', type: 'number', labelKey: 'adv.vnc.jpegQuality', min: 0, max: 9, integer: true, placeholderKey: 'adv.vnc.levelPh' },
     {
       key: 'scale',
       type: 'select',
@@ -303,7 +302,6 @@ export const ADVANCED_FIELDS = {
     { key: 'shared', type: 'switch', labelKey: 'adv.vnc.shared' },
     { key: 'viewOnly', type: 'switch', labelKey: 'adv.vnc.viewOnly' },
     { key: 'clipboard', type: 'switch', labelKey: 'adv.vnc.clipboard' },
-    { key: 'localCursor', type: 'switch', labelKey: 'adv.vnc.localCursor' },
   ],
   sftp: [
     {

@@ -496,7 +496,7 @@ export async function connectAsset(asset, method) {
     });
   }
   // RDP 引擎分流：IronRDP-WASM 用内嵌会话；external 用外部客户端（mstsc）流程
-  const _rdpEngine = resolveAdvanced('rdp', (method.advanced && method.advanced) || {}).engine;
+  const _rdpEngine = resolveAdvanced('rdp', method.advanced || {}).engine;
   // 注意：协议对象并无 id 字段，须用 method.id 判断是否为 RDP
   const useEmbedded =
     !!protocol.component && (method.id !== 'rdp' || _rdpEngine === 'ironrdp');

@@ -1,44 +1,11 @@
 const { RdpProxy } = require('../session/RdpProxy');
 
-const ADVANCED_RDP_DEFAULTS = {
-  engine: 'ironrdp',
-  client: '',
-  clientPath: '',
-  resolution: 'auto',
-  screenMode: 'fullscreen',
-  monitors: 'single',
-  clipboard: true,
-  promptCredentials: false,
-  adminSession: false,
-  nla: true,
-};
-
-function resolveAdvanced(saved) {
-  const base = { ...ADVANCED_RDP_DEFAULTS };
-  if (!saved || typeof saved !== 'object') return base;
-  Object.keys(base).forEach((k) => {
-    const v = saved[k];
-    if (v === undefined || v === null) return;
-    if (typeof base[k] === 'string' && String(v).trim() === '') return;
-    if (typeof base[k] === 'number') {
-      const n = Number(v);
-      if (Number.isNaN(n) || String(v).trim() === '') return;
-      base[k] = n;
-      return;
-    }
-    if (typeof base[k] === 'boolean') {
-      base[k] = !!v;
-      return;
-    }
-    if (v !== '') base[k] = v;
-  });
-  return base;
-}
-
 /**
  * RDP sessions (embedded IronRDP-WASM engine): main process runs an
  * RDCleanPath WebSocket proxy per session; the renderer's ironrdp-wasm
  * connects to ws://127.0.0.1:<port> and relays the RDP stream.
+ * The embedded engine consumes its own advanced settings (resolution, NLA,
+ * clipboard) in the renderer, so no defaults are mirrored here.
  */
 class RdpSessionManager {
   constructor({ send, log }) {
@@ -74,9 +41,8 @@ class RdpSessionManager {
     const sessionId = 'rdp-' + Date.now() + '-' + (++this._seq).toString(36);
     const asset = req.asset || {};
     const method = req.method || {};
-    const adv = resolveAdvanced(method.advanced || req.advanced);
-    this._host = asset.host;
-    this._methodPort = Number(method.port) || 3389;
+    const host = asset.host;
+    const port = Number(method.port) || 3389;
 
     const proxy = new RdpProxy({
       onState: (state, detail) => {
@@ -90,7 +56,7 @@ class RdpSessionManager {
           try {
             proxy.stop();
           } catch (_) {}
-          this._emit(sessionId, 'ended', { origin, host: this._host, port: this._methodPort });
+          this._emit(sessionId, 'ended', { origin, host, port });
         }
       },
     });
@@ -100,43 +66,38 @@ class RdpSessionManager {
       this.sessions.set(sessionId, {
         proxy,
         assetId: req.assetId,
-        host: this._host,
-        port: this._methodPort,
-        wsPort,
-        adv,
+        host,
+        port,
+        ownerId: req.ownerId,
       });
-      this._host = null;
-      this._methodPort = null;
-      return { sessionId, wsUrl, wsPort, host: asset.host, port: Number(method.port) || 3389 };
+      return { sessionId, wsUrl, wsPort, host, port };
     } catch (e) {
       proxy.stop();
-      this._host = null;
-      this._methodPort = null;
       const err = Object.assign(new Error(e.message || String(e)), { code: 'RDP_PROXY_ERROR' });
-      this._emit(sessionId, 'error', { code: err.code, message: err.message });
+      this._emit(sessionId, 'error', { code: err.code, message: err.message, host, port });
       throw err;
     }
   }
 
-  disconnect(sessionId) {
+  disconnect(sessionId, ownerId) {
     const s = this.sessions.get(sessionId);
-    if (!s) return { ok: true };
+    if (!s) return { ok: true, existed: false };
+    if (ownerId !== undefined && s.ownerId !== ownerId) {
+      if (this.log) {
+        this.log.warn('rdp', 'rdp disconnect rejected, not the session owner', {
+          sessionId,
+          host: s.host,
+          port: s.port,
+        });
+      }
+      return { ok: true, existed: false };
+    }
     this.sessions.delete(sessionId);
     try {
       s.proxy.stop();
     } catch (_) {}
     this._emit(sessionId, 'ended', { host: s.host, port: s.port });
-    return { ok: true };
-  }
-
-  list() {
-    return [...this.sessions.entries()].map(([sessionId, s]) => ({
-      sessionId,
-      assetId: s.assetId,
-      host: s.host,
-      port: s.port,
-      wsPort: s.wsPort,
-    }));
+    return { ok: true, existed: true };
   }
 
   destroyAll() {
@@ -149,4 +110,4 @@ class RdpSessionManager {
   }
 }
 
-module.exports = { RdpSessionManager, resolveAdvanced, ADVANCED_RDP_DEFAULTS };
+module.exports = { RdpSessionManager };

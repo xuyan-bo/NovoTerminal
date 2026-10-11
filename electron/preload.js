@@ -128,7 +128,6 @@ const api = {
   // VNC sessions (noVNC via WebSocket proxy)
   vncConnect: (req) => ipcRenderer.invoke('vnc:connect', req),
   vncDisconnect: (sessionId) => ipcRenderer.invoke('vnc:disconnect', sessionId),
-  vncList: () => ipcRenderer.invoke('vnc:list'),
   onVncState: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('vnc:state', handler);
@@ -138,7 +137,6 @@ const api = {
   // RDP embedded sessions (IronRDP-WASM via RDCleanPath WebSocket proxy)
   rdpConnect: (req) => ipcRenderer.invoke('rdp:connect', req),
   rdpDisconnect: (sessionId) => ipcRenderer.invoke('rdp:disconnect', sessionId),
-  rdpList: () => ipcRenderer.invoke('rdp:list'),
   onRdpState: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('rdp:state', handler);

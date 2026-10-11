@@ -43,6 +43,8 @@ class RdpProxy {
 
       this._httpServer.listen(0, '127.0.0.1', () => {
         this._httpServer.removeListener('error', onListenError);
+        // A later listener failure has no pending promise to reject, so it must end the session.
+        this._httpServer.on('error', (err) => this._fail(err));
         const addr = this._httpServer.address();
         this._wsPort = addr.port;
         resolve({ wsUrl: `ws://127.0.0.1:${this._wsPort}`, port: this._wsPort });
@@ -131,6 +133,7 @@ class RdpProxy {
     });
     // Relay cleanup.
     tlsSocket.on('end', () => this._onTlsEnd('tls-end'));
+    tlsSocket.on('close', () => this._onTlsEnd('tls-close'));
     tlsSocket.on('error', () => this._onTlsEnd('tls-error'));
   }
 

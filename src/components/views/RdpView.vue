@@ -13,6 +13,15 @@
           <svg-icon :name="isFullscreen ? 'fullscreen-out' : 'fullscreen-in'" />
         </button>
       </el-tooltip>
+      <el-tooltip v-if="sftpAvailable" :content="$t('sftp.openTip')" placement="top">
+        <button
+          type="button"
+          class="gear-icon-btn"
+          @click="openSftp"
+        >
+          <svg-icon name="folder-download" />
+        </button>
+      </el-tooltip>
       <el-tooltip :content="connToggleTip" placement="top">
         <button
           type="button"
@@ -36,7 +45,7 @@
 </template>
 
 <script>
-import { api, unwrap, refresh, findAsset, store } from '../../store';
+import { api, unwrap, refresh, findAsset, enabledMethods, store } from '../../store';
 import { t } from '../../i18n';
 import init, {
   SessionBuilder,
@@ -97,6 +106,17 @@ function parseResolution(res) {
   return null;
 }
 
+// IronRDP 要求域和用户名分开；外部客户端（mstsc/xfreerdp）接受整串 DOMAIN\user，
+// 所以资产里只有用户名一个字段时这里按同样的写法拆出来，两种引擎才等价。
+function splitUserDomain(user) {
+  const value = String(user || '');
+  const sep = value.indexOf('\\');
+  if (sep <= 0) return { user: value, domain: '' };
+  return { user: value.slice(sep + 1), domain: value.slice(0, sep) };
+}
+
+const LOCK_KEYS = new Set(['CapsLock', 'NumLock', 'ScrollLock']);
+
 /** 页签状态点：内嵌 RDP 的 connected 归到共用的 ready，ended 与 idle 是不连接的灰色。 */
 const DOT_STATE = { connecting: 'connecting', connected: 'ready', error: 'error' };
 
@@ -107,6 +127,7 @@ export default {
       fallbackClass: 'is-rdp-fullscreen',
       onResize() {
         this._applyScale();
+        this._scheduleDesktopResize();
       },
       resizeOnNextTick: true,
     }),
@@ -147,6 +168,11 @@ export default {
     connToggleTip() {
       return this.isDisconnected ? t('rdp.reconnect') : t('rdp.disconnect');
     },
+    /** 与侧栏/详情页同一条件：资产启用了 SFTP 方式才给入口。 */
+    sftpAvailable() {
+      const hit = findAsset(this.assetId);
+      return !!(hit && enabledMethods(hit.asset).some((m) => m.id === 'sftp'));
+    },
   },
   watch: {
     status(val) {
@@ -167,9 +193,16 @@ export default {
   mounted() {
     this._resizeObserver = null;
     this._clipboardEnabled = true;
+    this._disposed = false;
+    this._connectVersion = 0;
+    this._fixedSize = false;
+    this._desktopW = 0;
+    this._desktopH = 0;
+    this._resizeTimer = null;
     this.connect();
   },
   beforeDestroy() {
+    this._disposed = true;
     if (this._resizeObserver) {
       this._resizeObserver.disconnect();
       this._resizeObserver = null;
@@ -198,6 +231,7 @@ export default {
     async connect() {
       this.disconnectNow(true);
       this._closing = false;
+      const version = ++this._connectVersion;
       this.status = 'connecting';
       this.statusDetail = '';
 
@@ -217,12 +251,21 @@ export default {
       }
 
       this.liveSessionId = r.sessionId;
+
+      // 关页签时握手还没回来：这条代理已无人接管，立刻释放。
+      if (this._disposed || version !== this._connectVersion) {
+        this.disconnectNow(true);
+        return;
+      }
+
       this.offState = api.onRdpState((ev) => {
         if (!ev || ev.sessionId !== this.liveSessionId) return;
         if (ev.type === 'connected') {
           this.status = 'connected';
           this.statusDetail = '';
         } else if (ev.type === 'ended') {
+          // 代理在报错后紧接着也会结束，不能让随后的 ended 把失败原因抹成「已断开」。
+          if (this.status === 'error') return;
           this.status = 'ended';
           this.statusDetail = '';
         } else if (ev.type === 'error') {
@@ -235,7 +278,6 @@ export default {
       const screenEl = this.$refs.screenEl;
       if (!canvas || !screenEl) {
         this.status = 'error';
-        this.statusDetail = 'no screen element';
         return;
       }
 
@@ -247,7 +289,7 @@ export default {
         const advanced = (method && method.advanced) || {};
         const host = r.host || (asset && asset.asset && asset.asset.host) || '';
         const port = r.port || 3389;
-        const username = (asset && asset.asset && asset.asset.user) || '';
+        const logon = splitUserDomain((asset && asset.asset && asset.asset.user) || '');
         const password = (asset && asset.asset && asset.asset.pass) || '';
         const nla = advanced.nla !== false;
         const clipboard = advanced.clipboard !== false;
@@ -255,15 +297,24 @@ export default {
 
         await init();
 
+        if (this._disposed || version !== this._connectVersion) {
+          this.disconnectNow(true);
+          return;
+        }
+
         const parsed = parseResolution(advanced.resolution);
-        // "跟随窗口"取当前设备屏幕分辨率（主显示器），作为 RDP 桌面请求尺寸。
-        let dw = (parsed && parsed.width) || window.screen.width || screenEl.clientWidth || 1280;
-        let dh = (parsed && parsed.height) || window.screen.height || screenEl.clientHeight || 720;
+        this._fixedSize = !!parsed;
+        // 「跟随窗口」先按容器当前大小请求桌面，之后容器变化再走 session.resize 重协商。
+        let dw = (parsed && parsed.width) || screenEl.clientWidth || window.screen.width || 1280;
+        let dh = (parsed && parsed.height) || screenEl.clientHeight || window.screen.height || 720;
         if (dw < 320) dw = 320;
         if (dh < 240) dh = 240;
+        this._desktopW = dw;
+        this._desktopH = dh;
 
         const builder = new SessionBuilder();
-        builder.username(username);
+        builder.username(logon.user);
+        if (logon.domain) builder.serverDomain(logon.domain);
         builder.password(password);
         builder.destination(`${host}:${port}`);
         builder.proxyAddress(r.wsUrl);
@@ -279,6 +330,12 @@ export default {
         builder.canvasResizedCallback(() => {
           if (!this.$refs.canvas) return;
           this.showCanvas = true;
+          const live = this.session;
+          if (live) {
+            const size = live.desktopSize();
+            this._desktopW = size.width;
+            this._desktopH = size.height;
+          }
           this.$nextTick(() => this._applyScale());
         });
 
@@ -288,10 +345,19 @@ export default {
         }
 
         const session = await builder.connect();
+        if (this._disposed || version !== this._connectVersion) {
+          try {
+            session.shutdown();
+          } catch (_) {}
+          this.disconnectNow(true);
+          return;
+        }
         this.session = session;
         const ds = session.desktopSize();
         canvas.width = ds.width;
         canvas.height = ds.height;
+        this._desktopW = ds.width;
+        this._desktopH = ds.height;
         this.showCanvas = true;
         this.status = 'connected';
         this.statusDetail = '';
@@ -301,20 +367,18 @@ export default {
 
         if (typeof ResizeObserver !== 'undefined' && screenEl) {
           if (this._resizeObserver) this._resizeObserver.disconnect();
-          this._resizeObserver = new ResizeObserver(() => this._applyScale());
+          this._resizeObserver = new ResizeObserver(() => {
+            this._applyScale();
+            this._scheduleDesktopResize();
+          });
           this._resizeObserver.observe(screenEl);
         }
 
         session
           .run()
           .then((info) => {
-            if (info) {
-              const r = info.reason;
-              console.info(
-                '[rdp] session ended, reason:',
-                r && (r.description || r.type) ? { type: r.type, description: r.description } : info
-              );
-            }
+            // 正常结束也记下原因，否则失败排查只剩一条「已断开」。
+            if (info) console.info('[rdp] session ended, reason:', info.reason());
             if (this.session === session) this.cleanupSession(session);
           })
           .catch((e) => {
@@ -377,6 +441,16 @@ export default {
         e.stopPropagation();
         if (this.session !== session) return;
         this._sendKey(e.code, down);
+        if (down && LOCK_KEYS.has(e.code)) this._syncLockKeys(e);
+      };
+      const onKeyDown = onKey(true);
+      const onKeyUp = onKey(false);
+      const onBlur = () => {
+        if (this.session !== session) return;
+        // 失焦时不会有 keyup，锁在远端的按键要在这里放开。
+        try {
+          session.releaseAllInputs();
+        } catch (_) {}
       };
       const onMouseMove = (e) => {
         if (this.session !== session) return;
@@ -409,8 +483,9 @@ export default {
       };
       const onContext = (e) => e.preventDefault();
 
-      canvas.addEventListener('keydown', onKey(true));
-      canvas.addEventListener('keyup', onKey(false));
+      canvas.addEventListener('keydown', onKeyDown);
+      canvas.addEventListener('keyup', onKeyUp);
+      canvas.addEventListener('blur', onBlur);
       canvas.addEventListener('mousemove', onMouseMove);
       canvas.addEventListener('mousedown', onMouseDown);
       canvas.addEventListener('mouseup', onMouseUp);
@@ -418,8 +493,9 @@ export default {
       canvas.addEventListener('contextmenu', onContext);
 
       this._disposeInput = () => {
-        canvas.removeEventListener('keydown', onKey(true));
-        canvas.removeEventListener('keyup', onKey(false));
+        canvas.removeEventListener('keydown', onKeyDown);
+        canvas.removeEventListener('keyup', onKeyUp);
+        canvas.removeEventListener('blur', onBlur);
         canvas.removeEventListener('mousemove', onMouseMove);
         canvas.removeEventListener('mousedown', onMouseDown);
         canvas.removeEventListener('mouseup', onMouseUp);
@@ -429,10 +505,30 @@ export default {
       };
     },
 
+    _syncLockKeys(e) {
+      const session = this.session;
+      if (!session) return;
+      try {
+        session.synchronizeLockKeys(
+          e.getModifierState('ScrollLock'),
+          e.getModifierState('NumLock'),
+          e.getModifierState('CapsLock'),
+          false
+        );
+      } catch (_) {}
+    },
+
+    /** 与 VncView 同一条政策：只有正被看着、页面拿到焦点的会话才允许读写本机剪贴板。 */
+    _canClipboard() {
+      const el = this.$refs.screenEl;
+      return this.status === 'connected' && this.active && document.hasFocus() &&
+        !!el && el.contains(document.activeElement);
+    },
+
     // Remote → local clipboard.
     _onRemoteClipboard(cbData) {
       const session = this.session;
-      if (!session || !this._clipboardEnabled) return;
+      if (!session || !this._clipboardEnabled || !this._canClipboard()) return;
       try {
         if (!cbData || cbData.isEmpty()) return;
         let text = '';
@@ -444,9 +540,10 @@ export default {
           } catch (_) {}
         }
         if (text) {
-          api.clipboardWriteText(text.replace(/\r\n/g, '\n')).catch(() => {});
+          const normalized = text.replace(/\r\n/g, '\n');
+          api.clipboardWriteText(normalized).catch(() => {});
           // Mark as seen so the local→remote poll does not push it straight back.
-          this._lastClipText = text;
+          this._lastClipText = normalized;
         }
       } catch (_) {}
     },
@@ -471,7 +568,7 @@ export default {
       // Reset baseline so the first host change after connect is always pushed.
       this._lastClipText = '';
       this._clipPollTimer = setInterval(() => {
-        if (this.status !== 'connected' || !this.session || !this._clipboardEnabled) return;
+        if (!this._clipboardEnabled || !this._canClipboard()) return;
         this._pollClipboardPush();
       }, 900);
     },
@@ -509,10 +606,50 @@ export default {
       canvas.style.height = Math.floor(canvas.height * scale) + 'px';
     },
 
+    /** 拖动窗口会连续触发，攒一会儿再重协商，避免刷出一串 resize PDU。 */
+    _scheduleDesktopResize() {
+      if (this._fixedSize || this.status !== 'connected') return;
+      if (this._resizeTimer) clearTimeout(this._resizeTimer);
+      this._resizeTimer = setTimeout(() => {
+        this._resizeTimer = null;
+        this._applyDesktopResize();
+      }, 500);
+    },
+
+    _applyDesktopResize() {
+      const session = this.session;
+      const wrap = this.$refs.screenEl;
+      if (!session || this._fixedSize || this.status !== 'connected' || !wrap) return;
+      // 页签隐藏时容器是 0，不能把它当成新的桌面尺寸。
+      if (!wrap.clientWidth || !wrap.clientHeight) return;
+      const w = Math.max(320, wrap.clientWidth);
+      const h = Math.max(240, wrap.clientHeight);
+      if (w === this._desktopW && h === this._desktopH) return;
+      this._desktopW = w;
+      this._desktopH = h;
+      try {
+        session.resize(w, h);
+      } catch (_) {
+        // 服务器不支持动态重协商时退回 CSS 缩放，桌面尺寸请求不算连接失败。
+      }
+    },
+
     cleanupSession(session) {
       if (this.session === session) {
         this.session = null;
         if (this._disposeInput) this._disposeInput();
+      }
+    },
+
+    async openSftp() {
+      if (!api.sftpOpenWindow) {
+        this.$message.error(t('msg.needElectron'));
+        return;
+      }
+      try {
+        unwrap(await api.sftpOpenWindow({ assetId: this.assetId }));
+      } catch (e) {
+        this.$message.error(e.message || String(e));
       }
     },
 
@@ -545,6 +682,10 @@ export default {
       }
       if (this._disposeInput) this._disposeInput();
       this._stopClipPoll();
+      if (this._resizeTimer) {
+        clearTimeout(this._resizeTimer);
+        this._resizeTimer = null;
+      }
       // Clear the last rendered frame so the screen does not linger after close.
       const canvasEl = this.$refs.canvas;
       if (canvasEl) {
