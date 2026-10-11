@@ -390,6 +390,28 @@ function sshRequestContext(sender) {
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
+/** 生产模式：Chromium 通过 file:// 读 asar FUSE 偶尔会遇到 "还没 ready" 的瞬态，
+ *  等一下重试通常就能过。dev 模式走 HTTP server 不需要这套。 */
+const INDEX_HTML_PATH = path.join(__dirname, '..', 'dist', 'index.html');
+const LOAD_MAX_RETRY = 3;
+const LOAD_RETRY_MS = 80;
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+async function loadIndexWithRetry(target, hash) {
+  for (let attempt = 1; attempt <= LOAD_MAX_RETRY; attempt += 1) {
+    try {
+      await target.loadFile(INDEX_HTML_PATH, {
+        query: { t: String(Date.now() + attempt) },
+        hash: hash || undefined,
+      });
+      return;
+    } catch (err) {
+      if (attempt >= LOAD_MAX_RETRY) throw err;
+      await sleep(LOAD_RETRY_MS);
+    }
+  }
+}
+
 // ---------- Single instance lock ----------
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -699,8 +721,8 @@ function createWindow() {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
     win.webContents.openDevTools({ mode: 'detach' });
   } else {
-    const htmlPath = path.join(__dirname, '..', 'dist', 'index.html');
-    win.loadURL('file://' + htmlPath.replace(/\\/g, '/') + '?t=' + Date.now());
+    // 主窗口无 hash，不需要 retry 包装；createWindow 会在 app ready 后由 whenReady 预热 asar
+    win.loadFile(INDEX_HTML_PATH, { query: { t: String(Date.now()) } });
   }
 }
 
@@ -1327,16 +1349,11 @@ function registerIpc() {
   const DETACHABLE_KINDS = ['ssh', 'vnc', 'rdp'];
 
   const loadSessionRoute = async (target, hash) => {
-    // bust HTTP/file cache so a rebuild is always picked up, same as the SFTP window
-    try {
-      await target.webContents.session.clearCache();
-    } catch (_) {}
-    const cacheQs = `t=${Date.now()}`;
     if (isDev && process.env.VITE_DEV_SERVER_URL) {
+      const cacheQs = `t=${Date.now()}`;
       await target.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${cacheQs}#/${hash}`);
     } else {
-      const htmlPath = path.join(__dirname, '..', 'dist', 'index.html');
-      await target.loadURL('file://' + htmlPath.replace(/\\/g, '/') + '?' + cacheQs + '#' + hash);
+      await loadIndexWithRetry(target, hash);
     }
   };
 
@@ -1372,11 +1389,14 @@ function registerIpc() {
     return null;
   };
 
-  /** 独立窗口为空即关闭；页签全部搬走后不留空壳，和浏览器一致。 */
+  /** 独立窗口为空即关闭；页签全部搬走后不留空壳，和浏览器一致。
+   *  用 destroy() 而非 close()：空窗口不需要走关闭确认流程，destroy() 直接销毁 webContents，
+   *  只触发 closed 事件做数据清理。close() 在部分平台条件下（renderer 正在拆除视图等）
+   *  可能只请求关闭但不真正销毁，导致空白窗口残留（Windows/Linux 都有此现象）。 */
   function closeGroupIfEmpty(group) {
     if (!group || group.tabIds.length || group.window.isDestroyed()) return;
     group.reason = 'emptied';
-    group.window.close();
+    group.window.destroy();
   }
 
   /** SSH 连接跟着页签走：换宿主只转移该页签那条会话的所有权，其余会话不受影响。 */
@@ -1478,6 +1498,13 @@ function registerIpc() {
       restoreDockTargets();
       clearDockGhosts();
     });
+    detached.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
+      if (!isMainFrame) return;
+      logger.error('session', 'detached window did-fail-load', { groupId: gid, code, desc, url });
+      // 初始加载失败由 loadSessionRoute 的 await 捕获并清理；这里只兜底尚未就绪的那一档。
+      // 就绪后的偶发失败只记日志，不再销毁窗口，避免一次瞬态失败把已经正常的窗口杀掉。
+      if (!group.ready && !detached.isDestroyed()) detached.destroy();
+    });
     try {
       await loadSessionRoute(detached, 'window?gid=' + gid);
     } catch (e) {
@@ -1497,66 +1524,76 @@ function registerIpc() {
    * （从它的页签栏再拆出去），所以只校验"请求方当前确实持有这个页签"。
    */
   handle('session:detach', async (sender, req) => {
-    const fromWindow = BrowserWindow.fromWebContents(sender);
-    if (!fromWindow) throw Object.assign(new Error('Untrusted detach request'), { code: 'SSH_OWNER' });
-    const tab = readTab(req && req.tab);
-    const ownGroup = senderGroup(sender);
-    if (ownGroup && !ownGroup.tabIds.includes(tab.id)) {
-      // 这个窗口已经不再持有它了（刚被别的窗口接走）：想要的结果已经成立，不再报错。
-      return { ok: true, cancelled: true };
-    }
-    if (!ownGroup) {
-      const existing = groupOf(tab.id);
-      if (existing) {
-        existing.window.focus();
-        return { ok: true, reused: true };
+    try {
+      const fromWindow = BrowserWindow.fromWebContents(sender);
+      if (!fromWindow) return { ok: true, cancelled: true };
+      const tab = readTab(req && req.tab);
+      const ownGroup = senderGroup(sender);
+      if (ownGroup && !ownGroup.tabIds.includes(tab.id)) {
+        // 这个窗口已经不再持有它了（刚被别的窗口接走）：想要的结果已经成立，不再报错。
+        return { ok: true, cancelled: true };
       }
-    }
+      if (ownGroup && ownGroup.reason) {
+        // 窗口正在关闭流程中（已被 dockToHost 清空标记），不再接受新的拆分请求。
+        return { ok: true, cancelled: true };
+      }
+      if (!ownGroup) {
+        const existing = groupOf(tab.id);
+        if (existing) {
+          existing.window.focus();
+          return { ok: true, reused: true };
+        }
+      }
 
-    let dropAt = null;
-    let dropArea = null;
-    if (req && req.fromDrag) {
-      const point = screen.getCursorScreenPoint();
-      const bar = tabbarScreenRect(sender.id);
-      const overOwnBar =
-        bar &&
-        point.x >= bar.x &&
-        point.x <= bar.x + bar.width &&
-        point.y >= bar.y &&
-        point.y <= bar.y + bar.height;
-      if (overOwnBar) return { ok: true, cancelled: true };
-      dropAt = point;
-      // getDisplayMatching requires a full rect (x/y/width/height) in Electron 33.
-      dropArea = screen.getDisplayMatching({ x: point.x, y: point.y, width: 1, height: 1 }).workArea;
-    }
+      let dropAt = null;
+      let dropArea = null;
+      if (req && req.fromDrag) {
+        const point = screen.getCursorScreenPoint();
+        // 松手压在任一宿主窗口的页签栏上，就说明这是"拖到那条栏上"而非拆出新窗口，交给那条栏的
+        // drop（session:tab-move）处理。Linux 上源窗口 dragend 常早于目标窗口 drop 到达：若不在这里
+        // 先挡下，会按拆出建窗、中途改写 tabGroup 映射，一旦建窗失败就会让源组的页签摘不掉而共存。
+        if (hostWindows().some((w) => overBar(w, point))) return { ok: true, cancelled: true };
+        dropAt = point;
+        // getDisplayMatching requires a full rect (x/y/width/height) in Electron 33.
+        dropArea = screen.getDisplayMatching({ x: point.x, y: point.y, width: 1, height: 1 }).workArea;
+      }
 
-    const dropInto = req && req.groupId ? String(req.groupId) : '';
-    const group = dropInto
-      ? detachedGroups.get(dropInto)
-      : await createGroup(tab, dropAt, dropArea);
-    if (dropInto && (!group || group.window.isDestroyed())) {
-      throw Object.assign(new Error('Unknown target group'), { code: 'SSH_OWNER' });
+      const dropInto = req && req.groupId ? String(req.groupId) : '';
+      const group = dropInto
+        ? detachedGroups.get(dropInto)
+        : await createGroup(tab, dropAt, dropArea);
+      if (dropInto && (!group || group.window.isDestroyed())) {
+        throw Object.assign(new Error('Unknown target group'), { code: 'SSH_OWNER' });
+      }
+      if (ownGroup) {
+        ownGroup.tabIds = ownGroup.tabIds.filter((id) => id !== tab.id);
+        // createGroup 已经把这条页签记到新组名下了，只有归属还指向旧组时才需要摘掉。
+        if (tabGroup.get(tab.id) === ownGroup.id) tabGroup.delete(tab.id);
+        sendGroup(ownGroup);
+        closeGroupIfEmpty(ownGroup);
+      }
+      if (dropInto) {
+        const at = req.beforeTabId ? group.tabIds.indexOf(String(req.beforeTabId)) : -1;
+        if (at >= 0) group.tabIds.splice(at, 0, tab.id);
+        else group.tabIds.push(tab.id);
+        tabGroup.set(tab.id, group.id);
+        detachedTabs.set(tab.id, tab);
+        sendGroup(group);
+      }
+      if (!ownGroup) sendToHost('session:detached', { tabId: tab.id, detached: true });
+      logger.info('session', 'session tab handed to a detached window', {
+        groupId: group.id, tabId: tab.id, kind: tab.kind, host: tab.host, port: tab.port, from: ownGroup ? ownGroup.id : 'host',
+      });
+      return { ok: true, reused: false, groupId: group.id };
+    } catch (err) {
+      // "Object has been destroyed" 表示 sender 或刚创建的窗口的 webContents 已不在了——
+      // 窗口间快速交互（close→drag→create）时 Chromium 可能还没完全清理，静默取消即可。
+      if (err && /Object has been destroyed/i.test(err.message || '')) {
+        logger.warn('session', 'session:detach cancelled — object destroyed', { message: err.message });
+        return { ok: true, cancelled: true };
+      }
+      throw err;
     }
-    if (ownGroup) {
-      ownGroup.tabIds = ownGroup.tabIds.filter((id) => id !== tab.id);
-      // createGroup 已经把这条页签记到新组名下了，只有归属还指向旧组时才需要摘掉。
-      if (tabGroup.get(tab.id) === ownGroup.id) tabGroup.delete(tab.id);
-      sendGroup(ownGroup);
-      closeGroupIfEmpty(ownGroup);
-    }
-    if (dropInto) {
-      const at = req.beforeTabId ? group.tabIds.indexOf(String(req.beforeTabId)) : -1;
-      if (at >= 0) group.tabIds.splice(at, 0, tab.id);
-      else group.tabIds.push(tab.id);
-      tabGroup.set(tab.id, group.id);
-      detachedTabs.set(tab.id, tab);
-      sendGroup(group);
-    }
-    if (!ownGroup) sendToHost('session:detached', { tabId: tab.id, detached: true });
-    logger.info('session', 'session tab handed to a detached window', {
-      groupId: group.id, tabId: tab.id, kind: tab.kind, host: tab.host, port: tab.port, from: ownGroup ? ownGroup.id : 'host',
-    });
-    return { ok: true, reused: false, groupId: group.id };
   }, true);
 
   /** 独立窗口启动时领取自己该显示哪些页签；主窗口不需要（它持有全量 store.tabs）。 */
@@ -1616,7 +1653,7 @@ function registerIpc() {
   handle('session:tab-close', (sender, req) => {
     const group = senderGroup(sender);
     const tabId = String((req && req.tabId) || '');
-    // 页签刚被别的窗口接走时这条会晚到，重复关闭按已完成处理。
+    // 页签刚被别的窗口接走时这条会晚到，重复关闭按已完成处理；否则会误删归属别组的状态。
     if (!group || !group.tabIds.includes(tabId)) return { ok: true, same: true };
     group.tabIds = group.tabIds.filter((id) => id !== tabId);
     tabGroup.delete(tabId);
@@ -1745,16 +1782,11 @@ function registerIpc() {
 
   // ---- SFTP panel window & transfers ----
   const loadSftpPanel = async (panel) => {
-    const htmlPath = path.join(__dirname, '..', 'dist', 'index.html');
-    const cacheQs = `t=${Date.now()}`;
-    // bust HTTP/file cache so a rebuild is always picked up
-    try {
-      await panel.webContents.session.clearCache();
-    } catch (_) {}
     if (isDev && process.env.VITE_DEV_SERVER_URL) {
+      const cacheQs = `t=${Date.now()}`;
       await panel.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${cacheQs}#/sftp`);
     } else {
-      await panel.loadURL('file://' + htmlPath.replace(/\\/g, '/') + '?' + cacheQs + '#sftp');
+      await loadIndexWithRetry(panel, 'sftp');
     }
   };
 
@@ -1824,6 +1856,11 @@ function registerIpc() {
       // 渲染进程已死：既不会再答复关闭询问，也不能被 open-window 当作可复用面板
       sftpCloseGuard.bypass = true;
       if (!panel.isDestroyed()) panel.destroy();
+    });
+    panel.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
+      if (!isMainFrame) return;
+      logger.error('sftp', 'panel did-fail-load', { code, desc, url });
+      if (!sftpPanelReady && !panel.isDestroyed()) panel.destroy();
     });
     let loadError = null;
     const loading = loadSftpPanel(panel).catch((error) => {
@@ -2049,6 +2086,12 @@ app.whenReady().then(() => {
   sftpManager = new SftpManager({ send, store, log: logger });
   registerIpc();
   app.on('browser-window-created', () => applyZoom());
+  // 生产模式预热 asar FUSE：Node.js 对 asar 有特殊补丁，readFileSync 会先触发并稳定 FUSE 挂载，
+  // 确保后续 Chromium 通过 loadFile 访问同一个路径时不会遇到 "还没 ready" 的瞬态。
+  // 不关心读取内容，只关心它成功完成——失败也不会抛（主窗口 loadFile 本身也有 retry）。
+  if (!isDev) {
+    try { fs.readFileSync(INDEX_HTML_PATH, 'utf8'); } catch (_) {}
+  }
   createWindow();
   createTray();
 

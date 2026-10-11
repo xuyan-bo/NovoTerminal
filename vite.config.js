@@ -20,6 +20,21 @@ export default defineConfig({
     emptyOutDir: true,
     assetsDir: 'assets',
     target: 'es2022',
+    chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('element-ui')) return 'element-ui';
+            if (id.includes('echarts')) return 'echarts';
+            if (id.includes('@xterm')) return 'xterm';
+            if (id.includes('novnc')) return 'novnc';
+            if (id.includes('ironrdp')) return 'ironrdp';
+            if (id.includes('marked')) return 'marked';
+          }
+        },
+      },
+    },
   },
   server: {
     host: '127.0.0.1',

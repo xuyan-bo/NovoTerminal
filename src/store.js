@@ -90,7 +90,10 @@ export function closeTab(id) {
   }
   store.tabs.splice(i, 1);
   if (store.activeTab === id) {
-    store.activeTab = store.tabs[Math.max(0, i - 1)].id;
+    // 独立窗口里 store.tabs 只含本组页签，关掉最后一条后会变空：此时没有可激活的邻位，
+    // activeTab 置空即可（主窗口始终留着首页，不会走到这里）。直接索引 [0].id 会抛错。
+    const next = store.tabs[Math.max(0, i - 1)];
+    store.activeTab = next ? next.id : '';
   }
   // 独立窗口里的页签归主进程记账：主窗口那份副本要靠这条广播一起消失。
   if (hostedGroupId && api.sessionTabClose) api.sessionTabClose({ tabId: id }).catch(() => {});
