@@ -39,6 +39,16 @@ export default {
       this.x = event.clientX;
       this.y = event.clientY;
       this.visible = true;
+      // fixed 定位跟随光标，量出实际尺寸后收进视口，避免靠近右/下边缘时菜单溢出点不到
+      this.$nextTick(() => {
+        const el = this.$el;
+        if (!el) return;
+        const pad = 4;
+        const maxX = window.innerWidth - el.offsetWidth - pad;
+        const maxY = window.innerHeight - el.offsetHeight - pad;
+        this.x = Math.max(pad, Math.min(event.clientX, maxX));
+        this.y = Math.max(pad, Math.min(event.clientY, maxY));
+      });
     },
     closeOutside(event) {
       if (!this.$el.contains(event.target)) this.visible = false;

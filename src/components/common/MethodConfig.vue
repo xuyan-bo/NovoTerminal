@@ -49,7 +49,7 @@
           <button
             type="button"
             class="gear-icon-btn"
-            :disabled="!draftRow(m).enabled || !!testing"
+            :disabled="disabled || !draftRow(m).enabled || !!testing"
             :class="{ spinning: testingId === m.id }"
             @click="$emit('test', m)"
           >
@@ -116,10 +116,6 @@ export default {
   /* el-input-number--mini 主题宽 130px，右侧箭头要占 50px 内边距，低于 101px 时 5 位端口会被裁掉 */
   width: 110px;
   flex-shrink: 0;
-}
-/* primary radio + gear/test icons — keep tight */
-.method-row .el-radio {
-  margin-right: 0 !important;
 }
 .method-icon-actions {
   display: inline-flex;

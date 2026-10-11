@@ -162,6 +162,15 @@ export default {
     const dropDest = this.dropRowPath(side, rowEl) || (side === 'remote' ? s.remotePath : this.localDropDir());
 
     if (payload.side === side) return;
+
+    // 先去重锁再重连：若等重连返回后才上锁，这段窗口期里的第二次 drop 会失效并重复传输
+    const lockKey = `${payload.side}:${(payload.list || []).map((x) => x.path).join(', ')}>${side}:${dropDest}`;
+    if (this._dropLock[lockKey]) return;
+    this._dropLock[lockKey] = true;
+    setTimeout(() => {
+      delete this._dropLock[lockKey];
+    }, 1500);
+
     if (!s.connId) {
       try {
         const r = unwrap(await api.sftpOpen({ assetId: s.assetId }));
@@ -179,13 +188,6 @@ export default {
     }
     // Reopening can outlive the tab it belongs to; re-resolve before touching its state.
     s = this.sessionById(s.id) || s;
-
-    const lockKey = `${payload.side}:${(payload.list || []).map((x) => x.path).join(', ')}>${side}:${dropDest}`;
-    if (this._dropLock[lockKey]) return;
-    this._dropLock[lockKey] = true;
-    setTimeout(() => {
-      delete this._dropLock[lockKey];
-    }, 1500);
 
     try {
       await this.runTransfers(s, payload.list || [], side, dropDest);

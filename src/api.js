@@ -30,13 +30,6 @@ function mockSettings() {
   };
 }
 
-async function local(method, ...args) {
-  // browser-only prototype fallback for vite dev without electron
-  if (method === 'store:snapshot') return { ...mockState, settings: mockSettings() };
-  if (method === 'store:settings') return mockSettings();
-  return { __error: true, message: t('msg.needElectron'), code: 'NO_BRIDGE' };
-}
-
 export const api = hasBridge
   ? window.novoTerminal
   : {
@@ -194,6 +187,9 @@ export const api = hasBridge
         return null;
       },
       async monitorUiSet() {
+        return { ok: false, code: 'NO_BRIDGE' };
+      },
+      async monitorUiDrop() {
         return { ok: false, code: 'NO_BRIDGE' };
       },
       onMonitorSnapshot() {

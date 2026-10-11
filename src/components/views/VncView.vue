@@ -185,6 +185,7 @@ export default {
 
         const screenEl = this.$refs.screenEl;
         if (!screenEl) {
+          this.disconnectNow(true);
           this.status = 'error';
           return;
         }
@@ -249,6 +250,8 @@ export default {
 
         refresh().catch(() => {});
       } catch (e) {
+        // 代理已建立或订阅已挂上时失败要就地释放，不能留到组件销毁才清
+        this.disconnectNow(true);
         this.status = 'error';
         this.statusDetail = e.message || String(e);
       }

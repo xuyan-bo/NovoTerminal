@@ -94,6 +94,7 @@ const api = {
   monitorStop: (sessionId) => ipcRenderer.invoke('monitor:stop', sessionId),
   monitorUiGet: (tabId) => ipcRenderer.invoke('monitor:ui-get', tabId),
   monitorUiSet: (tabId, ui) => ipcRenderer.invoke('monitor:ui-set', tabId, ui),
+  monitorUiDrop: (tabId) => ipcRenderer.invoke('monitor:ui-drop', tabId),
   onMonitorSnapshot: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('monitor:snapshot', handler);

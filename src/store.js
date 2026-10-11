@@ -97,6 +97,8 @@ export function closeTab(id) {
   }
   // 独立窗口里的页签归主进程记账：主窗口那份副本要靠这条广播一起消失。
   if (hostedGroupId && api.sessionTabClose) api.sessionTabClose({ tabId: id }).catch(() => {});
+  // 主窗口自己关页签时要清掉主进程按 tabId 存的监控面板偏好，独立窗口那份由上面的广播顺带清理。
+  if (!hostedGroupId && tab.kind === 'ssh' && api.monitorUiDrop) api.monitorUiDrop(id).catch(() => {});
 }
 
 export async function removeRecent(id, method) {

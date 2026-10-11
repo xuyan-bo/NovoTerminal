@@ -134,7 +134,8 @@ export default {
         const colors = { ...(prev.advanced?.colors || {}), ...resolveSshTheme(this.form) };
         methods.ssh = {
           ...prev,
-          enabled: true,
+          // 保存配色不应顺手把 SSH 方法启用：沿用原状态，仅在没有记录时默认启用
+          enabled: prev.enabled !== false,
           advanced: { ...(prev.advanced || {}), colors },
         };
         unwrap(

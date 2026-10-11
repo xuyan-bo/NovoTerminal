@@ -307,6 +307,9 @@ function closeSshOwner(ownerId) {
   if (sshSessions) sshSessions.closeOwner(ownerId);
   if (sshMonitor) sshMonitor.stopOwner(ownerId);
   if (sftpManager) sftpManager.closeOwner(ownerId);
+  // 内嵌 VNC/RDP 的本地代理同样按渲染进程归属回收：WebSocket 还没建立的会话不会自行结束
+  if (vncSessions) vncSessions.closeOwner(ownerId);
+  if (rdpSessions) rdpSessions.closeOwner(ownerId);
   const tests = sshTests.get(ownerId);
   if (tests) for (const connection of tests) connection.close();
   sshTests.delete(ownerId);
@@ -787,7 +790,7 @@ function registerIpc() {
     } catch (_) {
       return null;
     }
-  });
+  }, true);
   handle('clipboard:write-text', (text) => {
     try {
       clipboard.writeText(text == null ? '' : String(text));
@@ -928,11 +931,11 @@ function registerIpc() {
     }
     return true;
   });
-  /** 备份操作前的本机身份验证；导出与导入沿用同一道门槛。 */
+  /** 备份操作前的本机身份验证；导出与导入始终重新认证，不复用 30 秒缓存（缓存只留给密码查看）。 */
   async function requireSystemAuth(reason) {
     const lang = store.getSettings().lang;
     const auth = await verifySystemAuth(reason, mainWindowHwnd(), {
-      force: process.platform === 'darwin', lang, log: logger,
+      force: true, lang, log: logger,
     });
     if (!auth.ok) {
       const e = new Error(auth.message || (lang === 'en' ? 'System identity verification failed' : '系统身份验证失败'));
@@ -1023,15 +1026,15 @@ function registerIpc() {
   // ---- Logs ----
   handle('log:list', (filter) => logStore.list(filter || {}));
   handle('log:clear', () => logStore.clear());
-  handle('log:write', (p) => {
+  handle('log:write', (sender, p) => {
     const level =
       p && p.level && ['error', 'warn', 'info'].includes(p.level) ? p.level : 'info';
     return logStore.log(level, (p && p.source) || 'renderer', (p && p.message) || '', p && p.meta);
-  });
+  }, true);
 
   handle('session:test', (sender, req) => sessions.testConnection(req, sshRequestContext(sender)), true);
   handle('ssh:auth-reply', (sender, requestId, answers) => sshPrompts.reply(sender.id, requestId, answers), true);
-  handle('session:connect', async (req) => {
+  handle('session:connect', async (sender, req) => {
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
     const method = hit.asset.methods && hit.asset.methods[req.methodId];
@@ -1050,11 +1053,11 @@ function registerIpc() {
       display: mapRdpDisplay(advanced),
       auth: { mode: 'keytar' },
     });
-  });
-  handle('session:disconnect', (sid) => sessions.disconnect(sid));
-  handle('session:list', () => sessions.listActive());
-  handle('rdp:probe-client', (clientId) => sessions.probeClient(clientId));
-  handle('rdp:pick-client-binary', async (clientId) => {
+  }, true);
+  handle('session:disconnect', (sender, sid) => sessions.disconnect(sid), true);
+  handle('session:list', (sender) => sessions.listActive(), true);
+  handle('rdp:probe-client', (sender, clientId) => sessions.probeClient(clientId), true);
+  handle('rdp:pick-client-binary', async (sender, clientId) => {
     const en = store.getSettings().lang === 'en';
     const parent = win && !win.isDestroyed() ? win : BrowserWindow.getFocusedWindow();
     const r = await dialog.showOpenDialog(parent, {
@@ -1066,7 +1069,7 @@ function registerIpc() {
     if (!check.ok) return check;
     logger.info('rdp', 'client binary selected', { clientId: String(clientId || ''), path: check.path });
     return check;
-  });
+  }, true);
 
   // ---- SSH terminal ----
   handle('ssh:connect', async (sender, req) => {
@@ -1144,6 +1147,11 @@ function registerIpc() {
     monitorUi.set(tabId, next);
     return { ok: true };
   }, true);
+  /** 主窗口关掉页签时清掉这条界面偏好，否则会被关掉的 tabId 一直占着这张表。 */
+  handle('monitor:ui-drop', (sender, tabId) => {
+    if (typeof tabId === 'string') monitorUi.delete(tabId);
+    return { ok: true };
+  }, true);
 
   // ---- AI 助手：一切动作都以「是否拥有这条 SSH 会话」为权限边界 ----
   handle('ai:send', (sender, req) => {
@@ -1164,7 +1172,7 @@ function registerIpc() {
     return aiAssistant.archiveSession(req);
   }, true);
   /** 历史列表、载入、重命名、删除都以「这条 SSH 会话属于哪个资产」为边界，渲染端拿不到别人的目录。 */
-  handle('ai:sessions', (sender, req) => {
+  handle('ai:sessions', async (sender, req) => {
     ownSsh(sender, req && req.sessionId);
     return aiAssistant.listSessions(req);
   }, true);
@@ -1960,7 +1968,7 @@ function registerIpc() {
     if (rec && rec.ownerId !== sender.id) throw sftpNotOwner();
     return sftpManager.closeSession(connId);
   }, true);
-  handle('sftp:clipboard-files', async (fullList) => {
+  handle('sftp:clipboard-files', async (sender, fullList) => {
     const out = [];
     const pushFile = (p) => {
       if (!p) return;
@@ -2012,7 +2020,7 @@ function registerIpc() {
       }
     }
     return out;
-  });
+  }, true);
   handle('sftp:pick-local-dir', (sender) => {
     const en = store.getSettings().lang === 'en';
     const parent = BrowserWindow.fromWebContents(sender) || win;
@@ -2084,23 +2092,50 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('before-quit', (e) => {
-  // before-quit fires for both tray-initiated quit AND programmatic quit.
-  // 独立窗口的关窗拦截在这里让路，否则带着活动会话的子窗口会把退出卡在确认上。
-  appQuitting = true;
+/**
+ * SFTP 的会话关闭要删掉已写入的远端半截文件，是异步的；直接 quit 会让进程在清理前结束，
+ * 留下无人管理的目标文件。这里把退出拦一次、等它收尾（带超时兜底）后再发一次退出。
+ * 其余清理同步且只跑一次。
+ */
+let quitState = 'idle';
+function quitCleanup() {
   // Clean up sessions always. Tray cleanup must happen so macOS doesn't leak it.
   resetAuthCache();
-  if (store) store.flushPersist();
+  // 退出阶段没有调用方接异常，加密不可用导致落盘失败也不能拦死退出
+  try {
+    if (store) store.flushPersist();
+  } catch (e) {
+    logger.warn('store', 'flush persist on quit failed', { message: e && e.message, code: e && e.code });
+  }
   if (vncSessions) vncSessions.destroyAll();
   if (rdpSessions) rdpSessions.destroyAll();
   if (sshSessions) sshSessions.destroyAll();
   if (sshMonitor) sshMonitor.destroyAll();
   if (aiAssistant) aiAssistant.destroyAll();
-  if (sftpManager) sftpManager.destroyAll();
   for (const tests of sshTests.values()) for (const connection of tests) connection.close();
   sshTests.clear();
   sshPrompts.destroyAll();
   destroyTray();
+}
+
+app.on('before-quit', (e) => {
+  // before-quit fires for both tray-initiated quit AND programmatic quit.
+  // 独立窗口的关窗拦截在这里让路，否则带着活动会话的子窗口会把退出卡在确认上。
+  appQuitting = true;
+  if (quitState === 'done') return;
+  e.preventDefault();
+  if (quitState === 'cleaning') return;
+  quitState = 'cleaning';
+  const draining = sftpManager
+    ? Promise.resolve(sftpManager.destroyAll()).catch((err) => {
+        logger.warn('sftp', 'destroy all on quit failed', { message: err && err.message });
+      })
+    : Promise.resolve();
+  Promise.race([draining, new Promise((r) => setTimeout(r, 2500))]).then(() => {
+    quitCleanup();
+    quitState = 'done';
+    app.quit();
+  });
 });
 
 app.on('window-all-closed', () => {

@@ -398,7 +398,7 @@ export default {
         this.passVisible = false;
         return;
       }
-      if (!this.isEdit && !this.isClone) {
+      if (!this.isEdit && !this.isClone && !this.isView) {
         this.passVisible = true;
         return;
       }

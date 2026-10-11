@@ -39,6 +39,20 @@ const TAG_LEN = 16;
 const MIN_PASSWORD = 6;
 const MAX_PASSWORD = 256;
 const CATEGORIES = ['settings', 'assets', 'ai'];
+/** 允许从备份包还原的设置项；dataPath 不在其中（由本机决定），其余未知键一并丢弃，避免备份包注入任意设置 */
+const RESTORE_SETTINGS_KEYS = [
+  'theme',
+  'lang',
+  'zoom',
+  'font',
+  'closeAction',
+  'homeWelcome',
+  'autoUpdateCheck',
+  'skippedUpdateVersion',
+  'recentLimit',
+  'logTotalMb',
+  'ai',
+];
 
 function fail(code, message) {
   return Object.assign(new Error(message), { code });
@@ -319,8 +333,12 @@ function restoreBackup({ store, entries }) {
     } catch (_) {
       throw fail('BACKUP_BAD_FORMAT', 'settings unreadable');
     }
-    const clean = incoming && typeof incoming === 'object' ? { ...incoming } : {};
-    delete clean.dataPath;
+    const clean = {};
+    if (incoming && typeof incoming === 'object') {
+      for (const key of RESTORE_SETTINGS_KEYS) {
+        if (key in incoming) clean[key] = incoming[key];
+      }
+    }
     if ('ai' in clean) clean.ai = normalizeAi(clean.ai);
     if ('recentLimit' in clean) clean.recentLimit = clampRecentLimit(clean.recentLimit);
     if ('logTotalMb' in clean) clean.logTotalMb = clampLogTotalMb(clean.logTotalMb);

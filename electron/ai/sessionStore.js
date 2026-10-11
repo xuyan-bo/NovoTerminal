@@ -13,6 +13,7 @@
  */
 
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 
 const ROOT_DIR = 'ai-sessions';
@@ -85,11 +86,11 @@ class AiSessionStore {
     return Object.assign(new Error(message), { code });
   }
 
-  list(assetId, protocol) {
+  async list(assetId, protocol) {
     const dir = this.dirOf(assetId, protocol);
     let names;
     try {
-      names = fs.readdirSync(dir);
+      names = await fsp.readdir(dir);
     } catch (_) {
       return [];
     }
@@ -111,13 +112,13 @@ class AiSessionStore {
     for (const name of onDisk) {
       let st;
       try {
-        st = fs.statSync(path.join(dir, name));
+        st = await fsp.stat(path.join(dir, name));
       } catch (_) {
         continue;
       }
       const prev = files[name];
       if (prev && prev.mtimeMs === st.mtimeMs && prev.size === st.size) continue;
-      const rec = this._readFile(path.join(dir, name), true);
+      const rec = await this._readFileAsync(path.join(dir, name), true);
       files[name] = { mtimeMs: st.mtimeMs, size: st.size, summary: rec ? summaryOf(rec) : null };
       dirty = true;
     }
@@ -231,15 +232,27 @@ class AiSessionStore {
 
   _readFile(file, skipContext) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (!parsed || !Array.isArray(parsed.messages) || typeof parsed.id !== 'string') return null;
-      parsed.messages = parsed.messages.map(normalizeMessage).filter(Boolean);
-      parsed.title = str(parsed.title, 120);
-      parsed.context = !skipContext && parsed.context && Array.isArray(parsed.context.messages) ? normalizeContext(parsed.context) : null;
-      return parsed;
+      return this._parseRecord(JSON.parse(fs.readFileSync(file, 'utf8')), skipContext);
     } catch (_) {
       return null;
     }
+  }
+
+  /** list 的逐文件读取走异步版，避免列历史时同步读整份文件把主进程卡住。 */
+  async _readFileAsync(file, skipContext) {
+    try {
+      return this._parseRecord(JSON.parse(await fsp.readFile(file, 'utf8')), skipContext);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  _parseRecord(parsed, skipContext) {
+    if (!parsed || !Array.isArray(parsed.messages) || typeof parsed.id !== 'string') return null;
+    parsed.messages = parsed.messages.map(normalizeMessage).filter(Boolean);
+    parsed.title = str(parsed.title, 120);
+    parsed.context = !skipContext && parsed.context && Array.isArray(parsed.context.messages) ? normalizeContext(parsed.context) : null;
+    return parsed;
   }
 }
 

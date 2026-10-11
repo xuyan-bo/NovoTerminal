@@ -901,8 +901,21 @@ export default {
       }
       items.push({ act: 'refresh', label: t('sftp.refresh') });
       if (!computerView) items.push({ act: 'select-all', label: t('sftp.selectAll') });
-      this.ctx = { visible: true, x: e.clientX, y: e.clientY, side, item: null, items };
+      this.openCtxAt(e, side, null, items);
       if (side === 'remote') this.refreshClipFiles();
+    },
+    /** 菜单 fixed 跟随光标，量出尺寸后收进视口，避免靠近右/下边缘时溢出点不到；两处右键入口共用。 */
+    openCtxAt(e, side, item, items) {
+      this.ctx = { visible: true, x: e.clientX, y: e.clientY, side, item, items };
+      this.$nextTick(() => {
+        const el = this.$el && this.$el.querySelector('.sftp-ctx');
+        if (!el) return;
+        const pad = 4;
+        const maxX = window.innerWidth - el.offsetWidth - pad;
+        const maxY = window.innerHeight - el.offsetHeight - pad;
+        this.ctx.x = Math.max(pad, Math.min(e.clientX, maxX));
+        this.ctx.y = Math.max(pad, Math.min(e.clientY, maxY));
+      });
     },
     /** The OS clipboard can change at any moment, so the paste item is re-checked on open and on focus. */
     async refreshClipFiles() {
@@ -940,7 +953,7 @@ export default {
       }
       if (!many) items.push({ act: 'rename', label: t('sftp.rename') });
       items.push({ act: 'delete', label: t('sftp.delete'), danger: true });
-      this.ctx = { visible: true, x: e.clientX, y: e.clientY, side, item: f, items };
+      this.openCtxAt(e, side, f, items);
     },
     /** 远端侧（以及本机→远端的上传）要先有连接；本机侧操作不该依赖有没有页签。 */
     needRemote() {

@@ -596,6 +596,8 @@ class SftpManager {
       rs: null,
       ws: null,
       connId: meta.connId,
+      // 目标文件是否已被本次传输打开（截断/创建）：未打开时取消不能删它，否则会毁掉覆盖前已存在的文件
+      _touched: false,
     };
     this.tasks.set(taskId, task);
     this.log &&
@@ -822,6 +824,7 @@ class SftpManager {
             return fail(err);
           }
           handle = h;
+          task._touched = true;
           pump();
         });
       });
@@ -925,6 +928,7 @@ class SftpManager {
           })
         );
       }
+      task._touched = true;
 
       sftp.open(remotePath, 'r', (err, h) => {
         if (err) return fail(err);
@@ -1147,6 +1151,8 @@ class SftpManager {
     try {
       if (typeof task._release === 'function') task._release();
     } catch (_) {}
+    // 本次没打开过目标文件（还在排队/重连等握手）：删除目标等于毁掉覆盖前就存在的文件，直接放弃清理
+    if (!task._touched) return;
     // give Windows a moment to drop the handle lock
     await new Promise((r) => setTimeout(r, 40));
     if (!task.targetPath) return;

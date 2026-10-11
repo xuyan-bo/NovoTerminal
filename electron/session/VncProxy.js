@@ -58,9 +58,10 @@ class VncProxy {
     this.onState('connecting');
 
     const tcp = net.createConnection({ host: this.host, port: this.port }, () => {
-      this._tcpSock = tcp;
       this.onState('ready');
     });
+    // 立刻登记引用：TCP 还没连上时 stop() 也要能销毁它，否则该远端连接会永久泄漏
+    this._tcpSock = tcp;
 
     tcp.setNoDelay(true);
     ws._socket.setNoDelay(true);

@@ -100,6 +100,17 @@ class RdpSessionManager {
     return { ok: true, existed: true };
   }
 
+  /** 宿主渲染进程销毁时兜底：按 ownerId 释放该窗口名下所有代理，避免 WebSocket 尚未建立的会话残留在本地监听 */
+  closeOwner(ownerId) {
+    for (const [sessionId, s] of this.sessions) {
+      if (s.ownerId !== ownerId) continue;
+      this.sessions.delete(sessionId);
+      try {
+        s.proxy.stop();
+      } catch (_) {}
+    }
+  }
+
   destroyAll() {
     for (const s of this.sessions.values()) {
       try {

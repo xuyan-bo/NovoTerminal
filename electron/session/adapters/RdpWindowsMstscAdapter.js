@@ -123,7 +123,8 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
       });
 
       child.once('exit', (code) => {
-        this.cleanupSession(sessionId);
+        // disconnect() 已经收尾过的会话不再重复报 ended
+        if (!this.cleanupSession(sessionId)) return;
         this.onEvent({ type: 'ended', sessionId, code, client: this.id });
       });
     });
@@ -131,17 +132,20 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
 
   cleanupSession(sessionId) {
     const entry = this.sessions.get(sessionId);
+    if (!entry) return false;
     this.sessions.delete(sessionId);
-    if (!entry || !entry.credTarget) return;
-    // 只回收我们自己写的那条 generic 凭据，用户在 mstsc 里勾「记住我的凭据」留下的条目不动
-    execFile('cmdkey.exe', ['/delete:' + entry.credTarget], (error) => {
-      if (error && this.log) {
-        this.log.warn('rdp', 'cmdkey credential cleanup failed', {
-          target: entry.credTarget,
-          message: error.message,
-        });
-      }
-    });
+    if (entry.credTarget) {
+      // 只回收我们自己写的那条 generic 凭据，用户在 mstsc 里勾「记住我的凭据」留下的条目不动
+      execFile('cmdkey.exe', ['/delete:' + entry.credTarget], (error) => {
+        if (error && this.log) {
+          this.log.warn('rdp', 'cmdkey credential cleanup failed', {
+            target: entry.credTarget,
+            message: error.message,
+          });
+        }
+      });
+    }
+    return true;
   }
 
   async disconnect(sessionId) {
@@ -154,8 +158,9 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
         });
       }
     } catch (_) {}
-    this.cleanupSession(sessionId);
-    this.onEvent({ type: 'ended', sessionId, code: 0, client: this.id });
+    if (this.cleanupSession(sessionId)) {
+      this.onEvent({ type: 'ended', sessionId, code: 0, client: this.id });
+    }
     return { ok: true };
   }
 

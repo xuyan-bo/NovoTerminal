@@ -290,6 +290,7 @@ export default {
       const canvas = this.$refs.canvas;
       const screenEl = this.$refs.screenEl;
       if (!canvas || !screenEl) {
+        this.disconnectNow(true);
         this.status = 'error';
         return;
       }
@@ -385,6 +386,7 @@ export default {
             console.error('[rdp] session.run error:', e);
             if (this.session === session) {
               this.session = null;
+              this._stopClipPoll();
               this.status = 'error';
               this.statusDetail = this.errUserText(e);
             }
@@ -393,6 +395,8 @@ export default {
         refresh().catch(() => {});
       } catch (e) {
         console.error('[rdp] connect error:', e);
+        // 代理已建立或订阅已挂上时失败要就地释放，不能留到组件销毁才清
+        this.disconnectNow(true);
         this.status = 'error';
         this.statusDetail = this.errUserText(e);
       }
@@ -610,6 +614,8 @@ export default {
       if (this.session === session) {
         this.session = null;
         if (this._disposeInput) this._disposeInput();
+        // 会话自己结束时也要停掉剪贴板轮询，不能留到页签销毁
+        this._stopClipPoll();
       }
     },
 

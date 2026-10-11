@@ -191,13 +191,14 @@ class AiManager {
     }
   }
 
-  listSessions(req) {
+  async listSessions(req) {
     const conv = this._meta(req && req.sessionId);
+    const sessions = this.sessions ? await this.sessions.list(conv.meta.assetId, conv.meta.protocol) : [];
     return {
       ok: true,
       asset: conv.meta,
       current: conv.recordId || '',
-      sessions: this.sessions ? this.sessions.list(conv.meta.assetId, conv.meta.protocol) : [],
+      sessions,
     };
   }
 

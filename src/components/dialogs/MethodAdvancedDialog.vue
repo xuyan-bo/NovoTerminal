@@ -5,8 +5,6 @@
     width="620px"
     top="8vh"
     :close-on-click-modal="false"
-    :close-on-press-escape="!saving"
-    :show-close="!saving"
     append-to-body
   >
     <el-form
@@ -15,7 +13,7 @@
       :rules="formRules"
       label-width="186px"
       size="small"
-      :disabled="saving || isView"
+      :disabled="isView"
       @submit.native.prevent
     >
       <el-form-item
@@ -68,14 +66,14 @@
                 :placeholder="ph(f)"
               >
                 <template slot="append">
-                  <el-button icon="el-icon-search" :disabled="!canBrowse" @click="runClientBrowse">
+                  <el-button icon="el-icon-search" :disabled="isView || !canBrowse" @click="runClientBrowse">
                     {{ $t('adv.rdp.clientPath.browse') }}
                   </el-button>
                 </template>
               </el-input>
               <el-button
                 class="client-path-probe"
-                :disabled="!form.client || !canProbe"
+                :disabled="isView || !form.client || !canProbe"
                 :loading="probing"
                 @click="runClientProbe"
               >
@@ -129,16 +127,16 @@
         <el-button size="mini" @click="visible = false">{{ $t('settings.close') }}</el-button>
       </template>
       <template v-else>
-        <el-button size="mini" :disabled="saving" @click="reset">{{ $t('adv.reset') }}</el-button>
-        <el-button size="mini" :disabled="saving" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
-        <el-button size="mini" type="primary" :loading="saving" :disabled="saving" @click="confirm">{{ $t('settings.save') }}</el-button>
+        <el-button size="mini" @click="reset">{{ $t('adv.reset') }}</el-button>
+        <el-button size="mini" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
+        <el-button size="mini" type="primary" @click="confirm">{{ $t('settings.save') }}</el-button>
       </template>
     </template>
   </el-dialog>
 </template>
 
 <script>
-import { store, api, unwrap, refresh, findAsset } from '../../store';
+import { store, api, unwrap } from '../../store';
 import {
   ADVANCED_FIELDS,
   ADVANCED_DEFAULTS,
@@ -153,7 +151,7 @@ import { t } from '../../i18n';
 export default {
   name: 'MethodAdvancedDialog',
   data() {
-    return { form: {}, saving: false, probing: false };
+    return { form: {}, probing: false };
   },
   computed: {
     dlg() {
@@ -193,11 +191,22 @@ export default {
       return ADVANCED_FIELDS[this.schemaKey] || [];
     },
     formRules() {
-      if (this.schemaKey !== 'rdp' || this.form.engine !== 'external') return {};
-      return {
-        client: [{ ...requiredRule(t, 'adv.rdp.client.required', 'change'), required: true }],
-        clientPath: [{ ...requiredRule(t, 'adv.rdp.clientPath.ph', ['blur', 'change']), required: true }],
-      };
+      const rules = {};
+      if (this.schemaKey === 'rdp' && this.form.engine === 'external') {
+        rules.client = [{ ...requiredRule(t, 'adv.rdp.client.required', 'change'), required: true }];
+        rules.clientPath = [{ ...requiredRule(t, 'adv.rdp.clientPath.ph', ['blur', 'change']), required: true }];
+        return rules;
+      }
+      // SSH/SFTP 的必填与枚举合法性走 el-form 规则，校验结果落在字段下方而不是弹一条 $message
+      if (this.schemaKey === 'ssh' || this.schemaKey === 'sftp') {
+        for (const f of this.allFields) {
+          const list = [];
+          if (f.type === 'select') list.push({ validator: this.selectOptionRule(f), trigger: 'change' });
+          if (f.required) list.push({ ...requiredRule(t, 'adv.ssh.privateKeyRequired'), required: true });
+          if (list.length) rules[f.key] = list;
+        }
+      }
+      return rules;
     },
     platformKey() {
       const p = (window.novoTerminal && window.novoTerminal.platform) || '';
@@ -250,7 +259,6 @@ export default {
       this.clearFieldErrors();
     },
     reset() {
-      if (this.saving) return;
       this.form = this.defaults();
       this.probing = false;
       this.clearFieldErrors();
@@ -308,28 +316,16 @@ export default {
         this.$message.error(e.message || t('err.connect'));
       }
     },
-    validate() {
-      if (this.schemaKey !== 'ssh' && this.schemaKey !== 'sftp') return true;
-      for (const f of this.fields) {
-        const v = this.form[f.key];
-        const blank = v == null || (typeof v === 'string' && v.trim() === '');
-        let error = '';
-        if (f.type === 'select' && !f.options.some((opt) => opt.value === v)) {
-          error = t('adv.ssh.invalidOption', { name: t(f.labelKey) });
-        } else if (f.required && (typeof v !== 'string' || blank)) {
-          error = t('adv.ssh.privateKeyRequired');
-        }
-        if (error) {
-          this.$message.error(error);
-          return false;
-        }
-      }
-      return true;
+    selectOptionRule(f) {
+      return (rule, value, cb) => {
+        if (!f.options || f.options.some((opt) => opt.value === value)) return cb();
+        cb(new Error(t('adv.ssh.invalidOption', { name: t(f.labelKey) })));
+      };
     },
     async confirm() {
-      if (this.isView || this.saving) return;
+      if (this.isView) return;
       const formOk = await this.validateForm();
-      if (!formOk || !this.validate()) return;
+      if (!formOk) return;
       const dlg = this.dlg;
       const methodId = this.methodId;
       const started = Date.now();
@@ -349,58 +345,20 @@ export default {
         }
       });
 
-      let advanced = { ...(dlg.advanced || {}), ...payload };
-      this.saving = true;
-      try {
-        const ctx = dlg.context;
-        // 仅「资产详情」由本对话框直接写资产；「新建/编辑资产对话框」只回传 result，
-        // 由 AssetDialog 保存时统一把 draft.advanced 写入资产，避免双写不一致/覆盖未保存改动
-        const isDetail = ctx && ctx.type === 'detail';
-        const assetId = isDetail && ctx.assetId ? ctx.assetId : null;
-        if (assetId) {
-          const hit = findAsset(assetId);
-          if (!hit) throw new Error(t('detail.empty'));
-          const methods = JSON.parse(JSON.stringify(hit.asset.methods || {}));
-          const prev = methods[methodId] || {};
-          advanced = { ...(prev.advanced || {}), ...payload };
-          methods[methodId] = { ...prev, enabled: true, advanced };
-          unwrap(
-            await api.updateAsset(assetId, {
-              methods,
-              name: hit.asset.name,
-              os: hit.asset.os,
-              host: hit.asset.host,
-              user: hit.asset.user,
-              pass: hit.asset.pass,
-              tags: hit.asset.tags,
-              note: hit.asset.note,
-              gid: hit.group.id,
-            })
-          );
-          await refresh();
-        }
-        api.logWrite?.({
-          level: 'info', source: 'settings',
-          message: assetId ? 'advanced settings saved' : 'advanced settings staged',
-          meta: { methodId, assetId, durationMs: Date.now() - started },
-        }).catch(() => {});
-        if (this.dlg !== dlg || !this.visible) return;
-        store.methodAdvancedResult = {
-          methodId,
-          advanced,
-          ts: Date.now(),
-        };
-        this.$message.success(t('msg.advSaved'));
-        this.visible = false;
-      } catch (e) {
-        api.logWrite?.({
-          level: 'error', source: 'settings', message: 'advanced settings save failed',
-          meta: { methodId, code: e.code, durationMs: Date.now() - started },
-        }).catch(() => {});
-        if (this.dlg === dlg && this.visible) this.$message.error(e.message || t('err.connect'));
-      } finally {
-        this.saving = false;
-      }
+      // 各入口都只回传结果，由 AssetDialog 统一把 draft.advanced 写入资产，
+      // 避免在弹窗里再写一次造成双写不一致或覆盖未保存改动
+      store.methodAdvancedResult = {
+        methodId,
+        advanced: { ...(dlg.advanced || {}), ...payload },
+        ts: Date.now(),
+      };
+      api.logWrite?.({
+        level: 'info', source: 'settings',
+        message: 'advanced settings staged',
+        meta: { methodId, durationMs: Date.now() - started },
+      }).catch(() => {});
+      this.$message.success(t('msg.advSaved'));
+      this.visible = false;
     },
   },
 };

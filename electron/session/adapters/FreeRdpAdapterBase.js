@@ -123,7 +123,8 @@ class FreeRdpAdapterBase extends BaseAdapter {
           resolve({ pid: child.pid, bin, args, note: `${this.id} launched via CLI` });
         });
         child.once('exit', (code) => {
-          this.cleanupSession(sessionId);
+          // disconnect() 已经收尾过的会话不再重复报 ended
+          if (!this.cleanupSession(sessionId)) return;
           this.onEvent({ type: 'ended', sessionId, code, client: this.id });
         });
       };
@@ -132,7 +133,9 @@ class FreeRdpAdapterBase extends BaseAdapter {
   }
 
   cleanupSession(sessionId) {
+    if (!this.sessions.has(sessionId)) return false;
     this.sessions.delete(sessionId);
+    return true;
   }
 
   async disconnect(sessionId) {
@@ -145,8 +148,9 @@ class FreeRdpAdapterBase extends BaseAdapter {
     } catch (_) {
       try { process.kill(entry.pid); } catch (__) {}
     }
-    this.cleanupSession(sessionId);
-    this.onEvent({ type: 'ended', sessionId, code: 0, client: this.id });
+    if (this.cleanupSession(sessionId)) {
+      this.onEvent({ type: 'ended', sessionId, code: 0, client: this.id });
+    }
     return { ok: true };
   }
 

@@ -129,7 +129,12 @@ class AssetStore {
     try {
       if (!fs.existsSync(this.file)) {
         this.data = defaultData();
-        this.persist();
+        // 首次建库时若加密不可用会抛错：不能因落盘失败拦死启动，日志记录后以内存默认值继续
+        try {
+          this.persist();
+        } catch (e) {
+          console.error('[store] initial persist failed', e);
+        }
         return;
       }
       const raw = fs.readFileSync(this.file, 'utf8');
@@ -149,7 +154,12 @@ class AssetStore {
       console.error('[store] load failed', e);
       try {
         if (fs.existsSync(this.backupFile)) {
-          this.data = JSON.parse(fs.readFileSync(this.backupFile, 'utf8'));
+          // 备份是上一份主库的副本，与主库同为密文，必须按 CIPHER_PREFIX 解密后再解析
+          const braw = fs.readFileSync(this.backupFile, 'utf8');
+          const bplain = braw.startsWith(CIPHER_PREFIX)
+            ? safeStorage.decryptString(Buffer.from(braw.slice(CIPHER_PREFIX.length), 'base64'))
+            : braw;
+          this.data = JSON.parse(bplain);
         }
       } catch (_) {
         this.data = defaultData();
@@ -201,25 +211,36 @@ class AssetStore {
     });
   }
 
+  /**
+   * 加密落盘：库文件只允许以 safeStorage 密文写入，加密不可用或被拒时抛错，
+   * 绝不退回明文，也不覆盖已存在的库（失败时保持磁盘现状）。
+   */
+  encrypt(json) {
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw Object.assign(new Error('safeStorage encryption unavailable'), {
+        code: 'STORE_ENCRYPT_UNAVAILABLE',
+      });
+    }
+    try {
+      return safeStorage.encryptString(json);
+    } catch (e) {
+      throw Object.assign(new Error('safeStorage encryption failed: ' + (e && e.message ? e.message : e)), {
+        code: 'STORE_ENCRYPT_UNAVAILABLE',
+      });
+    }
+  }
+
   persist() {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const json = JSON.stringify(this.data, null, 2);
+    // 先加密再落盘：加密失败时这一步就抛，下面不会碰任何文件
+    const enc = this.encrypt(json);
     try {
       if (fs.existsSync(this.file)) {
         fs.copyFileSync(this.file, this.backupFile);
       }
     } catch (_) {}
-    try {
-      if (safeStorage.isEncryptionAvailable()) {
-        const enc = safeStorage.encryptString(json);
-        fs.writeFileSync(this.file, CIPHER_PREFIX + enc.toString('base64'), 'utf8');
-      } else {
-        fs.writeFileSync(this.file, json, 'utf8');
-      }
-    } catch (e) {
-      console.error('[store] persist enc failed, fallback plain', e);
-      fs.writeFileSync(this.file, json, 'utf8');
-    }
+    fs.writeFileSync(this.file, CIPHER_PREFIX + enc.toString('base64'), 'utf8');
   }
 
   snapshot() {
@@ -232,7 +253,12 @@ class AssetStore {
     if (this._persistTimer) clearTimeout(this._persistTimer);
     this._persistTimer = setTimeout(() => {
       this._persistTimer = null;
-      this.persist();
+      // 定时落盘没有调用方能接住异常，这里必须兜住，否则加密不可用会变成未捕获异常
+      try {
+        this.persist();
+      } catch (e) {
+        console.error('[store] deferred persist failed', e);
+      }
     }, 300);
   }
 
