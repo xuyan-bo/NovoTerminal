@@ -369,8 +369,9 @@ button {
   min-height: 0;
 }
 
+/* 与页签栏行同高（3 + 28 + 3 + 1 = 35px），两条分隔线连成一条 */
 .side-search {
-  padding: 8px 12px;
+  padding: 3px 12px;
   border-bottom: 1px solid var(--border);
 }
 
