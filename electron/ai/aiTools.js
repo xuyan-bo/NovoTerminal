@@ -27,6 +27,13 @@
 
 const { exec, platformOf } = require('../ssh/exec');
 
+/** 日志只记命令名与长度：整条命令行常带明文口令（mysql -p…、curl -u…），不能进持久化日志。 */
+function commandBrief(text) {
+  const raw = String(text || '');
+  const first = raw.trim().split(/\s+/)[0] || '';
+  return (first.slice(0, 40) || '(empty)') + ' len=' + raw.length;
+}
+
 /** 探测平台要在判定之前拿到，但不能把用户等确认的时间拖长。 */
 const PLATFORM_PROBE_TIMEOUT_MS = 4000;
 
@@ -828,7 +835,7 @@ function createTools(ctx) {
       const partial = String(error.stdout || '') + (error.stderr ? '\n[stderr]\n' + error.stderr : '');
       // 用户点了停止：命令通道被销毁，把这一条当成「没跑成」如实回报，而不是失败报错
       if (error.code === 'SSH_EXEC_CANCELED') {
-        log && log.info('ai', 'ai exec command canceled', { sessionId, host: target.host, ms: Date.now() - started, command: command.slice(0, 200) });
+        log && log.info('ai', 'ai exec command canceled', { sessionId, host: target.host, ms: Date.now() - started, command: commandBrief(command) });
         return { channel: 'exec', canceled: true, text: '用户已停止这一轮，命令通道被销毁。' + (partial.trim() ? '已取得的输出：\n' + clip(partial) : '') };
       }
       log && log.warn('ai', 'ai exec command failed', { sessionId, host: target.host, message: error.message, code: error.code });
@@ -836,7 +843,7 @@ function createTools(ctx) {
     }
     // 非零退出必须让模型看见：过去只回正文，`'(no output)'` 把失败伪装成成功
     const code = Number.isInteger(out.code) ? out.code : null;
-    log && log.info('ai', 'ai exec command finished', { sessionId, host: target.host, ms: Date.now() - started, exitCode: code, command: command.slice(0, 200) });
+    log && log.info('ai', 'ai exec command finished', { sessionId, host: target.host, ms: Date.now() - started, exitCode: code, command: commandBrief(command) });
     const body = clip(out.stdout) + (out.stderr ? '\n[stderr]\n' + clip(out.stderr, 2000) : '');
     return { channel: 'exec', exitCode: code, text: code && code !== 0 ? body + (body ? '\n' : '') + '[exit ' + code + ']' : body };
   }
@@ -882,4 +889,4 @@ function createTools(ctx) {
   return { definitions, invoke };
 }
 
-module.exports = { createTools };
+module.exports = { createTools, commandBrief };

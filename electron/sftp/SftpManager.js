@@ -446,8 +446,8 @@ class SftpManager {
 
   /** mkdir -p on remote; existing paths are tolerated and known prefixes are never re-walked. */
   mkdirp(connId, remoteDir) {
-    const c = this.conns.get(connId);
-    if (!c || c.closing || !c.sftp) return Promise.resolve({ ok: true });
+    // 会话没了就如实报错：静默返回 ok:true 会让文件夹上传照常起步，最后只剩一屏逐文件失败，根因看不见
+    const c = this._conn(connId);
     return this._mkdirp(c, remoteDir).then(() => ({ ok: true }));
   }
 
@@ -767,12 +767,22 @@ class SftpManager {
         const n = Math.min(CHUNK, size - start);
         queued += n;
         const cbuf = Buffer.allocUnsafe(n);
+        let got = 0;
         try {
-          fs.readSync(localFd, cbuf, 0, n, start);
+          got = fs.readSync(localFd, cbuf, 0, n, start);
         } catch (e) {
           finished = true;
           // EBUSY/EPERM 之类要按「读不了本地文件」定性，界面才有中文可译；原文留给行与日志
           return fail(Object.assign(new Error(`${e.code || ''} ${e.message}`.trim()), { code: 'LOCAL_READ' }));
+        }
+        if (got < n) {
+          // 本地文件在传输中被改小：cbuf 尾部是没写过的内存，按原长度发出去就是往远端写脏数据
+          finished = true;
+          return fail(
+            Object.assign(new Error(`local file shrank during transfer: expected ${n} bytes, read ${got}`), {
+              code: 'LOCAL_READ',
+            })
+          );
         }
         inFlight++;
         sftp.write(handle, cbuf, 0, n, start, (werr) => {
@@ -813,6 +823,9 @@ class SftpManager {
     let retried = false;
     const openRemote = () => {
       this._mkdirp(c, remoteParent).then(() => {
+        // 等 mkdirp 期间任务可能已被取消：行已删除、清理判定也因 _touched 为假跳过了，
+        // 这时再 open('w') 会把远端既有文件截成 0 字节，且再没人负责恢复
+        if (task.status === 'canceled') return;
         sftp.open(remotePath, 'w', (err, h) => {
           if (err) {
             // The directory cache goes stale when the remote tree changes underneath us

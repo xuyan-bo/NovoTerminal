@@ -135,9 +135,6 @@ export const api = hasBridge
       async sessionTest() {
         return { ok: false, error: t('msg.previewMode') };
       },
-      async sessionDisconnect() {
-        return { ok: true };
-      },
       async rdpProbeClient() {
         return { ok: false, code: 'NO_BRIDGE', message: t('msg.needElectron') };
       },

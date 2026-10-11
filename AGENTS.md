@@ -37,7 +37,8 @@
 | `electron/preload.js` | 通过 `contextBridge` 暴露具名、受限 API 和事件订阅 |
 | `electron/main.js` | 窗口、应用生命周期和 IPC 编排；具体协议逻辑交给对应模块 |
 | `electron/session/` | 外部会话适配及连接探测；RDP 分内置（IronRDP-WASM，由渲染端连接）与外部客户端（mstsc/xfreerdp/wfreerdp，由本目录适配器启动）两条路径 |
-| `electron/ssh/`、`electron/vnc/`、`electron/sftp/` | 各自的连接、代理、资源和传输管理 |
+| `electron/ssh/`、`electron/vnc/`、`electron/rdp/`、`electron/sftp/` | 各自的连接、代理、资源和传输管理；`vnc/`、`rdp/` 只管本地代理的生命周期与按窗口归属回收，代理协议本身在 `electron/session/` |
+| `electron/ai/` | AI 助手的回合循环、工具与只读判定、流式客户端与会话记录；API Key 只走 AssetStore 密文与宿主窗口，不下发拆分窗/SFTP 面板 |
 | `electron/store/`、`electron/auth/` | 持久化与系统身份验证；UI 不绕过这些边界自行实现 |
 | `scripts/` | 构建钩子与工具（`build-mac-auth.cjs`、`afterPack.cjs`、`gen-os-icons.js`）及开发期 SSH 检查脚本；不参与运行时，新增文件须同步 `.gitignore` 的 `/scripts/*` 例外 |
 

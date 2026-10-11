@@ -3,6 +3,9 @@ const tls = require('tls');
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 
+/** TCP 与 TLS 握手各自的截止：主机黑洞或半握手都会把会话永久停在「连接中」。 */
+const HANDSHAKE_TIMEOUT_MS = 15000;
+
 /**
  * RDCleanPath WebSocket-to-RDP proxy for IronRDP-WASM sessions.
  *
@@ -352,7 +355,7 @@ function tryRDPHandshake(host, port, x224Request, tls12only) {
     tcpSocket.once('error', (err) => {
       reject(new Error(`TCP connection failed: ${err.message}`));
     });
-    tcpSocket.setTimeout(15000, () => {
+    tcpSocket.setTimeout(HANDSHAKE_TIMEOUT_MS, () => {
       tcpSocket.destroy();
       reject(new Error('Connection timed out'));
     });
@@ -376,6 +379,7 @@ function tryRDPHandshake(host, port, x224Request, tls12only) {
         tlsOpts.maxVersion = 'TLSv1.2';
       }
       const tlsSocket = tls.connect(tlsOpts, () => {
+        clearTimeout(tlsTimer);
         const peerCert = tlsSocket.getPeerCertificate(true);
         resolve({
           x224Response: Buffer.from(x224Response),
@@ -383,7 +387,13 @@ function tryRDPHandshake(host, port, x224Request, tls12only) {
           tlsSocket,
         });
       });
+      // X.224 之后服务器可以干耗着不回 TLS ServerHello，会话会一直停在「连接中」
+      const tlsTimer = setTimeout(() => {
+        tlsSocket.destroy();
+        reject(new Error('TLS handshake timed out'));
+      }, HANDSHAKE_TIMEOUT_MS);
       tlsSocket.once('error', (err) => {
+        clearTimeout(tlsTimer);
         reject(new Error(`TLS handshake failed: ${err.message}`));
       });
     });

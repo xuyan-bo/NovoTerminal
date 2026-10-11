@@ -115,7 +115,7 @@ import {
   findAsset,
   openMethodAdvanced,
 } from '../../store';
-import { OS_SVG, OS_NAME, CATALOG } from '../../constants';
+import { osCatalog, osIcon, osName } from '../../constants';
 import { cascaderOptions, folderIdPath } from '../../lib/assetTree';
 import { t } from '../../i18n';
 import MethodConfig from '../common/MethodConfig.vue';
@@ -307,13 +307,13 @@ export default {
       return cascaderOptions(this.groups);
     },
     catalog() {
-      return CATALOG[this.form.os] || CATALOG.win;
+      return osCatalog(this.form.os);
     },
     summary() {
       const on = this.catalog
         .filter((m) => this.draft[m.id] && this.draft[m.id].enabled)
         .map((m) => `${t(m.nameKey)}:${this.draft[m.id].port}`);
-      return `${OS_NAME[this.form.os]} · ${this.form.host || '?'} · ${
+      return `${osName(this.form.os)} · ${this.form.host || '?'} · ${
         on.join(' | ') || t('asset.notEnabled')
       }`;
     },
@@ -322,7 +322,7 @@ export default {
     },
   },
   created() {
-    (CATALOG.win || []).forEach((m) => this.draftRow(m.id));
+    osCatalog('win').forEach((m) => this.draftRow(m.id));
   },
   watch: {
     visible(v) {
@@ -358,11 +358,11 @@ export default {
       });
     },
     osSvg(os) {
-      return OS_SVG[os] || '';
+      return osIcon(os);
     },
     defaultDraft(os) {
       const d = {};
-      (CATALOG[os] || []).forEach((m) => {
+      osCatalog(os).forEach((m) => {
         d[m.id] = { enabled: m.rec, port: m.defaultPort };
       });
       return d;
@@ -469,7 +469,7 @@ export default {
         };
         this.draft = this.defaultDraft('win');
       }
-      (CATALOG[this.form.os] || []).forEach((m) => {
+      osCatalog(this.form.os).forEach((m) => {
         const row = this.draftRow(m.id);
         if (row) this.$set(row, 'port', normalizePort(row.port, m.defaultPort));
       });

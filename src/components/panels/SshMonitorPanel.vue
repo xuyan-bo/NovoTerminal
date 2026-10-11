@@ -510,7 +510,7 @@ export default {
 }
 .refresh-set { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
 .refresh-label { font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
-.refresh-set :deep(.el-input-number--mini) { width: 78px; }
+.refresh-set :deep(.el-input-number--mini) { width: 92px; }
 .panel-close {
   flex: 0 0 auto;
   border: none;

@@ -4,6 +4,11 @@ const { RdpXfreerdpAdapter } = require('./adapters/RdpXfreerdpAdapter');
 const { RdpWfreerdpAdapter } = require('./adapters/RdpWfreerdpAdapter');
 const { tcpProbe, testSsh, testSftp, testVnc, testRdp } = require('./testers');
 
+/** 注册表只接受自有属性：'constructor' 这类原型链键不能当成适配器返回。 */
+function own(map, key) {
+  return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : null;
+}
+
 class SessionManager {
   constructor({ store, send, log }) {
     this.store = store;
@@ -39,16 +44,19 @@ class SessionManager {
    */
   resolveRdpAdapter(advanced) {
     const id = String((advanced && advanced.client) || '').toLowerCase();
-    if (id && this.rdpAdapters[id]) return this.rdpAdapters[id];
-    if (id && !this.rdpAdapters[id]) {
-      throw Object.assign(new Error(`Unknown RDP client: ${id}`), { code: 'RDP_CLIENT_UNKNOWN' });
+    if (id) {
+      const chosen = own(this.rdpAdapters, id);
+      if (!chosen) {
+        throw Object.assign(new Error(`Unknown RDP client: ${id}`), { code: 'RDP_CLIENT_UNKNOWN' });
+      }
+      return chosen;
     }
     if (process.platform === 'darwin' || process.platform === 'linux') return this.rdpAdapters.xfreerdp;
     return this.rdpAdapters.mstsc;
   }
 
   getAdapter(protocol) {
-    return this.adapters[String(protocol || '').toLowerCase()] || null;
+    return own(this.adapters, String(protocol || '').toLowerCase());
   }
 
   findAdapterById(id) {
@@ -65,7 +73,7 @@ class SessionManager {
 
   async probeClient(clientId) {
     const id = String(clientId || '').toLowerCase();
-    const adapter = this.rdpAdapters[id];
+    const adapter = own(this.rdpAdapters, id);
     if (!adapter) throw Object.assign(new Error(`Unknown RDP client: ${id}`), { code: 'RDP_CLIENT_UNKNOWN' });
     if (typeof adapter.probe !== 'function') {
       return { ok: false, code: 'PROBE_UNSUPPORTED', message: `${id} probe not implemented` };
@@ -76,7 +84,7 @@ class SessionManager {
   /** 校验用户手动选择的文件确实存在且为目标客户端可执行文件，防止选错程序 */
   verifyClientPath(clientId, filePath) {
     const id = String(clientId || '').toLowerCase();
-    const adapter = this.rdpAdapters[id];
+    const adapter = own(this.rdpAdapters, id);
     if (!adapter) throw Object.assign(new Error(`Unknown RDP client: ${id}`), { code: 'RDP_CLIENT_UNKNOWN' });
     const p = String(filePath || '');
     let exists = false;
@@ -130,7 +138,8 @@ class SessionManager {
 
   async connect(req) {
     const sessionId = 's-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
-    const protocol = (req.method && req.method.protocol) || 'rdp';
+    // 未登记协议不能默认当作 RDP：走错适配器等于连到错误的主机语义上
+    const protocol = String((req.method && req.method.protocol) || '').toLowerCase();
     const adapter = protocol === 'rdp' ? this.resolveRdpAdapter(req.method.advanced) : this.getAdapter(protocol);
     if (!adapter) throw Object.assign(new Error('unknown protocol'), { code: 'UNKNOWN_PROTOCOL' });
 
@@ -152,7 +161,8 @@ class SessionManager {
     try {
       const result = await adapter.connect(payload, sessionId);
       this.active.set(sessionId, { assetId: req.assetId, protocol, adapterId: adapter.id, startedAt: Date.now() });
-      this.log && this.log.info(protocol, 'external client launched', { ...logMeta, sessionId });
+      this.log &&
+        this.log.info(protocol, 'external client launched', { ...logMeta, sessionId, pid: result && result.pid });
 
       const hit = this.store.findAsset(req.assetId);
       if (hit && protocol === 'rdp') {
@@ -163,7 +173,8 @@ class SessionManager {
         this.send('store:changed', { reason: 'recent' });
       }
 
-      return { sessionId, ...result, embeddable: false };
+      // 适配器返回的 args 里含 /p: 口令，不能跟着 IPC 进渲染进程；界面只看连接状态事件
+      return { sessionId, embeddable: false };
     } catch (e) {
       this.log &&
         this.log.error(protocol, 'session connect failed', {
@@ -191,8 +202,29 @@ class SessionManager {
     return { ok: true };
   }
 
-  listActive() {
-    return [...this.active.entries()].map(([sessionId, v]) => ({ sessionId, ...v }));
+  /** 外部客户端是 detached 起的独立进程，不会跟着 Electron 结束，退出时必须逐个收尾（含 cmdkey 条目）。 */
+  async destroyAll() {
+    const entries = [...this.active.entries()];
+    this.active.clear();
+    let closed = 0;
+    for (const [sessionId, info] of entries) {
+      const adapter = info.adapterId ? this.findAdapterById(info.adapterId) : this.getAdapter(info.protocol);
+      if (!adapter || !adapter.disconnect) continue;
+      try {
+        await adapter.disconnect(sessionId);
+        closed += 1;
+      } catch (e) {
+        this.log &&
+          this.log.warn('rdp', 'external client cleanup on quit failed', {
+            sessionId,
+            client: info.adapterId,
+            message: e.message,
+            code: e.code,
+          });
+      }
+    }
+    this.log && this.log.info('rdp', 'external clients closed on quit', { closed });
+    return { ok: true, closed };
   }
 }
 

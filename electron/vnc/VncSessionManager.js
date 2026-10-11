@@ -1,3 +1,4 @@
+const { webContents } = require('electron');
 const { VncProxy } = require('../session/VncProxy');
 
 const ADVANCED_VNC_DEFAULTS = {
@@ -95,6 +96,19 @@ class VncSessionManager {
 
     try {
       const { wsUrl, port: wsPort } = await proxy.start();
+      // 监听建立期间宿主窗口可能已经销毁：那时 closeOwner 手上还没有这条记录可关，只能在这里收掉，
+      // 否则本地端口会一直挂到应用退出。
+      const owner = req.ownerId === undefined ? null : webContents.fromId(req.ownerId);
+      if (req.ownerId !== undefined && (!owner || owner.isDestroyed())) {
+        this.log &&
+          this.log.warn('vnc', 'vnc connect aborted: owner window gone', {
+            sessionId,
+            host,
+            port,
+            ownerId: req.ownerId,
+          });
+        throw Object.assign(new Error('VNC host window closed during connect'), { code: 'VNC_CANCELED' });
+      }
       this.sessions.set(sessionId, {
         proxy,
         assetId: req.assetId,
@@ -120,6 +134,8 @@ class VncSessionManager {
       };
     } catch (e) {
       proxy.stop();
+      // 宿主窗口没了不算代理故障：按原错误码回给渲染端，界面才有对应文案
+      if (e && e.code === 'VNC_CANCELED') throw e;
       const err = Object.assign(new Error(e.message || String(e)), {
         code: 'VNC_PROXY_ERROR',
       });

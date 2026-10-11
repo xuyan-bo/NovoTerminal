@@ -160,7 +160,12 @@ export default {
     };
   },
   computed: {
+    localeTick() {
+      return store.localeTick;
+    },
     statusText() {
+      // 状态没变、只换语言时这个 computed 不会重算，必须显式依赖 localeTick
+      void this.localeTick;
       const map = {
         idle: t('rdp.status.idle'),
         connecting: t('rdp.status.connecting'),
@@ -176,6 +181,7 @@ export default {
       return this.status === 'ended' || this.status === 'error' || this.status === 'idle';
     },
     connToggleTip() {
+      void this.localeTick;
       return this.isDisconnected ? t('rdp.reconnect') : t('rdp.disconnect');
     },
     /** 与侧栏/详情页同一条件：资产启用了 SFTP 方式才给入口。 */
@@ -219,6 +225,12 @@ export default {
     errText(e) {
       const v = e && typeof e === 'object' ? e : null;
       if (v) {
+        // 主进程错误码优先查词条，查不到才回退英文技术描述
+        if (typeof v.code === 'string' && v.code) {
+          const coded = 'err.' + v.code;
+          const mapped = t(coded);
+          if (mapped !== coded) return mapped;
+        }
         for (const k of ['message', 'code', 'origin']) {
           const val = v[k];
           if (typeof val === 'string' && val) return val;

@@ -89,7 +89,7 @@ import {
   deleteGroup,
   deleteAsset,
 } from '../../store';
-import { OS_SVG, methodPillClass } from '../../constants';
+import { osIcon, methodPillClass } from '../../constants';
 import { protocolLabel } from '../../protocols';
 import { buildAssetTree, filterTree, folderKeys, isDescendantOf } from '../../lib/assetTree';
 import CtxMenu from '../common/CtxMenu.vue';
@@ -164,7 +164,7 @@ export default {
   },
   methods: {
     osSvg(os) {
-      return OS_SVG[os] || '';
+      return osIcon(os);
     },
     hostLabel(n) {
       return n.user ? n.host + ' · ' + n.user : n.host;

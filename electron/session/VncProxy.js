@@ -2,6 +2,9 @@ const net = require('net');
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 
+// 主机黑洞（防火墙 DROP）时 TCP 连接不会失败也不会成，页签会永远停在「连接中」
+const VNC_CONNECT_TIMEOUT_MS = 15000;
+
 /**
  * Lightweight WebSocket-to-TCP proxy for VNC (RFB) sessions.
  *
@@ -58,6 +61,7 @@ class VncProxy {
     this.onState('connecting');
 
     const tcp = net.createConnection({ host: this.host, port: this.port }, () => {
+      tcp.setTimeout(0);
       this.onState('ready');
     });
     // 立刻登记引用：TCP 还没连上时 stop() 也要能销毁它，否则该远端连接会永久泄漏
@@ -87,6 +91,12 @@ class VncProxy {
       this._wsClient = null;
       this.onEnd(origin);
     };
+
+    tcp.setTimeout(VNC_CONNECT_TIMEOUT_MS);
+    tcp.once('timeout', () => {
+      this.onState('error', { message: 'VNC connect timed out', code: 'VNC_TIMEOUT' });
+      cleanup('tcp-timeout');
+    });
 
     tcp.on('error', (err) => {
       this.onState('error', { message: err.message || 'TCP error' });

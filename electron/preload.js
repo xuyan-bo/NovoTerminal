@@ -53,8 +53,6 @@ const api = {
 
   sessionTest: (req) => ipcRenderer.invoke('session:test', req),
   sessionConnect: (req) => ipcRenderer.invoke('session:connect', req),
-  sessionDisconnect: (sessionId) => ipcRenderer.invoke('session:disconnect', sessionId),
-  sessionList: () => ipcRenderer.invoke('session:list'),
   rdpProbeClient: (clientId) => ipcRenderer.invoke('rdp:probe-client', clientId),
   rdpPickClientBinary: (clientId) => ipcRenderer.invoke('rdp:pick-client-binary', clientId),
 
@@ -75,7 +73,6 @@ const api = {
   },
   sshResize: (sessionId, cols, rows) => ipcRenderer.invoke('ssh:resize', sessionId, cols, rows),
   sshDisconnect: (sessionId) => ipcRenderer.invoke('ssh:disconnect', sessionId),
-  sshList: () => ipcRenderer.invoke('ssh:list'),
   sshAttach: (req) => ipcRenderer.invoke('ssh:attach', req),
   onSshData: (sessionId, cb) => {
     const ch = 'ssh:data:' + sessionId;

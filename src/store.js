@@ -1,7 +1,7 @@
 import Vue from 'vue';
 import { api, unwrap } from './api';
 import { applySettings, t } from './i18n';
-import { CATALOG, resolveAdvanced } from './constants';
+import { osCatalog, resolveAdvanced } from './constants';
 import { getProtocol, protocolLabel } from './protocols';
 
 export const store = Vue.observable({
@@ -10,7 +10,6 @@ export const store = Vue.observable({
   tabs: [{ id: 'home', title: '首页', closable: false, icon: 'el-icon-s-home', titleKey: 'nav.home' }],
   activeAssetId: null,
   activeGroupId: null,
-  sessionMap: {},
   settingsDialog: false,
   /** 更新检查结果 { current, latest, notes, url }；弹窗开关独立，关闭结果仍保留 */
   update: null,
@@ -35,7 +34,8 @@ export const store = Vue.observable({
 });
 
 export async function refresh() {
-  const snap = await api.getSnapshot();
+  // 主进程出错时返回的是 {__error}，不 unwrap 会把错误对象当成快照写进去，资产树静默变空
+  const snap = unwrap(await api.getSnapshot());
   // recent 等无关变更也会广播刷新；groups 未变时沿用旧引用，避免侧边栏资产树整棵重建
   if (snap && JSON.stringify(snap.groups) === JSON.stringify(store.snapshot.groups)) {
     snap.groups = store.snapshot.groups;
@@ -62,10 +62,6 @@ export async function ignoreUpdateVersion(version) {
   if (!v) return;
   await api.updateSettings({ skippedUpdateVersion: v });
   await refresh();
-}
-
-export function switchTab(id) {
-  store.activeTab = id;
 }
 
 export function openTab(tab) {
@@ -330,7 +326,11 @@ export function dropDetachedTab(tabId) {
   if (tab.detached && tab.kind === 'ssh' && tab.liveSessionId && api.sshDisconnect) {
     api.sshDisconnect(tab.liveSessionId).catch(() => {});
   }
-  if (store.activeTab === tabId) store.activeTab = store.tabs[Math.max(0, i - 1)].id;
+  if (store.activeTab === tabId) {
+    // 独立窗口收回的最后一条页签可能让列表变空，直接索引会抛错；主窗口恒有首页兜底
+    const next = store.tabs[Math.max(0, i - 1)];
+    store.activeTab = next ? next.id : '';
+  }
 }
 
 /** 连接状态只存在于当前宿主窗口，回灌给主窗口的副本，否则收回后小圆点与关闭确认都是旧的。 */
@@ -410,7 +410,7 @@ export function findAsset(aid) {
 
 export function enabledMethods(asset) {
   if (!asset || !asset.methods) return [];
-  const cat = CATALOG[asset.os] || CATALOG.win;
+  const cat = osCatalog(asset.os);
   const out = [];
   for (const meta of cat) {
     const conf = asset.methods[meta.id];

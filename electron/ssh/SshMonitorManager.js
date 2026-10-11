@@ -121,13 +121,14 @@ class SshMonitorManager {
         throw e;
       }
     }
-    // 首帧没回来：会话已断则按 not-ready 返回，否则说明采集输出不可用
-    // （注册定时器会让渲染端永久停在加载遮罩上，种子帧残缺时也会让速率一直空白）
+    // 探测与首帧都是 await，期间 stop()/stopOwner 可能已经摘掉这条 runner：必须重新确认归属，
+    // 否则下面 resetTimer 会建出一条不在表里的定时器，之后任何清理路径都再找不到它。
+    if (this.runners.get(sessionId) !== runner) {
+      this.log && this.log.warn('ssh', 'ssh monitor start aborted: runner gone', { sessionId, host });
+      return { ok: true, supported: false, reason: 'not-ready' };
+    }
+    // 首帧没回来说明采集输出不可用（注册定时器会让渲染端永久停在加载遮罩上，种子帧残缺时速率也一直空白）
     if (!snapshot) {
-      if (this.runners.get(sessionId) !== runner) {
-        this.log && this.log.warn('ssh', 'ssh monitor start aborted: runner gone', { sessionId, host });
-        return { ok: true, supported: false, reason: 'not-ready' };
-      }
       this.log && this.log.error('ssh', 'ssh monitor start failed: no usable first frame', { sessionId, host });
       this.stop(sessionId);
       throw monitorError('SSH_MONITOR_PARSE', 'monitor first frame unparseable');

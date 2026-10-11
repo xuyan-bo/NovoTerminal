@@ -99,19 +99,6 @@ export default {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.update-notes::-webkit-scrollbar {
-  width: 8px;
-}
-.update-notes::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 4px;
-}
-.update-notes::-webkit-scrollbar-thumb:hover {
-  background: var(--text-3);
-}
-.update-notes::-webkit-scrollbar-track {
-  background: transparent;
-}
 .update-footer {
   display: flex;
   align-items: center;

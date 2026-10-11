@@ -67,7 +67,7 @@
 </template>
 
 <script>
-import { api, unwrap, findAsset, refresh } from '../../store';
+import { api, unwrap, findAsset, refresh, store } from '../../store';
 import { resolveSshTheme } from '../../constants';
 import { t } from '../../i18n';
 
@@ -92,7 +92,12 @@ export default {
     };
   },
   computed: {
+    localeTick() {
+      return store.localeTick;
+    },
     basicRows() {
+      // 标签只在求值时翻译一次：不接 localeTick，切换语言后这三项永远是旧语言
+      void this.localeTick;
       return [
         { key: 'foreground', label: t('theme.normal') },
         { key: 'background', label: t('theme.background') },

@@ -43,7 +43,7 @@
 </template>
 
 <script>
-import { api, unwrap, refresh, findAsset, enabledMethods, store } from '../../store';
+import { api, unwrap, refresh, findAsset, enabledMethods, store, connectionErrorMessage } from '../../store';
 import { t } from '../../i18n';
 import RFB from '@novnc/novnc';
 import createFullscreenMixin from '../session/fullscreen';
@@ -76,7 +76,12 @@ export default {
     };
   },
   computed: {
+    localeTick() {
+      return store.localeTick;
+    },
     statusText() {
+      // 状态没变、只换语言时这个 computed 不会重算，必须显式依赖 localeTick
+      void this.localeTick;
       const map = {
         idle: t('vnc.status.idle'),
         connecting: t('vnc.status.connecting'),
@@ -93,6 +98,7 @@ export default {
       return this.status === 'ended' || this.status === 'error' || this.status === 'idle';
     },
     connToggleTip() {
+      void this.localeTick;
       return this.isDisconnected ? t('vnc.reconnect') : t('vnc.disconnect');
     },
     /** 与侧栏/详情页同一条件：资产启用了 SFTP 方式才给入口。 */
@@ -179,7 +185,7 @@ export default {
             this.statusDetail = '';
           } else if (ev.type === 'error') {
             this.status = 'error';
-            this.statusDetail = ev.message || ev.code || '';
+            this.statusDetail = connectionErrorMessage(ev);
           }
         });
 
@@ -253,7 +259,7 @@ export default {
         // 代理已建立或订阅已挂上时失败要就地释放，不能留到组件销毁才清
         this.disconnectNow(true);
         this.status = 'error';
-        this.statusDetail = e.message || String(e);
+        this.statusDetail = connectionErrorMessage(e);
       }
     },
 
@@ -390,7 +396,7 @@ export default {
       try {
         unwrap(await api.sftpOpenWindow({ assetId: this.assetId }));
       } catch (e) {
-        this.$message.error(e.message || String(e));
+        this.$message.error(connectionErrorMessage(e));
       }
     },
 

@@ -78,7 +78,7 @@ import { LegendComponent, TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import { store, findAsset, enabledMethods, connectAsset, connectionErrorMessage, removeRecent } from '../../store';
 import { protocolLabel } from '../../protocols';
-import { OS_SVG, RECENT_LIMIT_DEFAULT, RECENT_LIMIT_MAX } from '../../constants';
+import { osIcon, RECENT_LIMIT_DEFAULT, RECENT_LIMIT_MAX } from '../../constants';
 import { t, formatTime } from '../../i18n';
 
 echarts.use([PieChart, LegendComponent, TooltipComponent, CanvasRenderer]);
@@ -184,7 +184,7 @@ export default {
   },
   methods: {
     osSvg(os) {
-      return OS_SVG[os] || '';
+      return osIcon(os);
     },
     /** 主题类写在 DOM 上，必须是每次现读的方法：computed 没有响应依赖，会被永久缓存 */
     isLight() {

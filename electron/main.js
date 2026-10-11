@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, clipboard, Tray, Menu, nativeImage,
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const fsp = require('fs/promises');
 const { execFile } = require('child_process');
 /** Bump when shipping renderer changes — source-only marker, not surfaced in the UI */
 const APP_BUILD = 'rd2-1647';
@@ -367,6 +368,35 @@ function sshRequestContext(sender) {
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 
+/** 页面只能留在自己的应用内：dev 走 Vite 源，prod 走 file://，其余导航一律拦下。 */
+function isInternalUrl(url) {
+  if (isDev) {
+    try {
+      return new URL(url).origin === new URL(process.env.VITE_DEV_SERVER_URL).origin;
+    } catch (_) {
+      return false;
+    }
+  }
+  return typeof url === 'string' && url.startsWith('file:');
+}
+
+/**
+ * 每个窗口的 webContents 都带同一份 preload，所以导航与开窗守卫必须按内容统一挂：
+ * 页面里的 window.open 或链接跳转不能生出一个没人管理的窗口，也不能把宿主页面换成外部地址。
+ */
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('will-navigate', (e, url) => {
+    if (!isInternalUrl(url)) {
+      logger && logger.warn('app', 'blocked navigation to external url', { url: String(url).slice(0, 200) });
+      e.preventDefault();
+    }
+  });
+  contents.setWindowOpenHandler(({ url }) => {
+    logger && logger.warn('app', 'blocked window.open', { url: String(url).slice(0, 200) });
+    return { action: 'deny' };
+  });
+});
+
 /** 生产模式：Chromium 通过 file:// 读 asar FUSE 偶尔会遇到 "还没 ready" 的瞬态，
  *  等一下重试通常就能过。dev 模式走 HTTP server 不需要这套。 */
 const INDEX_HTML_PATH = path.join(__dirname, '..', 'dist', 'index.html');
@@ -684,7 +714,8 @@ function createWindow() {
 
   // Close → delegate to handleCloseIntent (prefs or renderer custom prompt)
   win.on('close', (e) => {
-    if (trayDestroying) return; // tray-initiated quit → let it close
+    // 退出流程里会话已经回收完，此时弹关闭询问会让应用卡在"窗口还在、会话全死"的状态。
+    if (trayDestroying || appQuitting) return;
     e.preventDefault();
     handleCloseIntent();
   });
@@ -1020,7 +1051,8 @@ function registerIpc() {
     });
     if (r.canceled || !r.filePaths[0]) return null;
     await switchDataPath(r.filePaths[0]);
-    return store.snapshot().settings;
+    // 这个返回值给的是"切换后的当前设置"，和快照一样不能带 API Key
+    return withoutAiKeys(store.snapshot().settings);
   });
 
   // ---- Logs ----
@@ -1054,8 +1086,6 @@ function registerIpc() {
       auth: { mode: 'keytar' },
     });
   }, true);
-  handle('session:disconnect', (sender, sid) => sessions.disconnect(sid), true);
-  handle('session:list', (sender) => sessions.listActive(), true);
   handle('rdp:probe-client', (sender, clientId) => sessions.probeClient(clientId), true);
   handle('rdp:pick-client-binary', async (sender, clientId) => {
     const en = store.getSettings().lang === 'en';
@@ -1118,7 +1148,6 @@ function registerIpc() {
     ownSsh(sender, sid);
     return sshSessions.disconnect(sid);
   }, true);
-  handle('ssh:list', (sender) => sshSessions.list().filter((s) => sshSessions.owns(s.sessionId, sender.id)), true);
   handle('monitor:start', (sender, sessionId, intervalSec) => {
     ownSsh(sender, sessionId);
     return sshMonitor.start(sessionId, intervalSec);
@@ -1380,14 +1409,16 @@ function registerIpc() {
   /** SSH 连接跟着页签走：换宿主只转移该页签那条会话的所有权，其余会话不受影响。 */
   function handoverTab(tab, fromWindow, toWindow) {
     const sid = tab.kind === 'ssh' ? tab.liveSessionId : null;
-    if (sid && sshSessions && sshSessions.sessions.has(sid)) {
-      sshSessions.transferOwner(sid, toWindow.webContents.id);
-    }
+    // liveSessionId 来自页签描述符（渲染端上报），只有当前宿主真的拥有它才转交，
+    // 否则等于让任一窗口凭一个会话 id 把别人的连接搬走。
+    const fromId = fromWindow && !fromWindow.isDestroyed() ? fromWindow.webContents.id : null;
+    const owned = sid && fromId !== null && sshSessions && sshSessions.owns(sid, fromId);
+    if (owned) sshSessions.transferOwner(sid, toWindow.webContents.id);
     if (fromWindow && !fromWindow.isDestroyed() && fromWindow !== toWindow) {
       // 交出的那一侧销毁视图时必须不断开连接，VNC/RDP 由新宿主重新握手。
       fromWindow.webContents.send('session:handover', { tabId: tab.id });
     }
-    return sid;
+    return owned ? sid : null;
   }
 
   /**
@@ -1825,7 +1856,7 @@ function registerIpc() {
      * 页面还没加载完、渲染进程已死或应用正在退出时必须放行，否则窗口会关不掉。
      */
     panel.on('close', (e) => {
-      if (trayDestroying || sftpCloseGuard.bypass || sftpCloseGuard.asking || !sftpPanelReady) return;
+      if (trayDestroying || appQuitting || sftpCloseGuard.bypass || sftpCloseGuard.asking || !sftpPanelReady) return;
       e.preventDefault();
       sftpCloseGuard.asking = true;
       panel.webContents.send('sftp:confirm-close');
@@ -1938,16 +1969,15 @@ function registerIpc() {
   handle('sftp:local-mkdir', (sender, dirPath, name) => sftpManager.localMkdir(sftpLocalPath(dirPath), sftpLocalName(name)), true);
   handle('sftp:local-rename', (sender, oldPath, newPath) => sftpManager.localRename(sftpLocalPath(oldPath), sftpLocalPath(newPath)), true);
   handle('sftp:local-unlink', (sender, p, isDir) => sftpManager.localUnlink(sftpLocalPath(p), !!isDir), true);
-  handle('sftp:local-copy', (sender, src, destDir) => {
+  handle('sftp:local-copy', async (sender, src, destDir) => {
     const from = sftpLocalPath(src);
     const to = sftpLocalPath(destDir);
     const dest = path.join(to, path.basename(from));
-    const st = fs.statSync(from);
-    if (st.isDirectory()) {
-      fs.cpSync(from, dest, { recursive: true, force: true });
-    } else {
-      fs.copyFileSync(from, dest);
-    }
+    // 整树同步复制会冻住主进程：所有窗口的 IPC、终端输入都要等它跑完
+    const st = await fsp.stat(from);
+    if (st.isDirectory()) await fsp.cp(from, dest, { recursive: true, force: true });
+    else await fsp.copyFile(from, dest);
+    logger.info('sftp', 'local copy finished', { source: from, target: dest });
     return { ok: true, path: dest };
   }, true);
   handle('sftp:upload', (sender, req) => {
@@ -2126,11 +2156,19 @@ app.on('before-quit', (e) => {
   e.preventDefault();
   if (quitState === 'cleaning') return;
   quitState = 'cleaning';
-  const draining = sftpManager
-    ? Promise.resolve(sftpManager.destroyAll()).catch((err) => {
-        logger.warn('sftp', 'destroy all on quit failed', { message: err && err.message });
-      })
-    : Promise.resolve();
+  const draining = Promise.all([
+    sftpManager
+      ? Promise.resolve(sftpManager.destroyAll()).catch((err) => {
+          logger.warn('sftp', 'destroy all on quit failed', { message: err && err.message });
+        })
+      : Promise.resolve(),
+    // 外部 RDP 客户端是独立进程，不等它收尾就退出会留下没人管的 mstsc/xfreerdp 窗口
+    sessions
+      ? sessions.destroyAll().catch((err) => {
+          logger.warn('rdp', 'destroy external sessions on quit failed', { message: err && err.message });
+        })
+      : Promise.resolve(),
+  ]);
   Promise.race([draining, new Promise((r) => setTimeout(r, 2500))]).then(() => {
     quitCleanup();
     quitState = 'done';

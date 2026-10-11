@@ -15,6 +15,14 @@ const LOG_TOTAL_DEFAULT_MB = 20;
 const LOG_TOTAL_MIN_MB = 10;
 const LOG_TOTAL_MAX_MB = 200;
 
+/** 最近连接缺端口时的回落值；只登记主进程真正支持的协议 */
+const RECENT_DEFAULT_PORTS = new Map([
+  ['ssh', 22],
+  ['sftp', 22],
+  ['vnc', 5900],
+  ['rdp', 3389],
+]);
+
 function defaultData() {
   return {
     version: 2,
@@ -55,6 +63,7 @@ class AssetStore {
     this.file = this.resolveActiveFile();
     this.backupFile = this.file + '.bak';
     this.data = defaultData();
+    this.archiveBeforeOverwrite = false;
     this.load();
   }
 
@@ -146,12 +155,12 @@ class AssetStore {
       } else {
         parsed = JSON.parse(raw);
       }
-      this.data = Object.assign(defaultData(), parsed);
-      this.data.settings = Object.assign(defaultData().settings, parsed.settings || {});
+      this.data = this.mergeParsed(parsed);
       this.normalizeTree();
       this.data.settings.dataPath = path.dirname(this.file);
     } catch (e) {
       console.error('[store] load failed', e);
+      let recovered = false;
       try {
         if (fs.existsSync(this.backupFile)) {
           // 备份是上一份主库的副本，与主库同为密文，必须按 CIPHER_PREFIX 解密后再解析
@@ -159,13 +168,32 @@ class AssetStore {
           const bplain = braw.startsWith(CIPHER_PREFIX)
             ? safeStorage.decryptString(Buffer.from(braw.slice(CIPHER_PREFIX.length), 'base64'))
             : braw;
-          this.data = JSON.parse(bplain);
+          this.data = this.mergeParsed(JSON.parse(bplain));
+          recovered = true;
         }
-      } catch (_) {
+      } catch (_) {}
+      if (!recovered) {
         this.data = defaultData();
+        // 主库与备份都读不出来：磁盘上那份可能是唯一还有救的密文，落盘前先留档再覆盖
+        this.archiveBeforeOverwrite = true;
+        this.logEvent('error', 'asset store unreadable, started from defaults', {
+          file: this.file,
+          message: e.message,
+          code: e.code,
+        });
       }
       this.normalizeTree();
     }
+  }
+
+  /** 解析出的记录按默认值补齐，settings 单独合并，避免旧库缺字段时 snapshot 直接崩 */
+  mergeParsed(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw Object.assign(new Error('asset store content is not an object'), { code: 'STORE_FORMAT' });
+    }
+    const data = Object.assign(defaultData(), parsed);
+    data.settings = Object.assign(defaultData().settings, parsed.settings || {});
+    return data;
   }
 
   /**
@@ -235,12 +263,36 @@ class AssetStore {
     const json = JSON.stringify(this.data, null, 2);
     // 先加密再落盘：加密失败时这一步就抛，下面不会碰任何文件
     const enc = this.encrypt(json);
+    if (this.archiveBeforeOverwrite) this.archiveUnreadableFiles();
+    const tmp = this.file + '.tmp';
     try {
-      if (fs.existsSync(this.file)) {
-        fs.copyFileSync(this.file, this.backupFile);
-      }
-    } catch (_) {}
-    fs.writeFileSync(this.file, CIPHER_PREFIX + enc.toString('base64'), 'utf8');
+      fs.writeFileSync(tmp, CIPHER_PREFIX + enc.toString('base64'), 'utf8');
+      // 两阶段写：主库要么是上一版完整密文、要么是这一版，不会留半截；备份因此永远是好的
+      if (fs.existsSync(this.file)) fs.copyFileSync(this.file, this.backupFile);
+      fs.renameSync(tmp, this.file);
+    } catch (e) {
+      try {
+        fs.rmSync(tmp, { force: true });
+      } catch (_) {}
+      throw e;
+    } finally {
+      this.archiveBeforeOverwrite = false;
+    }
+  }
+
+  /** 把读不出来的库文件留档（含备份），覆盖写之前保住磁盘上原有的密文 */
+  archiveUnreadableFiles() {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '');
+    const kept = [];
+    for (const p of [this.file, this.backupFile]) {
+      try {
+        if (!fs.existsSync(p)) continue;
+        const dest = `${p}.unreadable-${stamp}`;
+        fs.renameSync(p, dest);
+        kept.push(path.basename(dest));
+      } catch (_) {}
+    }
+    this.logEvent('error', 'asset store archived before overwrite', { files: kept.join(', ') });
   }
 
   snapshot() {
@@ -555,14 +607,16 @@ class AssetStore {
     if (!asset || !asset.id) return this.snapshot();
     const mid = method && (method.id || method.protocol);
     if (!mid) return this.snapshot();
-    const defaultPort = mid === 'ssh' || mid === 'sftp' ? 22 : mid === 'vnc' ? 5900 : 3389;
+    // 未登记的访问方式不写最近连接：过去一律回落 3389，等于把未知协议当成 RDP
+    const port = (method && method.port) || RECENT_DEFAULT_PORTS.get(mid);
+    if (!port) return this.snapshot();
     const item = {
       id: asset.id,
       name: asset.name,
       os: asset.os,
       host: asset.host,
       method: mid,
-      port: (method && method.port) || defaultPort,
+      port,
       time: Date.now(),
     };
     // One entry per asset+method so SSH/RDP on the same host can both appear

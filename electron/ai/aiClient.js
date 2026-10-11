@@ -28,7 +28,10 @@ function clientFor(baseUrl, apiKey) {
 
 /** SDK 的异常类型不带我们自己的 code，这里按状态码归一，401/404/429 是最常见的三类。 */
 function toAiError(error) {
-  if (error && error.name === 'AbortError') return aiError('AI_CANCELED', 'request aborted');
+  // openai v4 的取消异常 name 就是 'Error'，只按 name 判会把「停止」报成请求失败
+  if (error && (error instanceof OpenAI.APIUserAbortError || error.name === 'AbortError')) {
+    return aiError('AI_CANCELED', 'request aborted');
+  }
   const status = Number(error && error.status);
   const message = String((error && error.message) || error || 'unknown error').slice(0, 300);
   if (status === 401 || status === 403) return aiError('AI_AUTH', message, status);

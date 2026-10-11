@@ -100,7 +100,7 @@
 import CtxMenu from '../common/CtxMenu.vue';
 import { store, closeTab, moveTab, refreshSessionTab, api, detachTab, moveTabToWindow, copySessionToGroup, setDockTarget, clearDockTarget, tabPayload, findAsset, enabledMethods, openSshSession } from '../../store';
 import { t } from '../../i18n';
-import { OS_SVG, TAB_DRAG_TYPE } from '../../constants';
+import { osIcon, TAB_DRAG_TYPE } from '../../constants';
 import { getProtocol } from '../../protocols';
 
 /** Preview size of the detached-window outline shown while a tab is dragged out. */
@@ -184,7 +184,7 @@ export default {
   },
   methods: {
     osSvg(os) {
-      return OS_SVG[os] || '';
+      return osIcon(os);
     },
     isGlyphIcon(icon) {
       return typeof icon === 'string' && icon.startsWith('el-icon-');

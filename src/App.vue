@@ -272,7 +272,7 @@ export default {
     },
     async onSession(payload) {
       if (payload && payload.type === 'ended') {
-        await refresh();
+        await refresh().catch(() => {});
         const client = RDP_CLIENT_NAMES[payload.client] || 'RDP';
         this.$message.info(t('msg.sessionEnded', { client }));
       }

@@ -234,10 +234,6 @@ class SshSessionManager {
   destroyAll() {
     for (const id of this.sessions.keys()) this.disconnect(id);
   }
-
-  list() {
-    return [...this.sessions.entries()].map(([sessionId, rec]) => ({ sessionId, assetId: rec.assetId, host: rec.host, port: rec.port }));
-  }
 }
 
 module.exports = { SshSessionManager, resolveAdvanced };

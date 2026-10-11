@@ -12,7 +12,7 @@
 const crypto = require('crypto');
 const { streamChat, completeOnce } = require('./aiClient');
 const { normalize, resolveModel, PERMISSIONS } = require('./aiSettings');
-const { createTools } = require('./aiTools');
+const { createTools, commandBrief } = require('./aiTools');
 const {
   DIGEST_OUT_TOKENS, DIGEST_GAIN_RATIO, DIGEST_PROMPT,
   budget, estimateTokens, messagesTokens,
@@ -376,7 +376,7 @@ class AiManager {
     }
     const decision = payload && payload.decision === 'allow' ? 'allow' : 'deny';
     this.log && this.log.info('ai', 'ai approval answered', {
-      sessionId: conv.sessionId, host, decision, command: String((pending.info && pending.info.command) || '').slice(0, 200),
+      sessionId: conv.sessionId, host, decision, command: commandBrief(pending.info && pending.info.command),
     });
     pending.resolve(decision);
     return { ok: true, decision };

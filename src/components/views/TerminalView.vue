@@ -122,7 +122,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { api, unwrap, refresh, findAsset, store, takeSessionHandover } from '../../store';
+import { api, unwrap, refresh, findAsset, store, takeSessionHandover, connectionErrorMessage } from '../../store';
 import { t } from '../../i18n';
 import { sshThemeToXterm, resolveSshTheme, ADVANCED_DEFAULTS } from '../../constants';
 import SshThemeDialog from '../dialogs/SshThemeDialog.vue';
@@ -205,10 +205,15 @@ export default {
     aiPaneStyle() {
       return this.monitorOpen && this.aiOpen ? { flex: '1 1 0%' } : {};
     },
+    localeTick() {
+      return store.localeTick;
+    },
     shortLabel() {
       return this.methodId === 'ssh' ? 'SSH' : String(this.methodId || '').toUpperCase();
     },
     statusText() {
+      // 状态没变、只换语言时这个 computed 不会重算，必须显式依赖 localeTick
+      void this.localeTick;
       const map = {
         idle: t('ssh.status.idle'),
         connecting: t('ssh.status.connecting'),
@@ -223,6 +228,7 @@ export default {
       return this.status === 'ended' || this.status === 'error';
     },
     connToggleTip() {
+      void this.localeTick;
       return this.isDisconnected ? t('ssh.reconnect') : t('ssh.disconnect');
     },
   },
@@ -419,7 +425,7 @@ export default {
         unwrap(await write(sid, data));
         if (this.liveSessionId === sid) this.statusDetail = '';
       } catch (error) {
-        if (this.liveSessionId === sid && !this._disposed) this.statusDetail = error.message || error.code;
+        if (this.liveSessionId === sid && !this._disposed) this.statusDetail = connectionErrorMessage(error);
       }
     },
     onTermContextmenu(e) {
@@ -576,7 +582,7 @@ export default {
           }
         } catch (error) {
           if (this.liveSessionId === sid && this.status === 'ready' && !this._disposed) {
-            this.statusDetail = error.message || error.code;
+            this.statusDetail = connectionErrorMessage(error);
           }
         }
       }, REMOTE_RESIZE_DEBOUNCE_MS);
@@ -659,7 +665,7 @@ export default {
         } else if (ev.type === 'ended' || ev.type === 'error') {
           this.disconnectNow(true);
           this.status = ev.type === 'error' ? 'error' : 'ended';
-          this.statusDetail = ev.type === 'error' ? ev.message || ev.code || '' : '';
+          this.statusDetail = ev.type === 'error' ? connectionErrorMessage(ev) : '';
           this.writeOut(ev.type === 'error'
             ? (t('ssh.errorPrefix') + ' ' + this.statusDetail).trim()
             : t('ssh.endedHint'));
@@ -715,7 +721,7 @@ export default {
         }
         this.disconnectNow(true);
         this.status = 'error';
-        this.statusDetail = e.message || e.code || '';
+        this.statusDetail = connectionErrorMessage(e);
         this.writeOut((t('ssh.errorPrefix') + ' ' + this.statusDetail).trim());
       }
     },
@@ -790,7 +796,7 @@ export default {
         if (!isCurrent()) return;
         this.disconnectNow(true);
         this.status = 'error';
-        this.statusDetail = e.message || e.code || '';
+        this.statusDetail = connectionErrorMessage(e);
         this.writeOut((t('ssh.errorPrefix') + ' ' + this.statusDetail).trim());
       }
     },
@@ -1052,7 +1058,7 @@ export default {
       try {
         unwrap(await api.sftpOpenWindow(req));
       } catch (e) {
-        this.$message.error(e.message || String(e));
+        this.$message.error(connectionErrorMessage(e));
       }
     },
 
