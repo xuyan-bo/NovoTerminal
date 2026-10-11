@@ -470,7 +470,7 @@ button {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 .tn-name {
@@ -488,19 +488,20 @@ button {
   text-overflow: ellipsis;
 }
 
-/* 访问方式标签在自己的盒子里换行，标签再多也只占右侧宽度，不会挤掉名称和主机 */
+/* 名称、标签、主机各占一行；只有窄到装不下一排标签时标签才自己换行 */
 .tn-pills {
   flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
-  align-content: center;
-  gap: 3px;
-  max-width: 104px;
+  gap: 2px;
 }
 
 .tn-pills .pill {
   flex: 0 0 auto;
+  font-size: 9.5px;
+  padding: 0 4px;
+  border-radius: 7px;
+  line-height: 12px;
 }
 
 .tree-empty {

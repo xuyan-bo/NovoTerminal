@@ -33,18 +33,17 @@
             <div v-else class="tn tn-asset" @dblclick="onDblAsset(data)">
               <span class="os-icon" :class="'os-' + data.raw.os" v-html="osSvg(data.raw.os)"></span>
               <div class="tn-meta">
-                <div class="tn-name">{{ data.raw.name }}</div>
-                <div class="tn-host">{{ data.raw.host }}<template v-if="data.raw.user"> · {{ data.raw.user }}</template></div>
-              </div>
-              <div class="tn-pills">
-                <span
-                  v-for="m in methodsOf(data.raw)"
-                  :key="m.id"
-                  class="pill"
-                  :class="pillClass(m.id)"
-                  :title="$t('ctx.connectWith', { name: $t(m.nameKey) })"
-                  @click.stop="connect(data.raw, m)"
-                >{{ shortProto(m.id) }}</span>
+                <div class="tn-name" :title="data.raw.name">{{ data.raw.name }}</div>
+                <div class="tn-pills">
+                  <span
+                    v-for="m in methodsOf(data.raw)"
+                    :key="m.id"
+                    class="pill"
+                    :class="pillClass(m.id)"
+                    :title="$t(m.nameKey)"
+                  >{{ shortProto(m.id) }}</span>
+                </div>
+                <div class="tn-host" :title="hostLabel(data.raw)">{{ hostLabel(data.raw) }}</div>
               </div>
             </div>
           </template>
@@ -166,6 +165,12 @@ export default {
   methods: {
     osSvg(os) {
       return OS_SVG[os] || '';
+    },
+    hostLabel(n) {
+      const methods = enabledMethods(n);
+      const m = methods.find((x) => x.primary) || methods[0];
+      const addr = m ? n.host + ':' + m.port : n.host;
+      return n.user ? addr + ' · ' + n.user : addr;
     },
     openLog() {
       store.logDialog = true;
