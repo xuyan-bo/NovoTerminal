@@ -19,7 +19,7 @@
       >
         <el-table-column prop="name" :label="$t('sftp.colName')" min-width="140" show-overflow-tooltip>
           <template slot-scope="scope">
-            <span v-if="scope.row.isFolder || scope.row.isDir" class="folder-tag">&#128193;</span>
+            <i v-if="scope.row.isFolder || scope.row.isDir" class="folder-tag el-icon-folder" aria-hidden="true"></i>
             {{ scope.row.name }}
             <span v-if="scope.row.isFolder || scope.row.isDir" class="folder-count">
               ({{ scope.row.doneCount || 0 }}/{{ scope.row.fileCount || 0 }})
@@ -71,7 +71,7 @@
 </template>
 
 <script>
-import { isTaskFinished } from './utils';
+import { isTaskFinished, transferErrorText } from './utils';
 
 export default {
   name: 'SftpTransferQueue',
@@ -89,7 +89,7 @@ export default {
       return `${row.percent || 0}%`;
     },
     shortErr(row) {
-      const e = String(row.error || this.$t('sftp.transferFailed'));
+      const e = transferErrorText(row);
       return e.length > 48 ? e.slice(0, 48) + '…' : e;
     },
     onExpandChange(row, expandedRows) {
@@ -140,24 +140,9 @@ export default {
 .sftp-el-table /deep/ .el-table__body tr:hover > td {
   background: var(--bg-hover) !important;
 }
-/* Element-style thin scrollbar, matching the file panels */
-.sftp-el-table /deep/ .el-table__body-wrapper::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-.sftp-el-table /deep/ .el-table__body-wrapper::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
-}
-.sftp-el-table /deep/ .el-table__body-wrapper::-webkit-scrollbar-thumb:hover {
-  background: var(--text-3);
-}
-.sftp-el-table /deep/ .el-table__body-wrapper::-webkit-scrollbar-track,
-.sftp-el-table /deep/ .el-table__body-wrapper::-webkit-scrollbar-corner {
-  background: transparent;
-}
 .folder-tag {
   margin-right: 4px;
+  color: var(--text-3);
 }
 .folder-count {
   color: var(--text-3);

@@ -139,7 +139,7 @@
 - 列头排序由页面按侧持有 `{ key: 'name'|'size'|'time', dir }`，统一经 `utils.sortItems` 排序：`..` 恒在首位、目录先于文件、组内按列排序。按时间排序依赖主进程 `SftpManager.list`/`localList` 返回的原始 `mtimeMs`，不要用本地化后的 `mtime` 字符串比较；新增列表字段时同步两处。
 - 保持本机/远端路径规则独立，不能用 Windows 分隔符拼远端路径，也不能让路径工具变更悄悄改变已有目标位置。
 - 保留文件夹任务聚合、展开状态、暂停/恢复、取消及未完成目标文件清理语义；删除任务不等于可任意删除目标文件。文件夹任务采用「先建行、后增量扫描」：`transferMethods.scanFolderUpload/scanFolderDownload` 按目录逐层列举（复用 `sftpLocalList`/`sftpList`，不要用会阻塞主进程的整树同步遍历），边扫边传；行的 `taskId` 是稳定 row-key，主进程传输 id 存在 `xferId`，进度事件按 `xferId` 或 `sourcePath|targetPath` 命中行并原地更新。表格用 el-table 的 `lazy`+`load` 懒渲染，子节点只在用户展开时经 `loadTreeChildren` 交出；扫描未结束时根任务不得判定为完成。
-- 目录递归、覆盖确认、拖入/拖出和跨窗口进度订阅属于功能契约，拆分组件不能省略或简化这些步骤。
+- 目录递归、覆盖确认、拖入（OS 文件与跨面板拖放，落点按 `localDropDir()` 或目录行自带路径解析）和公用队列的跨会话进度订阅属于功能契约，拆分组件不能省略或简化这些步骤。**拖出到本机/资源管理器没有实现**：原生 `webContents.startDrag` 那条链路（`sftp:start-drag`、`SftpManager.prepareDragOut`）已随 2026-10 的死代码清理移除，别按"已有功能"引用它；要恢复必须重新设计——一次拖放只能有一个宿主，HTML5 面板直传与 `startDrag` 会互相抢事件，且 macOS/Linux 的文件拖出行为还需单独实测。
 
 ## 8. IPC、凭据和持久化安全
 

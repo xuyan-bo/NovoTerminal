@@ -3,8 +3,6 @@
     ref="root"
     class="sftp-root"
     @click="closeCtx"
-    @dragover.prevent="onRootDragOver"
-    @drop.prevent="onRootDrop"
   >
     <div ref="panels" class="sftp-panels" :style="{ height: topPct + '%' }">
       <sftp-file-panel
@@ -170,12 +168,12 @@
 </template>
 
 <script>
-import { api, unwrap } from '../../store';
+import { api, unwrap, connectionErrorMessage } from '../../store';
 import { t } from '../../i18n';
 import CtxMenu from '../common/CtxMenu.vue';
 import SftpFilePanel from '../sftp/SftpFilePanel.vue';
 import SftpTransferQueue from '../sftp/SftpTransferQueue.vue';
-import { PARENT_ROW, joinLocal, joinRemote, parentLocal, parentRemote, normalizeRemotePath, sortItems } from '../sftp/utils';
+import { PARENT_ROW, joinLocal, joinRemote, localPathOf, parentLocal, parentRemote, normalizeRemotePath, sortItems } from '../sftp/utils';
 import taskMethods from '../sftp/taskMethods';
 import transferMethods from '../sftp/transferMethods';
 import dragDropMethods from '../sftp/dragDropMethods';
@@ -305,10 +303,6 @@ export default {
     this._tabOverBar = false;
   },
   async mounted() {
-    this._onWinErr = (msg) => {
-      console.log('[sftp] window.onerror ' + msg);
-    };
-    window.addEventListener('error', this._onWinErr);
     this._offProgress =
       api.onSftpProgress &&
       api.onSftpProgress((p) => {
@@ -317,18 +311,21 @@ export default {
         const s = this.sessions.find((x) => x.connId === p.connId);
         if (s) this.mergeTask(s, p);
       });
-    this._offSshState =
-      api.onSshState &&
-      api.onSshState((ev) => {
-        if (!ev) return;
-        if (ev.type === 'drag-error') {
-          this.$message.error(ev.message || t('sftp.dragOutFail'));
-        }
-      });
-    this._offDragReady =
-      api.onSftpDragReady &&
-      api.onSftpDragReady(() => {
-        this.$message.success(t('sftp.dragReady'));
+    // 连接被服务端或网络断开：主进程只报这一条，页签状态由这里改
+    this._offState =
+      api.onSftpState &&
+      api.onSftpState((ev) => {
+        if (!ev || ev.type !== 'disconnected') return;
+        const s = this.sessions.find((x) => x.connId === ev.connId);
+        if (!s || !s.alive) return;
+        s.connId = null;
+        s.status = 'error';
+        s.error = connectionErrorMessage({ code: ev.code });
+        // 重连后回到断开前真正在看的那个目录
+        s.initialPath = s.remotePath;
+        // 连接没了就不会再有进度事件，未完成的行就地判掉，别一直挂着「传输中」
+        this.markTasksCanceled(s);
+        this.$message.error(`${s.label}: ${s.error}`);
       });
     // 先订阅再报到：主进程把就绪前到达的会话一次性交出来，之后都走事件
     this._offAddSession =
@@ -339,21 +336,7 @@ export default {
       api.onSftpConfirmClose &&
       api.onSftpConfirmClose(() => this.confirmWindowClose());
 
-    this._nativeDragOver = (e) => {
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-    };
-    this._nativeDrop = (e) => {
-      e.preventDefault();
-      const el = e.target;
-      const inZone = el && el.closest && el.closest('.sftp-panel, .file-list, .file-row');
-      if (inZone) return; // panel @drop handles it
-      this.runDrop(e, null);
-    };
-    this._nativeDragEnter = (e) => {
-      e.preventDefault();
-    };
-    // document capture — must see OS Explorer drops too
+    // document capture 一对监听同时覆盖 OS 拖入和面板外的落点，面板自己的 drop 优先
     this._docOver = (e) => {
       if (!e.dataTransfer) return;
       const types = Array.from(e.dataTransfer.types || []);
@@ -381,12 +364,6 @@ export default {
 
     this.$nextTick(() => {
       if (this._destroyed) return;
-      const root = this.$refs.root;
-      if (root) {
-        root.addEventListener('dragenter', this._nativeDragEnter, false);
-        root.addEventListener('dragover', this._nativeDragOver, false);
-        root.addEventListener('drop', this._nativeDrop, false);
-      }
       this.observeTabBar();
       this.updateTabArrows();
     });
@@ -411,13 +388,6 @@ export default {
     this._destroyed = true;
     this.endSessionDrag();
     window.removeEventListener('beforeunload', this.onUnload);
-    if (this._onWinErr) window.removeEventListener('error', this._onWinErr);
-    const root = this.$refs.root;
-    if (root) {
-      root.removeEventListener('dragenter', this._nativeDragEnter);
-      root.removeEventListener('dragover', this._nativeDragOver);
-      root.removeEventListener('drop', this._nativeDrop);
-    }
     document.removeEventListener('dragover', this._docOver, true);
     document.removeEventListener('drop', this._docDrop, true);
     document.removeEventListener('keydown', this.onGlobalKey);
@@ -433,8 +403,7 @@ export default {
     this._pollTimer = null;
     this.sessions.forEach((s) => this.releaseSession(s));
     if (this._offProgress) this._offProgress();
-    if (this._offSshState) this._offSshState();
-    if (this._offDragReady) this._offDragReady();
+    if (this._offState) this._offState();
     if (this._offAddSession) this._offAddSession();
     if (this._offWinConfirm) this._offWinConfirm();
   },
@@ -447,14 +416,18 @@ export default {
     sessionById(id) {
       return this.sessions.find((s) => s.id === id) || null;
     },
-    /** 公用队列里的行自带 connId，暂停/移除/展开子节点都要回到它所属的会话。 */
+    /**
+     * 公用队列里的行要回到它所属的会话：文件夹树按 rootId 找扫描状态，单文件行按它在哪份
+     * 任务列表里找。不能按 connId 找——重连或重新握手会换 connId，旧行就再也管不了了。
+     */
     sessionOf(row) {
-      if (!row || !row.connId) return null;
-      return this.sessions.find((s) => s.connId === row.connId) || null;
-    },
-    pushDlog(msg) {
-      // debug only — no on-screen overlay
-      console.log('[sftp]', new Date().toLocaleTimeString(), msg);
+      if (!row) return null;
+      const id = row.rootId || row.taskId;
+      for (let i = 0; i < this.sessions.length; i += 1) {
+        const s = this.sessions[i];
+        if (s.folderStates.has(id) || s.tasks.indexOf(row) >= 0) return s;
+      }
+      return null;
     },
     statusText(s) {
       const map = {
@@ -474,7 +447,9 @@ export default {
     /** 主进程（或页签右键「复制会话」）要求新增一个远端会话页签；同一资产可以开多个。 */
     addSession(meta) {
       if (!meta || !meta.assetId) return;
-      const seq = this.sessions.filter((x) => x.assetId === meta.assetId).length + 1;
+      // 编号只增不减：关掉 A(2) 后再开一条不能顶掉还活着的同名页签
+      const same = this.sessions.filter((x) => x.assetId === meta.assetId);
+      const seq = same.reduce((max, x) => Math.max(max, x.seq), 0) + 1;
       const s = createSession(meta, `ss-${++this._seq}`, seq);
       this.sessions.push(s);
       this.activateTab(s.id);
@@ -483,9 +458,11 @@ export default {
     /** 走主进程同一条打开入口，复制出的会话按当前资产配置连接。 */
     copySession(s) {
       if (!s || !api.sftpOpenWindow) return;
-      api.sftpOpenWindow({ assetId: s.assetId }).catch((e) => {
-        this.$message.error(e.message || String(e));
-      });
+      // 主进程把异常包成 {__error} 返回，不 unwrap 就永远走不到 catch
+      api
+        .sftpOpenWindow({ assetId: s.assetId })
+        .then((r) => unwrap(r))
+        .catch((e) => this.$message.error(connectionErrorMessage(e)));
     },
     activateTab(id) {
       if (this.activeId === id) return;
@@ -504,7 +481,7 @@ export default {
         await this.goLocal(local.path || this.localHome);
         this.refreshClipFiles();
       } catch (e) {
-        this.$message.error(e.message || String(e));
+        this.$message.error(connectionErrorMessage(e));
       }
     },
     async bootSession(s) {
@@ -529,7 +506,7 @@ export default {
       } catch (e) {
         if (!s.alive) return;
         s.status = 'error';
-        s.error = e.code === 'SFTP_DISABLED' ? t('sftp.disabled') : e.message || String(e);
+        s.error = connectionErrorMessage(e);
         this.$message.error(s.error);
       }
     },
@@ -539,7 +516,8 @@ export default {
       if (s.recalcTimer) clearTimeout(s.recalcTimer);
       s.recalcTimer = null;
       s.recalcPending.clear();
-      s.folderStates.clear();
+      // 正在扫描的文件夹要收到取消信号，否则暂停中的扫描循环一直等不到恢复
+      Array.from(s.folderStates.keys()).forEach((id) => this.forgetFolderTree(s, id));
       s.rowByKey.clear();
       s.rowByXferId.clear();
       if (s.connId && api.sftpClose) api.sftpClose(s.connId).catch(() => {});
@@ -831,7 +809,7 @@ export default {
         this.localSel = [];
         this.localAnchor = '';
       } catch (e) {
-        this.$message.error(e.message);
+        this.$message.error(connectionErrorMessage(e));
       } finally {
         this.localLoading = false;
       }
@@ -848,7 +826,7 @@ export default {
         this.localSel = [];
         this.localAnchor = '';
       } catch (e) {
-        this.$message.error(e.message);
+        this.$message.error(connectionErrorMessage(e));
       } finally {
         this.localLoading = false;
       }
@@ -875,7 +853,7 @@ export default {
       }
       if (!failed || !s.alive) return;
       if (fallback) return this.goRemote(s, fallback);
-      this.$message.error(failed.message);
+      this.$message.error(connectionErrorMessage(failed));
     },
     localUp() {
       if (this.localComputer) return;
@@ -903,22 +881,26 @@ export default {
     onLocalDbl(f) {
       if (f.isParent) return this.localUp();
       if (f.isDrive) return this.goLocal(f.path);
-      if (f.isDir) return this.goLocal(joinLocal(this.localPath, f.name));
-      this.uploadPaths(this.s, [joinLocal(this.localPath, f.name)], this.remotePath);
+      if (f.isDir) return this.goLocal(localPathOf(this.localPath, f));
+      const s = this.needRemote();
+      if (s) this.uploadPaths(s, [localPathOf(this.localPath, f)], s.remotePath);
     },
     onRemoteDbl(s, f) {
       if (f.isParent) return this.remoteUp(s);
       if (f.isDir) return this.goRemote(s, joinRemote(s.remotePath, f.name));
-      this.downloadPaths(s, [joinRemote(s.remotePath, f.name)], this.localPath);
+      this.downloadPaths(s, [joinRemote(s.remotePath, f.name)], this.localDropDir());
     },
 
     onBlankCtx(e, side) {
-      const items = [{ act: 'mkdir', label: t('sftp.mkdir') }];
+      // 「此电脑」视图里没有一个真实目录能承载新建/全选，只留刷新
+      const computerView = side === 'local' && this.localComputer;
+      const items = [];
+      if (!computerView) items.push({ act: 'mkdir', label: t('sftp.mkdir') });
       if (side === 'remote') {
         items.push({ act: 'paste', label: t('sftp.paste'), disabled: !this.clipHasFiles });
       }
       items.push({ act: 'refresh', label: t('sftp.refresh') });
-      items.push({ act: 'select-all', label: t('sftp.selectAll') });
+      if (!computerView) items.push({ act: 'select-all', label: t('sftp.selectAll') });
       this.ctx = { visible: true, x: e.clientX, y: e.clientY, side, item: null, items };
       if (side === 'remote') this.refreshClipFiles();
     },
@@ -939,7 +921,8 @@ export default {
       if (item && this.ctx.visible) item.disabled = !has;
     },
     onItemCtx(e, side, f) {
-      if (f.isParent) return;
+      // 盘符行只能进入，不参与重命名/删除/上传
+      if (f.isParent || f.isDrive) return;
       const sel = side === 'local' ? this.localSel : this.remoteSel;
       if (sel.indexOf(f.name) < 0) this.onRowSelect(side, f.name, {});
       const targets = this.selItems(side);
@@ -959,15 +942,34 @@ export default {
       items.push({ act: 'delete', label: t('sftp.delete'), danger: true });
       this.ctx = { visible: true, x: e.clientX, y: e.clientY, side, item: f, items };
     },
+    /** 远端侧（以及本机→远端的上传）要先有连接；本机侧操作不该依赖有没有页签。 */
+    needRemote() {
+      const s = this.s;
+      if (s && s.connId) return s;
+      this.$message.warning(t('err.SFTP_NO_CONN'));
+      return null;
+    },
     async runCtx(it) {
       const { side, item } = this.ctx;
       this.closeCtx();
-      const s = this.s;
-      if (!s) return;
+      const needsRemote = side === 'remote' || it.act.indexOf('upload') === 0 || it.act === 'paste';
+      const s = needsRemote ? this.needRemote() : this.s;
+      if (needsRemote && !s) return;
       const targets = this.selItems(side);
       const list = targets.length ? targets : item ? [item] : [];
-      const localOf = (x) => joinLocal(this.localPath, x.name);
+      const localOf = (x) => localPathOf(this.localPath, x);
       const remoteOf = (x) => joinRemote(s.remotePath, x.name);
+      const downloadList = async (dir) => {
+        for (const x of list) {
+          if (x.isDir) {
+            unwrap(await api.sftpLocalMkdir(dir, x.name));
+            await this.downloadRemoteDir(s, remoteOf(x), joinLocal(dir, x.name));
+          } else {
+            await this.startDownload(s, remoteOf(x), joinLocal(dir, x.name));
+          }
+        }
+        if (list.some((x) => x.isDir)) this.$message.success(t('sftp.downloadDone'));
+      };
       try {
         if (it.act === 'upload-folder' && item && item.isDir) {
           await this.transferFolderUpload(s, localOf(item), s.remotePath);
@@ -982,40 +984,20 @@ export default {
           return;
         }
         if (it.act === 'download-folder' && item && item.isDir) {
-          await this.transferFolderDownload(s, remoteOf(item), this.localPath);
+          await this.transferFolderDownload(s, remoteOf(item), this.localDropDir());
           return;
         }
         if (it.act === 'download-here' && list.length) {
-          const dir = this.localPath;
-          for (const x of list) {
-            if (x.isDir) {
-              await api.sftpLocalMkdir(dir, x.name);
-              await this.downloadRemoteDir(s, remoteOf(x), joinLocal(dir, x.name));
-            } else {
-              await this.startDownload(s, remoteOf(x), joinLocal(dir, x.name));
-            }
-          }
-          if (list.some((x) => x.isDir)) this.$message.success(t('sftp.downloadDone'));
-          this.syncTasks(s);
-          setTimeout(() => this.goLocal(dir), 400);
+          await downloadList(this.localDropDir());
           return;
         }
         if (it.act === 'download-to' && list.length) {
-          let dir = this.localPath;
+          let dir = this.localDropDir();
           if (api.sftpPickLocalDir) {
             const picked = unwrap(await api.sftpPickLocalDir());
             if (picked) dir = picked;
           }
-          for (const x of list) {
-            if (x.isDir) {
-              await api.sftpLocalMkdir(dir, x.name);
-              await this.downloadRemoteDir(s, remoteOf(x), joinLocal(dir, x.name));
-            } else {
-              await this.startDownload(s, remoteOf(x), joinLocal(dir, x.name));
-            }
-          }
-          if (list.some((x) => x.isDir)) this.$message.success(t('sftp.downloadDone'));
-          this.syncTasks(s);
+          await downloadList(dir);
           return;
         }
         if (it.act === 'paste') {
@@ -1077,7 +1059,7 @@ export default {
               if (side === 'local') unwrap(await api.sftpLocalUnlink(localOf(x), x.isDir));
               else unwrap(await api.sftpUnlink(s.connId, remoteOf(x), x.isDir));
             } catch (e) {
-              failed.push(`${x.name}: ${e.message || e}`);
+              failed.push(`${x.name}: ${connectionErrorMessage(e)}`);
             }
           }
           if (failed.length) this.$message.error(failed.join('\n'));
@@ -1085,7 +1067,7 @@ export default {
           else await this.goRemote(s, s.remotePath);
         }
       } catch (err) {
-        if (err !== 'cancel' && err !== 'close') this.$message.error(err.message || String(err));
+        if (err !== 'cancel' && err !== 'close') this.$message.error(connectionErrorMessage(err));
       }
     },
   },

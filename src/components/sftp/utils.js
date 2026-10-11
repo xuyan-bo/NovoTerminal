@@ -1,4 +1,13 @@
+import { t } from '../../i18n';
+
 export const PARENT_ROW = { name: '..', isDir: true, isParent: true, sizeText: '—', mtime: '' };
+
+/** 传输行的失败原因由主进程给错误码，界面按 err.<CODE> 取译文；英文原文只作兜底显示。 */
+export function transferErrorText(row) {
+  const code = row && row.errorCode ? 'err.' + row.errorCode : '';
+  const mapped = code ? t(code) : '';
+  return (code && mapped !== code ? mapped : (row && row.error)) || t('sftp.transferFailed');
+}
 
 export function formatSize(n) {
   const num = Number(n) || 0;
@@ -44,6 +53,12 @@ export function joinLocal(dir, name) {
   if (!dir) return name;
   if (dir.endsWith('/') || dir.endsWith('\\')) return dir + name;
   return dir + localSep(dir) + name;
+}
+
+/** 本机面板一行的真实路径：Windows「此电脑」视图里的盘符行自带绝对 path，不能按名拼接。 */
+export function localPathOf(dir, item) {
+  if (!item) return '';
+  return item.isDrive ? item.path : joinLocal(dir, item.name);
 }
 export function parentLocal(p) {
   if (!p) return '';

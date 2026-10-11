@@ -253,8 +253,7 @@ export const api = hasBridge
       async sftpLocalCopy() {
         return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
-      sftpStartDrag() {},
-      onSftpDragReady() {
+      onSftpState() {
         return () => {};
       },
       onSftpConfirmClose() {

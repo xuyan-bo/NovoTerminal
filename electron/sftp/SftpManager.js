@@ -64,11 +64,9 @@ class SftpManager {
     this._seq = 0;
   }
 
-  L(zh, en) {
-    return this.store && this.store.getSettings().lang === 'en' ? en : zh;
-  }
-
   _progress(task, opts) {
+    // 任务已被删除（取消/关会话）：在途回调的晚到事件不能再发给渲染端，否则删掉的行会复活
+    if (!this.tasks.has(task.taskId)) return;
     const now = Date.now();
     if (!task._lastT) {
       task._lastT = now;
@@ -111,8 +109,19 @@ class SftpManager {
       targetPath: task.targetPath,
       status: task.status,
       error: task.error || '',
+      errorCode: task.errorCode || '',
     });
     if (settled) {
+      if (task.status === 'done') {
+        this.log &&
+          this.log.info('sftp', 'sftp transfer done', {
+            connId: task.connId,
+            direction: task.direction,
+            sourcePath: task.sourcePath,
+            targetPath: task.targetPath,
+            size: task.size,
+          });
+      }
       const owner = this.conns.get(task.connId);
       if (owner) this._freeSlot(owner, task);
       this._drainConn(task.connId);
@@ -137,7 +146,7 @@ class SftpManager {
 
   _drainConn(connId) {
     const c = this.conns.get(connId);
-    if (!c) return;
+    if (!c || c.closing) return;
     while (c.xferQueue.length && c.running.size < c.tune.activeLimit) {
       const id = c.xferQueue.shift();
       const task = this.tasks.get(id);
@@ -226,7 +235,7 @@ class SftpManager {
 
   async openSession({ assetId, ownerId, verifyHostKey, promptKeyboard }) {
     const hit = this.store.findAsset(assetId);
-    if (!hit) throw Object.assign(new Error('asset not found'), { code: 'NOT_FOUND' });
+    if (!hit) throw Object.assign(new Error('asset not found'), { code: 'SFTP_NO_ASSET' });
     const asset = hit.asset;
     let config;
     try {
@@ -259,16 +268,27 @@ class SftpManager {
     const closed = new Promise((_, reject) => { rejectClosed = reject; });
     closed.catch(() => {});
     const onClosed = (error) => {
-      rec.closedError = rec.closedError || error || Object.assign(new Error('SFTP connection closed'), { code: 'SSH_CLOSED' });
+      rec.closedError = rec.closedError || error || Object.assign(new Error('SFTP connection closed'), { code: 'SFTP_CLOSED' });
       rejectClosed(rec.closedError);
-      if (this.conns.has(connId)) this.closeSession(connId);
+      if (!this.conns.has(connId)) return;
+      // 面板此时还挂着「已连接」，只能靠这条状态把页签标记为已断开
+      this.log &&
+        this.log.warn('sftp', 'sftp connection lost', {
+          assetId: rec.assetId,
+          host: rec.host,
+          port: rec.port,
+          connId,
+          code: rec.closedError.code || 'SFTP_CLOSED',
+        });
+      this.send('sftp:state', { type: 'disconnected', connId, code: rec.closedError.code || 'SFTP_CLOSED' });
+      this.closeSession(connId);
     };
     connection.on('closed', onClosed);
     let timer;
     try {
       const client = await Promise.race([connection.ready, closed]);
       if (rec.closedError) throw rec.closedError;
-      if (!this.pending.has(connId)) throw Object.assign(new Error('SFTP canceled'), { code: 'SSH_CANCELED' });
+      if (!this.pending.has(connId)) throw Object.assign(new Error('SFTP canceled'), { code: 'SFTP_CANCELED' });
       rec.client = client;
       const home = await Promise.race([
         new Promise((resolve, reject) => {
@@ -276,7 +296,7 @@ class SftpManager {
           client.sftp((error, sftp) => {
             if (rec.closedError || !this.pending.has(connId)) {
               if (sftp) sftp.end();
-              return reject(rec.closedError || Object.assign(new Error('SFTP canceled'), { code: 'SSH_CANCELED' }));
+              return reject(rec.closedError || Object.assign(new Error('SFTP canceled'), { code: 'SFTP_CANCELED' }));
             }
             if (error) return reject(error);
             rec.sftp = sftp;
@@ -288,7 +308,7 @@ class SftpManager {
         closed,
       ]);
       if (rec.closedError) throw rec.closedError;
-      if (!this.pending.has(connId)) throw Object.assign(new Error('SFTP canceled'), { code: 'SSH_CANCELED' });
+      if (!this.pending.has(connId)) throw Object.assign(new Error('SFTP canceled'), { code: 'SFTP_CANCELED' });
       this.pending.delete(connId);
       this.conns.set(connId, rec);
       this.log && this.log.info('sftp', 'sftp connected', { assetId, host: rec.host, port: rec.port, connId });
@@ -305,8 +325,19 @@ class SftpManager {
 
   _conn(connId) {
     const c = this.conns.get(connId);
-    if (!c) throw Object.assign(new Error('SFTP session not found'), { code: 'NO_CONN' });
+    if (!c || c.closing) throw Object.assign(new Error('SFTP session not found'), { code: 'SFTP_NO_CONN' });
     return c;
+  }
+
+  /** ssh2 的数值状态码对界面没有意义：统一换成 SFTP_* 错误码，原始信息只进日志。 */
+  _remoteError(kind, err, logMessage, meta) {
+    const error = Object.assign(new Error((err && err.message) || kind), {
+      code: `SFTP_${kind}`,
+      detail: err && err.code !== undefined ? String(err.code) : '',
+    });
+    this.log &&
+      this.log.error('sftp', logMessage, { ...meta, code: err && err.code, message: error.detail || error.message });
+    return error;
   }
 
   list(connId, remotePath) {
@@ -320,7 +351,7 @@ class SftpManager {
       const target = remotePath || '/';
       c.sftp.readdir(target, (err, list) => {
         if (err) {
-          return reject(Object.assign(new Error(err.message || 'readdir failed'), { code: err.code || 'SFTP_LIST' }));
+          return reject(this._remoteError('LIST', err, 'sftp list failed', { connId, host: c.host, port: c.port }));
         }
         const items = (list || [])
           .map((it) => {
@@ -375,7 +406,8 @@ class SftpManager {
         });
       return { path: dir, items, home: os.homedir() };
     } catch (e) {
-      throw Object.assign(new Error(e.message || 'local list failed'), { code: 'LOCAL_LIST' });
+      this.log && this.log.error('sftp', 'local list failed', { path: dir, code: e.code, message: e.message });
+      throw Object.assign(new Error('local list failed'), { code: 'LOCAL_LIST' });
     }
   }
 
@@ -398,7 +430,7 @@ class SftpManager {
     const c = this._conn(connId);
     return new Promise((resolve, reject) => {
       c.sftp.mkdir(remotePath, (err) => {
-        if (err) reject(Object.assign(new Error(err.message), { code: 'SFTP_MKDIR' }));
+        if (err) reject(this._remoteError('MKDIR', err, 'sftp mkdir failed', { connId, host: c.host, port: c.port, path: remotePath }));
         else {
           this._rememberDir(c, remotePath);
           resolve({ ok: true });
@@ -415,7 +447,7 @@ class SftpManager {
   /** mkdir -p on remote; existing paths are tolerated and known prefixes are never re-walked. */
   mkdirp(connId, remoteDir) {
     const c = this.conns.get(connId);
-    if (!c || !c.sftp) return Promise.resolve({ ok: true });
+    if (!c || c.closing || !c.sftp) return Promise.resolve({ ok: true });
     return this._mkdirp(c, remoteDir).then(() => ({ ok: true }));
   }
 
@@ -450,10 +482,10 @@ class SftpManager {
   }
 
   rename(connId, oldPath, newPath) {
+    const c = this._conn(connId);
     return new Promise((resolve, reject) => {
-      const c = this._conn(connId);
       c.sftp.rename(oldPath, newPath, (err) => {
-        if (err) reject(Object.assign(new Error(err.message), { code: 'SFTP_RENAME' }));
+        if (err) reject(this._remoteError('RENAME', err, 'sftp rename failed', { connId, host: c.host, port: c.port }));
         else resolve({ ok: true });
       });
     });
@@ -477,14 +509,16 @@ class SftpManager {
         return { ok: true };
       })
       .catch((err) => {
-        this.log &&
-          this.log.error('sftp', isDir ? 'remote rmdir failed' : 'remote unlink failed', {
-            host: c.host,
-            port: c.port,
-            path: remotePath,
-            code: err.code,
-            message: err.message,
-          });
+        if (!err.code || !String(err.code).startsWith('SFTP_')) {
+          this.log &&
+            this.log.error('sftp', isDir ? 'remote rmdir failed' : 'remote unlink failed', {
+              host: c.host,
+              port: c.port,
+              path: remotePath,
+              code: err.code,
+              message: err.message,
+            });
+        }
         throw err;
       });
   }
@@ -493,7 +527,7 @@ class SftpManager {
     return new Promise((resolve, reject) => {
       const fn = kind === 'rmdir' ? c.sftp.rmdir.bind(c.sftp) : c.sftp.unlink.bind(c.sftp);
       fn(p, (err) => {
-        if (err) reject(Object.assign(new Error(err.message), { code: err.code || 'SFTP_UNLINK' }));
+        if (err) reject(this._remoteError('UNLINK', err, 'sftp delete entry failed', { host: c.host, port: c.port, path: p }));
         else resolve();
       });
     });
@@ -503,7 +537,7 @@ class SftpManager {
   _isRealDir(c, p) {
     return new Promise((resolve, reject) => {
       c.sftp.lstat(p, (err, st) => {
-        if (err) reject(Object.assign(new Error(err.message || 'lstat failed'), { code: err.code || 'SFTP_UNLINK' }));
+        if (err) reject(this._remoteError('UNLINK', err, 'sftp lstat failed', { host: c.host, port: c.port, path: p }));
         else resolve(st && st.isDirectory ? st.isDirectory() : false);
       });
     });
@@ -513,7 +547,7 @@ class SftpManager {
   async _removeDir(c, dir) {
     const entries = await new Promise((resolve, reject) => {
       c.sftp.readdir(dir, (err, list) => {
-        if (err) reject(Object.assign(new Error(err.message || 'readdir failed'), { code: err.code || 'SFTP_UNLINK' }));
+        if (err) reject(this._remoteError('UNLINK', err, 'sftp delete readdir failed', { host: c.host, port: c.port, path: dir }));
         else resolve(list || []);
       });
     });
@@ -544,10 +578,6 @@ class SftpManager {
     return { ok: true };
   }
 
-  listSync(connId, remotePath) {
-    return this.list(connId, remotePath);
-  }
-
   _startTask(meta) {
     const taskId = `t-${Date.now()}-${(++this._seq).toString(36)}`;
     const task = {
@@ -562,11 +592,20 @@ class SftpManager {
       paused: false,
       flight: XFER_MIN_FLIGHT,
       error: '',
+      errorCode: '',
       rs: null,
       ws: null,
       connId: meta.connId,
     };
     this.tasks.set(taskId, task);
+    this.log &&
+      this.log.info('sftp', 'sftp transfer start', {
+        connId: meta.connId,
+        direction: meta.direction,
+        sourcePath: meta.sourcePath,
+        targetPath: meta.targetPath,
+        size: task.size,
+      });
     this._progress(task);
     return task;
   }
@@ -608,7 +647,7 @@ class SftpManager {
       if (st.isDirectory()) {
         return Promise.reject(
           Object.assign(
-            new Error(this.L('路径是文件夹，请使用文件夹传输', 'Path is a directory; use folder transfer')),
+            new Error('path is a directory; use folder transfer'),
             { code: 'EISDIR' }
           )
         );
@@ -616,13 +655,9 @@ class SftpManager {
       size = st.size;
     } catch (e) {
       return Promise.reject(
-        Object.assign(
-          new Error(
-            this.L('无法读取本地文件（可能被系统占用）', 'Cannot read local file (possibly locked by the system)') +
-              `: ${e.code || ''} ${e.message}`
-          ),
-          { code: e.code || 'LOCAL_READ' }
-        )
+        Object.assign(new Error('cannot read local file: ' + `${e.code || ''} ${e.message}`.trim()), {
+          code: 'LOCAL_READ',
+        })
       );
     }
     const task = this._startTask({
@@ -634,7 +669,7 @@ class SftpManager {
       connId,
     });
     this._queueTask(c, task, () => this._runUpload(c, task));
-    return Promise.resolve({ taskId: task.taskId });
+    return Promise.resolve({ taskId: task.taskId, status: task.status });
   }
 
   _runUpload(c, task) {
@@ -668,9 +703,22 @@ class SftpManager {
     task._release = release;
 
     const fail = (err) => {
+      // 取消已关掉 handle，在途回调随后带错回来；这时不能把 canceled 覆盖成 error
+      if (task.status === 'canceled') {
+        release();
+        return;
+      }
       task.status = 'error';
       task.error = (err && (err.message || err.code)) || String(err);
-      console.error('[sftp] transfer error', task.direction, task.sourcePath, task.error);
+      task.errorCode = (err && typeof err.code === 'string' && err.code) || 'SFTP_TRANSFER';
+      this.log &&
+        this.log.error('sftp', 'sftp transfer failed', {
+          connId: task.connId,
+          direction: task.direction,
+          sourcePath: task.sourcePath,
+          code: task.errorCode,
+          message: task.error,
+        });
       this._progress(task);
       release();
     };
@@ -687,19 +735,19 @@ class SftpManager {
       }
     } catch (e) {
       return fail(
-        Object.assign(
-          new Error(
-            this.L('无法读取本地文件（可能被系统占用）', 'Cannot read local file (possibly locked by the system)') +
-              `: ${e.code || ''} ${e.message}`
-          ),
-          { code: e.code || 'LOCAL_READ' }
-        )
+        Object.assign(new Error('cannot read local file: ' + `${e.code || ''} ${e.message}`.trim()), {
+          code: 'LOCAL_READ',
+        })
       );
     }
     try {
       localFd = fs.openSync(localPath, 'r');
     } catch (e) {
-      return fail(e);
+      return fail(
+        Object.assign(new Error('cannot read local file: ' + `${e.code || ''} ${e.message}`.trim()), {
+          code: 'LOCAL_READ',
+        })
+      );
     }
 
     const pump = () => {
@@ -721,7 +769,8 @@ class SftpManager {
           fs.readSync(localFd, cbuf, 0, n, start);
         } catch (e) {
           finished = true;
-          return fail(e);
+          // EBUSY/EPERM 之类要按「读不了本地文件」定性，界面才有中文可译；原文留给行与日志
+          return fail(Object.assign(new Error(`${e.code || ''} ${e.message}`.trim()), { code: 'LOCAL_READ' }));
         }
         inFlight++;
         sftp.write(handle, cbuf, 0, n, start, (werr) => {
@@ -796,7 +845,8 @@ class SftpManager {
       connId,
     });
     this._queueTask(c, task, () => this._runDownload(c, task));
-    return Promise.resolve({ taskId: task.taskId });
+    // 排队中的下载也要如实回给渲染端，否则页面只能自己猜一个 running
+    return Promise.resolve({ taskId: task.taskId, status: task.status });
   }
 
   _runDownload(c, task) {
@@ -844,9 +894,22 @@ class SftpManager {
       task._release = release;
 
       const fail = (err) => {
+        // 同上：取消后的在途读回调不能再把状态改回 error
+        if (task.status === 'canceled') {
+          release();
+          return;
+        }
         task.status = 'error';
         task.error = (err && (err.message || err.code)) || String(err);
-        console.error('[sftp] transfer error', task.direction, task.sourcePath, task.error);
+        task.errorCode = (err && typeof err.code === 'string' && err.code) || 'SFTP_TRANSFER';
+        this.log &&
+          this.log.error('sftp', 'sftp transfer failed', {
+            connId: task.connId,
+            direction: task.direction,
+            sourcePath: task.sourcePath,
+            code: task.errorCode,
+            message: task.error,
+          });
         this._progress(task);
         release();
       };
@@ -856,7 +919,11 @@ class SftpManager {
       try {
         outFd = fs.openSync(localPath, 'w');
       } catch (e) {
-        return fail(e);
+        return fail(
+          Object.assign(new Error('cannot write local file: ' + `${e.code || ''} ${e.message}`.trim()), {
+            code: 'LOCAL_WRITE',
+          })
+        );
       }
 
       sftp.open(remotePath, 'r', (err, h) => {
@@ -890,7 +957,9 @@ class SftpManager {
                   fs.writeSync(outFd, cbuf, 0, br, start);
                 } catch (e) {
                   finished = true;
-                  return fail(e);
+                  return fail(
+                    Object.assign(new Error(`${e.code || ''} ${e.message}`.trim()), { code: 'LOCAL_WRITE' })
+                  );
                 }
                 donePos = Math.max(donePos, start + br);
                 task.transferred = donePos;
@@ -972,6 +1041,48 @@ class SftpManager {
     return !task || task.status === 'done' || task.status === 'error' || task.status === 'canceled';
   }
 
+  /** 渲染端删任务时要连带清理半截目标文件，所以删除动作也由主进程统一发起（归属在 IPC 入口校验）。 */
+  markCanceled(taskId) {
+    const task = this.tasks.get(taskId);
+    if (!task) return Promise.resolve({ ok: true, cleaned: false });
+    const wasUnfinished = this._markCanceled(task);
+    this.tasks.delete(taskId);
+    if (!wasUnfinished) return Promise.resolve({ ok: true, cleaned: false });
+    return this.cleanupPartialTarget(task).then(() => ({ ok: true, cleaned: true }));
+  }
+
+  /**
+   * 会话开始回收：先标 closing 挡住新操作与新传输，取消全部任务并删掉半截远端文件；
+   * 通道要留到这一步做完才关，否则 unlink 无处可发。
+   */
+  beginSessionClose(connId) {
+    const c = this.conns.get(connId);
+    if (!c) return Promise.resolve(false);
+    c.closing = true;
+    c.xferQueue.length = 0;
+    const needClean = [];
+    [...this.tasks.values()].forEach((task) => {
+      if (task.connId !== connId) return;
+      if (task._pruneTimer) {
+        clearTimeout(task._pruneTimer);
+        task._pruneTimer = null;
+      }
+      if (this._markCanceled(task)) needClean.push(task);
+      this.tasks.delete(task.taskId);
+    });
+    this.log &&
+      this.log.info('sftp', 'sftp closed', { assetId: c.assetId, host: c.host, port: c.port, connId });
+    return this._runPool(needClean.map((task) => () => this.cleanupPartialTarget(task)), CLEANUP_POOL).then(
+      () => true
+    );
+  }
+
+  finishSessionClose(connId) {
+    const c = this.conns.get(connId);
+    this.conns.delete(connId);
+    if (c) c.connection.close();
+  }
+
   /** Shared cancel path for one id or a whole folder subtree. */
   _markCanceled(task) {
     const wasUnfinished = task.status === 'running' || task.status === 'paused';
@@ -992,18 +1103,14 @@ class SftpManager {
       task._pruneTimer = null;
     }
     this._progress(task);
+    this.log &&
+      this.log.info('sftp', 'sftp transfer canceled', {
+        connId: task.connId,
+        direction: task.direction,
+        sourcePath: task.sourcePath,
+        targetPath: task.targetPath,
+      });
     return wasUnfinished;
-  }
-
-  async cancelTask(taskId) {
-    const task = this.tasks.get(taskId);
-    if (!task) return { ok: true };
-    const wasUnfinished = this._markCanceled(task);
-    this.tasks.delete(taskId);
-    if (wasUnfinished) {
-      await this.cleanupPartialTarget(task);
-    }
-    return { ok: true, cleaned: wasUnfinished, targetPath: wasUnfinished ? task.targetPath : null };
   }
 
   /** Cancel a batch without serializing each partial-target cleanup (they sleep and hit the network). */
@@ -1049,7 +1156,7 @@ class SftpManager {
         try {
           if (!fs.existsSync(p)) return;
           fs.unlinkSync(p);
-          console.log('[sftp] removed partial local file', p);
+          this.log && this.log.info('sftp', 'removed partial local file', { path: p });
           return;
         } catch (e) {
           try {
@@ -1058,15 +1165,23 @@ class SftpManager {
           await new Promise((r) => setTimeout(r, 60 * (i + 1)));
         }
       }
-      console.warn('[sftp] could not delete partial local file', p);
+      this.log && this.log.warn('sftp', 'could not delete partial local file', { path: p });
     } else if (task.direction === 'upload') {
       const c = this.conns.get(task.connId);
       if (c && c.sftp) {
         await new Promise((resolve) => {
           try {
             c.sftp.unlink(task.targetPath, (err) => {
-              if (err) console.warn('[sftp] unlink remote partial failed', err.message);
-              else console.log('[sftp] removed partial remote file', task.targetPath);
+              this.log &&
+                (err
+                  ? this.log.warn('sftp', 'unlink remote partial failed', {
+                      host: c.host,
+                      port: c.port,
+                      path: task.targetPath,
+                      code: err.code,
+                      message: err.message,
+                    })
+                  : this.log.info('sftp', 'removed partial remote file', { host: c.host, path: task.targetPath }));
               resolve();
             });
           } catch (_) {
@@ -1102,86 +1217,15 @@ class SftpManager {
       targetPath: task.targetPath,
       status: task.status,
       error: task.error || '',
+      errorCode: task.errorCode || '',
     }));
   }
 
-  /** Resolve when task reaches done/error — used before native OS drag-out */
-  downloadWait(req) {
-    return new Promise((resolve, reject) => {
-      this.download(req)
-        .then(({ taskId }) => {
-          const tick = () => {
-            const task = this.tasks.get(taskId);
-            if (!task) return reject(new Error('download task disappeared'));
-            if (task.status === 'done') return resolve({ taskId, localPath: req.localPath });
-            if (task.status === 'error' || task.status === 'canceled') {
-              return reject(new Error(task.error || 'download failed'));
-            }
-            setTimeout(tick, 80);
-          };
-          tick();
-        })
-        .catch(reject);
-    });
-  }
-
-  /** Recursively download remote dir to localDir; resolves when all files done */
-  downloadTreeWait(connId, remoteDir, localDir) {
-    return this.list(connId, remoteDir).then(async (listing) => {
-      const items = (listing.items || []).filter((x) => x.name !== '.' && x.name !== '..' && !x.isParent);
-      for (const it of items) {
-        const rp = (remoteDir === '/' ? '' : remoteDir) + '/' + it.name;
-        const lp = path.join(localDir, it.name);
-        if (it.isDir) {
-          fs.mkdirSync(lp, { recursive: true });
-          await this.downloadTreeWait(connId, rp, lp);
-        } else {
-          await this.downloadWait({ connId, remotePath: rp, localPath: lp });
-        }
-      }
-      return { ok: true, localDir };
-    });
-  }
-
-  /** Prepare a local copy under temp for OS drag-out; returns absolute local path */
-  async prepareDragOut({ connId, remotePath, isDir, name }) {
-    const base = path.basename(remotePath) || name || 'download';
-    const tmpRoot = path.join(os.tmpdir(), 'novoterminal-sftp-drag');
-    fs.mkdirSync(tmpRoot, { recursive: true });
-    const stamp = Date.now().toString(36);
-    const localPath = path.join(tmpRoot, `${stamp}-${base}`);
-    if (isDir) {
-      fs.mkdirSync(localPath, { recursive: true });
-      await this.downloadTreeWait(connId, remotePath, localPath);
-    } else {
-      await this.downloadWait({ connId, remotePath, localPath });
-    }
-    return { localPath, remotePath, name: base, isDir: !!isDir };
-  }
-
   closeSession(connId) {
-    const c = this.conns.get(connId);
-    if (!c) return { ok: true };
-    this.conns.delete(connId);
-    c.xferQueue.length = 0;
-    // cancel related tasks
-    [...this.tasks.entries()].forEach(([id, t]) => {
-      if (t.connId !== connId) return;
-      if (t._pruneTimer) {
-        clearTimeout(t._pruneTimer);
-        t._pruneTimer = null;
-      }
-      this.cancelTask(id);
+    return this.beginSessionClose(connId).then(() => {
+      this.finishSessionClose(connId);
+      return { ok: true };
     });
-    c.connection.close();
-    this.log &&
-      this.log.info('sftp', 'sftp closed', {
-        assetId: c.assetId,
-        host: c.host,
-        port: c.port,
-        connId,
-      });
-    return { ok: true };
   }
 
   closeOwner(ownerId) {
@@ -1190,16 +1234,20 @@ class SftpManager {
       this.pending.delete(id);
       rec.connection.close();
     }
-    for (const [id, rec] of this.conns) {
-      if (rec.ownerId === ownerId) this.closeSession(id);
-    }
+    const owned = [...this.conns.entries()].filter(([, rec]) => rec.ownerId === ownerId).map(([id]) => id);
+    return Promise.all(owned.map((id) => this.beginSessionClose(id))).then(() => {
+      owned.forEach((id) => this.finishSessionClose(id));
+    });
   }
 
   destroyAll() {
     for (const rec of this.pending.values()) rec.connection.close();
     this.pending.clear();
-    for (const id of this.conns.keys()) this.closeSession(id);
+    const ids = [...this.conns.keys()];
+    return Promise.all(ids.map((id) => this.beginSessionClose(id))).then(() => {
+      ids.forEach((id) => this.finishSessionClose(id));
+    });
   }
 }
 
-module.exports = { SftpManager, formatSize, formatSpeed };
+module.exports = { SftpManager };

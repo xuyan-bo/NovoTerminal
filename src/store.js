@@ -531,6 +531,12 @@ export function connectionErrorMessage(error) {
   if (error.code === 'XFREERDP_PLATFORM') return t('err.rdpXfreerdpPlatform');
   if (error.code === 'WFREERDP_PLATFORM') return t('err.rdpWfreerdpPlatform');
   if (error.code === 'RDP_CLIENT_UNKNOWN') return error.message || t('err.connect');
+  // 主进程把原因放在 code 里，界面按 err.<CODE> 取译文，英文原文只进日志
+  const coded = error && error.code ? 'err.' + error.code : '';
+  if (coded) {
+    const mapped = t(coded);
+    if (mapped !== coded) return mapped;
+  }
   return error.message || t('err.connect');
 }
 

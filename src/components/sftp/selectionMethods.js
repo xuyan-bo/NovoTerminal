@@ -28,15 +28,18 @@ export default {
   },
   selItems(side) {
     const names = this.selNames(side);
-    return this.itemsOf(side).filter((x) => !x.isParent && names.indexOf(x.name) >= 0);
+    // 盘符行不参与批量操作：选中它等于上传整块盘
+    return this.itemsOf(side).filter((x) => !x.isParent && !x.isDrive && names.indexOf(x.name) >= 0);
   },
   selectableNames(side) {
     return this.itemsOf(side)
-      .filter((x) => !x.isParent)
+      .filter((x) => !x.isParent && !x.isDrive)
       .map((x) => x.name);
   },
   onRowSelect(side, name, e) {
     if (!name || name === '..') return;
+    const hit = this.itemsOf(side).find((x) => x.name === name);
+    if (hit && hit.isDrive) return;
     const ev = e || {};
     const current = this.selNames(side);
     const anchor = this[this.anchorProp(side)];
@@ -47,7 +50,7 @@ export default {
       if (from >= 0 && to >= 0) {
         const a = Math.min(from, to);
         const b = Math.max(from, to);
-        const band = items.slice(a, b + 1).filter((x) => !x.isParent).map((x) => x.name);
+        const band = items.slice(a, b + 1).filter((x) => !x.isParent && !x.isDrive).map((x) => x.name);
         this.setSel(side, isMultiKey(ev) ? [...new Set([...current, ...band])] : band);
         return;
       }

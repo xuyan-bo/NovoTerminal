@@ -173,17 +173,14 @@ const api = {
     ipcRenderer.on('sftp:confirm-close', handler);
     return () => ipcRenderer.removeListener('sftp:confirm-close', handler);
   },
-  sftpPickLocalFiles: () => ipcRenderer.invoke('sftp:pick-local-files'),
   sftpPickLocalDir: () => ipcRenderer.invoke('sftp:pick-local-dir'),
-  sftpLocalHome: () => ipcRenderer.invoke('sftp:local-home'),
   sftpClipboardFiles: (fullList) => ipcRenderer.invoke('sftp:clipboard-files', !!fullList),
   sftpLocalCopy: (src, destDir) => ipcRenderer.invoke('sftp:local-copy', src, destDir),
-  /** Native drag out to Explorer: main downloads remote → temp then startDrag */
-  sftpStartDrag: (payload) => ipcRenderer.send('sftp:start-drag', payload),
-  onSftpDragReady: (cb) => {
+  /** 会话级状态（当前只有连接被断开）：面板据此把页签标记为已断开 */
+  onSftpState: (cb) => {
     const handler = (_e, payload) => cb(payload);
-    ipcRenderer.on('sftp:drag-ready', handler);
-    return () => ipcRenderer.removeListener('sftp:drag-ready', handler);
+    ipcRenderer.on('sftp:state', handler);
+    return () => ipcRenderer.removeListener('sftp:state', handler);
   },
   onSftpAddSession: (cb) => {
     const handler = (_e, payload) => cb(payload);

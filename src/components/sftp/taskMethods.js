@@ -1,6 +1,6 @@
 import Vue from 'vue';
-import { api, unwrap } from '../../store';
-import { formatSize, parentLocal, parentRemote, isTaskFinished } from './utils';
+import { api, unwrap, connectionErrorMessage } from '../../store';
+import { formatSize, parentLocal, parentRemote, isTaskFinished, transferErrorText } from './utils';
 
 /** Folder totals are only worth recomputing a few times per second, not per progress event. */
 const RECALC_THROTTLE_MS = 400;
@@ -8,7 +8,8 @@ const RECALC_THROTTLE_MS = 400;
 /**
  * Task rows live in their own session (`s.tasks`), because progress events keep arriving for
  * background sessions while the user reads another tab. The queue table itself is shared, so the
- * four table-facing entry points below resolve the owning session from the row's `connId`.
+ * four table-facing entry points below resolve the owning session from the row's folder `rootId`
+ * or from the task list it sits in — never from `connId`, which changes on a reconnect.
  */
 export default {
   isTaskFinished,
@@ -25,7 +26,6 @@ export default {
           fileCount: 0,
           doneCount: 0,
           // 公用队列里每一行要标明所属会话，并按提交时间倒序排列
-          connId: s ? s.connId : null,
           sessionName: s ? s.label : '',
           createdAt: Date.now(),
         },
@@ -191,6 +191,7 @@ export default {
     let hasRun = false;
     let anyErr = false;
     let anyPause = false;
+    let anyCancel = false;
     let doneCount = 0;
     files.forEach((c) => {
       size += Number(c.size) || 0;
@@ -200,6 +201,7 @@ export default {
         speed += Number(c.speed) || 0;
       } else if (c.status === 'error') anyErr = true;
       else if (c.status === 'paused') anyPause = true;
+      else if (c.status === 'canceled') anyCancel = true;
       if (c.status === 'done') doneCount += 1;
     });
     const settled =
@@ -214,7 +216,8 @@ export default {
     parent.percent = size > 0 ? Math.min(100, Math.round((transferred / size) * 100)) : complete ? 100 : 0;
     parent.sizeText = formatSize(size);
     parent.speedText = hasRun && speed > 0 ? `${formatSize(speed)}/s` : '—';
-    if (complete) parent.status = anyErr ? 'error' : 'done';
+    // 全部取消不能伪装成完成，否则会触发「原地刷新」并显示成 100%
+    if (complete) parent.status = anyErr ? 'error' : anyCancel ? 'canceled' : 'done';
     else if ((anyPause || paused) && !hasRun) parent.status = 'paused';
     else parent.status = 'running';
     return parent;
@@ -222,6 +225,7 @@ export default {
   /** Recalculate every folder node of a task tree, deepest first. */
   recalcTree(s, root) {
     const state = this.folderState(s, root && root.taskId);
+    if (state && state.canceled) return root;
     const scanDone = state ? state.done : true;
     const paused = !!(state && state.paused);
     const visit = (row, isRoot) => {
@@ -231,6 +235,11 @@ export default {
       if (row.isFolder || row.isDir) this.recalcFolder(row, isRoot ? scanDone : true, isRoot ? paused : false);
     };
     if (root) visit(root, true);
+    // 整棵文件夹树跑完后按当前显示的目录原地刷新一次：不跳转，也不逐个文件刷新
+    if (root && root.isFolder && root.status === 'done' && !root.panelRefreshed) {
+      root.panelRefreshed = true;
+      this.refreshAfterDone(s, root);
+    }
     return root;
   },
   /** Remember expand state; folders stay collapsed until the user opens them */
@@ -278,11 +287,11 @@ export default {
     const merged =
       i >= 0
         ? { ...s.tasks[i], ...p }
-        : { ...p, connId: s.connId, sessionName: s.label, createdAt: Date.now() };
+        : { ...p, sessionName: s.label, createdAt: Date.now() };
     if (i >= 0) s.tasks.splice(i, 1, merged);
     else s.tasks.unshift(merged);
     if (merged.status === 'error' && (!prev || prev.status !== 'error')) {
-      this.$message.error(`${merged.name}: ${merged.error || this.$t('sftp.transferFailed')}`);
+      this.$message.error(`${merged.name}: ${transferErrorText(merged)}`);
     }
     if (merged.status === 'done' && (!prev || prev.status !== 'done')) {
       this.refreshAfterDone(s, merged);
@@ -358,6 +367,26 @@ export default {
       check();
     });
   },
+  /**
+   * 连接没了就不会再有进度事件（进度按 connId 路由）：把这条会话未完成的行就地判成已取消，
+   * 否则队列会一直挂着「传输中」。
+   */
+  markTasksCanceled(s) {
+    if (!s) return;
+    const rows = s.tasks.slice();
+    s.folderStates.forEach((state) => {
+      // 先给扫描与重算发收口信号：否则排队中的 recalc 会把刚判成取消的行改回「传输中」
+      state.canceled = true;
+      state.paused = false;
+      rows.push(state.root);
+      this.folderFiles(state.root).forEach((c) => rows.push(c));
+    });
+    rows.forEach((row) => {
+      if (!row || this.isTaskFinished(row)) return;
+      row.status = 'canceled';
+      row.speedText = '—';
+    });
+  },
   async togglePause(task) {
     if (this.isTaskFinished(task)) return;
     const s = this.sessionOf(task);
@@ -399,7 +428,7 @@ export default {
       this.mergeTask(s, { ...task, status: r.status || (pause ? 'paused' : 'running') });
       this.syncTasks(s);
     } catch (e) {
-      this.$message.error(e.message);
+      this.$message.error(connectionErrorMessage(e));
     }
   },
   async refreshListsAfterTaskRemove(s, task) {
@@ -444,19 +473,13 @@ export default {
         return;
       }
       const wasUnfinished = unfinished(task);
+      // 半截目标文件由主进程在取消时一并删除，渲染端不再重复删一次
       unwrap(await api.sftpCancel(task.xferId || task.taskId));
-      if (wasUnfinished && task.targetPath) {
-        if (task.direction === 'download' && api.sftpLocalUnlink) {
-          try { await api.sftpLocalUnlink(task.targetPath, false); } catch (_) {}
-        } else if (task.direction === 'upload' && s.connId && api.sftpUnlink) {
-          try { await api.sftpUnlink(s.connId, task.targetPath, false); } catch (_) {}
-        }
-      }
       s.tasks = s.tasks.filter((x) => x.taskId !== task.taskId);
       if (wasUnfinished) await this.refreshListsAfterTaskRemove(s, task);
       this.syncTasks(s);
     } catch (e) {
-      this.$message.error(e.message);
+      this.$message.error(connectionErrorMessage(e));
     }
   },
 };

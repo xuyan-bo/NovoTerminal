@@ -1,6 +1,6 @@
-import { api, unwrap } from '../../store';
+import { api, unwrap, connectionErrorMessage } from '../../store';
 import { t } from '../../i18n';
-import { joinLocal, joinRemote, parentRemote } from './utils';
+import { joinLocal, joinRemote, parentRemote, transferErrorText } from './utils';
 
 export default {
   async confirmOverwrite(direction, name) {
@@ -68,7 +68,6 @@ export default {
       this.$message.warning(t('sftp.clipboardEmpty'));
       return;
     }
-    this.pushDlog(`paste-clipboard n=${files.length} → ${s.remotePath}`);
     await this.uploadPaths(s, files, s.remotePath);
   },
 
@@ -91,14 +90,25 @@ export default {
       children: [],
     });
     this.registerFolderRoot(s, root);
-    // create remote root folder first — otherwise child uploads ENOENT
-    try {
-      if (api.sftpMkdirp) unwrap(await api.sftpMkdirp(s.connId, remoteRoot));
-      else if (api.sftpMkdir) unwrap(await api.sftpMkdir(s.connId, remoteRoot));
-    } catch (_) {}
+    // 先建远端根目录，否则子文件上传会 ENOENT；mkdirp 容忍已存在的目录
+    if (!(await this.ensureFolderRoot(s, root, api.sftpMkdirp(s.connId, remoteRoot)))) return;
     await this.scanFolderUpload(s, root);
     this.finishFolderScan(s, root);
-    setTimeout(() => this.goRemote(s, remoteDir), 400);
+  },
+
+  /** 建不成根目录就把这条文件夹任务判失败，别让它永远挂在「传输中」。 */
+  async ensureFolderRoot(s, root, pending) {
+    try {
+      unwrap(await pending);
+      return true;
+    } catch (e) {
+      root.status = 'error';
+      root.error = e.message || String(e);
+      root.errorCode = e.code || '';
+      this.forgetFolderTree(s, root.taskId);
+      this.$message.error(`${root.name}: ${transferErrorText(root)}`);
+      return false;
+    }
   },
 
   /** Breadth-first: list one directory, publish it to the queue, then start its files. */
@@ -115,6 +125,7 @@ export default {
       } catch (e) {
         cur.row.status = 'error';
         cur.row.error = e.message || String(e);
+        cur.row.errorCode = e.code || '';
         this.markDirScanned(s, root.taskId, cur.row);
         this.scheduleRecalc(s, root);
         continue;
@@ -133,8 +144,14 @@ export default {
         const row = rows[i];
         if (entries[i].isDir) {
           try {
-            await api.sftpMkdir(s.connId, row.targetPath);
-          } catch (_) {}
+            unwrap(await api.sftpMkdirp(s.connId, row.targetPath));
+          } catch (e) {
+            row.status = 'error';
+            row.error = e.message || String(e);
+            row.errorCode = e.code || '';
+            this.scheduleRecalc(s, root);
+            continue;
+          }
           queue.push({ row, source: row.sourcePath, target: row.targetPath });
           continue;
         }
@@ -152,6 +169,7 @@ export default {
         } catch (e) {
           row.status = 'error';
           row.error = e.message || String(e);
+          row.errorCode = e.code || '';
         }
         this.scheduleRecalc(s, root);
       }
@@ -177,12 +195,9 @@ export default {
       children: [],
     });
     this.registerFolderRoot(s, root);
-    try {
-      await api.sftpLocalMkdir(localDir, folderName);
-    } catch (_) {}
+    if (!(await this.ensureFolderRoot(s, root, api.sftpLocalMkdir(localDir, folderName)))) return;
     await this.scanFolderDownload(s, root);
     this.finishFolderScan(s, root);
-    setTimeout(() => this.goLocal(localDir), 400);
   },
 
   async scanFolderDownload(s, root) {
@@ -200,6 +215,7 @@ export default {
       } catch (e) {
         cur.row.status = 'error';
         cur.row.error = e.message || String(e);
+        cur.row.errorCode = e.code || '';
         this.markDirScanned(s, root.taskId, cur.row);
         this.scheduleRecalc(s, root);
         continue;
@@ -218,8 +234,14 @@ export default {
         const row = rows[i];
         if (entries[i].isDir) {
           try {
-            await api.sftpLocalMkdir(cur.target, entries[i].name);
-          } catch (_) {}
+            unwrap(await api.sftpLocalMkdir(cur.target, entries[i].name));
+          } catch (e) {
+            row.status = 'error';
+            row.error = e.message || String(e);
+            row.errorCode = e.code || '';
+            this.scheduleRecalc(s, root);
+            continue;
+          }
           queue.push({ row, source: row.sourcePath, target: row.targetPath });
           continue;
         }
@@ -237,6 +259,7 @@ export default {
         } catch (e) {
           row.status = 'error';
           row.error = e.message || String(e);
+          row.errorCode = e.code || '';
         }
         this.scheduleRecalc(s, root);
       }
@@ -249,9 +272,7 @@ export default {
       const rp = joinRemote(remoteDir, it.name);
       const lp = joinLocal(localDir, it.name);
       if (it.isDir) {
-        try {
-          await api.sftpLocalMkdir(localDir, it.name);
-        } catch (_) {}
+        unwrap(await api.sftpLocalMkdir(localDir, it.name));
         await this.downloadRemoteDir(s, rp, lp);
       } else {
         await this.startDownload(s, rp, lp);
@@ -265,7 +286,6 @@ export default {
         const lst = unwrap(await api.sftpLocalExists(localPath));
         if (lst && lst.exists && lst.isDir) {
           const remoteDir = parentRemote(remotePath) || s.remotePath;
-          this.pushDlog(`startUpload dir→folder ${localPath} => ${remoteDir}`);
           await this.transferFolderUpload(s, localPath, remoteDir);
           return;
         }
@@ -288,7 +308,23 @@ export default {
         }
       } catch (_) {}
     }
-    unwrap(await api.sftpUpload({ connId: s.connId, localPath, remotePath }));
+    const r = unwrap(await api.sftpUpload({ connId: s.connId, localPath, remotePath }));
+    // 上传也要立刻建一行，否则排队中的任务在队列里根本看不见，去重也扫不到它
+    if (r && r.taskId) {
+      this.mergeTask(s, {
+        taskId: r.taskId,
+        name,
+        size: 0,
+        transferred: 0,
+        percent: 0,
+        sizeText: '—',
+        speedText: '—',
+        direction: 'upload',
+        sourcePath: localPath,
+        targetPath: remotePath,
+        status: r.status || 'queued',
+      });
+    }
   },
   async startDownload(s, remotePath, localPath) {
     const dup = s.tasks.find(
@@ -297,35 +333,21 @@ export default {
         x.targetPath === localPath &&
         (x.status === 'running' || x.status === 'paused' || x.status === 'queued')
     );
-    if (dup) {
-      this.pushDlog('startDownload dup skip');
-      return;
-    }
+    if (dup) return;
     const name = localPath.split(/[\\/]/).pop() || remotePath;
-    this.pushDlog(`startDownload ${remotePath} -> ${localPath}`);
     if (api.sftpLocalExists) {
       try {
         const st = unwrap(await api.sftpLocalExists(localPath));
-        this.pushDlog(`startDownload localExists=${st && st.exists}`);
         if (st && st.exists && !st.isDir) {
           const ok = await this.confirmOverwrite('download', name);
-          this.pushDlog(`startDownload overwrite ok=${ok}`);
           if (!ok) return;
         }
-      } catch (err) {
-        this.pushDlog('startDownload exists check ' + (err && err.message));
-      }
-    }
-    if (!api.sftpDownload) {
-      this.pushDlog('startDownload no api.sftpDownload');
-      throw new Error('sftpDownload missing');
+      } catch (_) {}
     }
     const r = unwrap(await api.sftpDownload({ connId: s.connId, remotePath, localPath }));
-    this.pushDlog('startDownload taskId=' + (r && r.taskId));
     if (r && r.taskId) {
       this.mergeTask(s, {
         taskId: r.taskId,
-        connId: s.connId,
         name,
         size: 0,
         transferred: 0,
@@ -335,45 +357,32 @@ export default {
         direction: 'download',
         sourcePath: remotePath,
         targetPath: localPath,
-        status: 'running',
+        status: r.status || 'queued',
       });
     }
-    this.syncTasks(s);
   },
   async uploadPaths(s, localPaths, remoteDir) {
     if (!s || !s.connId) return;
     const dir = remoteDir || s.remotePath;
-    let ok = 0;
     for (const p of localPaths) {
       const name = p.split(/[\\/]/).pop();
       try {
         await this.startUpload(s, p, joinRemote(dir, name));
-        ok += 1;
       } catch (e) {
-        this.$message.error(`${name}: ${e.message || e}`);
+        this.$message.error(`${name}: ${connectionErrorMessage(e)}`);
       }
-    }
-    if (ok) {
-      setTimeout(() => this.goRemote(s, dir), 400);
-      this.syncTasks(s);
     }
   },
   async downloadPaths(s, remotePaths, localDir) {
     if (!s || !s.connId) return;
     const dir = localDir || this.localPath;
-    let ok = 0;
     for (const p of remotePaths) {
       const name = p.split('/').filter(Boolean).pop();
       try {
         await this.startDownload(s, p, joinLocal(dir, name));
-        ok += 1;
       } catch (e) {
-        this.$message.error(`${name}: ${e.message || e}`);
+        this.$message.error(`${name}: ${connectionErrorMessage(e)}`);
       }
-    }
-    if (ok) {
-      setTimeout(() => this.goLocal(dir), 400);
-      this.syncTasks(s);
     }
   },
 };

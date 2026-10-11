@@ -721,20 +721,30 @@ function readWinClipboardFiles() {
   });
 }
 
+function untrustedSenderError() {
+  return Object.assign(new Error('Untrusted SSH IPC sender'), { code: 'SSH_OWNER' });
+}
+
+/** IPC 入口的信任门：只允许本应用自己的页面、由主框架发起，且必须挂在某个窗口上。 */
+function assertTrustedSender(event) {
+  const sender = event.sender;
+  if (!sender || sender.isDestroyed()) throw untrustedSenderError();
+  const url = new URL(sender.getURL());
+  const trusted = isDev
+    ? url.origin === new URL(process.env.VITE_DEV_SERVER_URL).origin
+    : url.protocol === 'file:' && path.resolve(fileURLToPath(url)) === path.resolve(__dirname, '..', 'dist', 'index.html');
+  if (!trusted || !BrowserWindow.fromWebContents(sender) || event.senderFrame !== sender.mainFrame) {
+    throw untrustedSenderError();
+  }
+}
+
 function handle(channel, fn, withSender = false) {
   ipcMain.handle(channel, async (event, ...args) => {
     try {
       if (withSender) {
-        const sender = event.sender;
-        const url = new URL(sender.getURL());
-        const trusted = isDev
-          ? url.origin === new URL(process.env.VITE_DEV_SERVER_URL).origin
-          : url.protocol === 'file:' && path.resolve(fileURLToPath(url)) === path.resolve(__dirname, '..', 'dist', 'index.html');
-        if (!trusted || !BrowserWindow.fromWebContents(sender) || event.senderFrame !== sender.mainFrame) {
-          throw Object.assign(new Error('Untrusted SSH IPC sender'), { code: 'SSH_OWNER' });
-        }
-        trackSshOwner(sender);
-        return await fn(sender, ...args);
+        assertTrustedSender(event);
+        trackSshOwner(event.sender);
+        return await fn(event.sender, ...args);
       }
       return await fn(...args);
     } catch (err) {
@@ -1753,7 +1763,7 @@ function registerIpc() {
     const assetId = req && req.assetId;
     if (!assetId) throw new Error('assetId required');
     const hit = store.findAsset(assetId);
-    if (!hit) throw new Error('asset not found');
+    if (!hit) throw Object.assign(new Error('asset not found'), { code: 'SFTP_NO_ASSET' });
     const meta = sftpManager.sessionMeta(hit.asset);
     store.pushRecent(hit.asset, { id: 'sftp', port: meta.port });
     send('store:changed', { reason: 'recent' });
@@ -1859,63 +1869,91 @@ function registerIpc() {
     return { ok: true, closed: true };
   }, true);
 
+  /**
+   * SFTP 的通道全部按「调用来源 + 会话归属」放行：connId/taskId 只能操作发起窗口自己持有的会话，
+   * 本机的删除/改名/复制只接受绝对路径，目录项名不得带分隔符。
+   */
+  const sftpNotOwner = () =>
+    Object.assign(new Error('SFTP session is not owned by this window'), { code: 'SFTP_OWNER' });
+  const sftpBadPath = () => Object.assign(new Error('invalid local path'), { code: 'LOCAL_PATH' });
+  const sftpConnOwner = (sender, connId) => {
+    const rec = sftpManager.conns.get(connId);
+    // 会话不存在要说「已断开」，别报成「不属于本窗口」
+    if (!rec) throw Object.assign(new Error('SFTP session not found'), { code: 'SFTP_NO_CONN' });
+    if (rec.ownerId !== sender.id) throw sftpNotOwner();
+    return connId;
+  };
+  const sftpTaskOwner = (sender, ids) => {
+    const list = (Array.isArray(ids) ? ids : [ids]).filter((x) => typeof x === 'string' && x.length > 0);
+    list.forEach((id) => {
+      const task = sftpManager.tasks.get(id);
+      if (task) sftpConnOwner(sender, task.connId);
+    });
+    return list;
+  };
+  const sftpRemotePath = (p) => {
+    if (p != null && typeof p !== 'string') throw sftpBadPath();
+    return typeof p === 'string' ? p : '';
+  };
+  const sftpLocalPath = (p) => {
+    if (typeof p !== 'string' || !p || !path.isAbsolute(p)) throw sftpBadPath();
+    // Windows 下 '/x' 只是当前盘的根相对路径，不能当作绝对目录用
+    if (process.platform === 'win32' && !/^[A-Za-z]:[\\/]/.test(p) && p.indexOf('\\\\') !== 0) throw sftpBadPath();
+    return p;
+  };
+  const sftpLocalPathOrHome = (p) => (p == null || p === '' ? p : sftpLocalPath(p));
+  const sftpLocalName = (name) => {
+    const s = String(name == null ? '' : name).trim();
+    if (!s || s === '.' || s === '..') throw sftpBadPath();
+    // 只有 Windows 需要挡分隔符；POSIX 文件名里反斜杠是合法字符
+    if (process.platform === 'win32' && /[\\/]/.test(s)) throw sftpBadPath();
+    return s;
+  };
+
   handle('sftp:open', (sender, req) => sftpManager.openSession({ assetId: req && req.assetId, ...sshRequestContext(sender) }), true);
-  handle('sftp:list', (connId, remotePath) => sftpManager.list(connId, remotePath));
-  handle('sftp:stat', (connId, remotePath) => sftpManager.stat(connId, remotePath));
-  handle('sftp:local-exists', (p) => sftpManager.localExists(p));
-  handle('sftp:local-list', (p) => sftpManager.localList(p));
+  handle('sftp:list', (sender, connId, remotePath) => sftpManager.list(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
+  handle('sftp:stat', (sender, connId, remotePath) => sftpManager.stat(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
+  handle('sftp:local-exists', (sender, p) => sftpManager.localExists(sftpLocalPath(p)), true);
+  handle('sftp:local-list', (sender, p) => sftpManager.localList(sftpLocalPathOrHome(p)), true);
   handle('sftp:drives', () => sftpManager.drives());
-  handle('sftp:mkdir', (connId, remotePath) => sftpManager.mkdir(connId, remotePath));
-  handle('sftp:mkdirp', (connId, remotePath) => sftpManager.mkdirp(connId, remotePath));
-  handle('sftp:rename', (connId, oldPath, newPath) => sftpManager.rename(connId, oldPath, newPath));
-  handle('sftp:unlink', (connId, remotePath, isDir) =>
-    sftpManager.unlink(connId, remotePath, !!isDir)
-  );
-  handle('sftp:local-mkdir', (dirPath, name) => sftpManager.localMkdir(dirPath, name));
-  handle('sftp:local-rename', (oldPath, newPath) => sftpManager.localRename(oldPath, newPath));
-  handle('sftp:local-unlink', (p, isDir) => sftpManager.localUnlink(p, !!isDir));
-  handle('sftp:local-copy', (src, destDir) => {
-    if (!src || !destDir) throw new Error('copy path required');
-    const name = path.basename(src);
-    const dest = path.join(destDir, name);
-    const st = fs.statSync(src);
+  handle('sftp:mkdir', (sender, connId, remotePath) => sftpManager.mkdir(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
+  handle('sftp:mkdirp', (sender, connId, remotePath) => sftpManager.mkdirp(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
+  handle('sftp:rename', (sender, connId, oldPath, newPath) => sftpManager.rename(sftpConnOwner(sender, connId), sftpRemotePath(oldPath), sftpRemotePath(newPath)), true);
+  handle('sftp:unlink', (sender, connId, remotePath, isDir) =>
+    sftpManager.unlink(sftpConnOwner(sender, connId), sftpRemotePath(remotePath), !!isDir), true);
+  handle('sftp:local-mkdir', (sender, dirPath, name) => sftpManager.localMkdir(sftpLocalPath(dirPath), sftpLocalName(name)), true);
+  handle('sftp:local-rename', (sender, oldPath, newPath) => sftpManager.localRename(sftpLocalPath(oldPath), sftpLocalPath(newPath)), true);
+  handle('sftp:local-unlink', (sender, p, isDir) => sftpManager.localUnlink(sftpLocalPath(p), !!isDir), true);
+  handle('sftp:local-copy', (sender, src, destDir) => {
+    const from = sftpLocalPath(src);
+    const to = sftpLocalPath(destDir);
+    const dest = path.join(to, path.basename(from));
+    const st = fs.statSync(from);
     if (st.isDirectory()) {
-      fs.cpSync(src, dest, { recursive: true, force: true });
+      fs.cpSync(from, dest, { recursive: true, force: true });
     } else {
-      fs.copyFileSync(src, dest);
+      fs.copyFileSync(from, dest);
     }
     return { ok: true, path: dest };
-  });
-  handle('sftp:upload', async (req) => {
-    const r = await sftpManager.upload(req);
-    console.log('[sftp] upload start', req && req.localPath, '->', req && req.remotePath, r);
-    return r;
-  });
-  handle('sftp:download', async (req) => {
-    const r = await sftpManager.download(req);
-    console.log('[sftp] download start', req && req.remotePath, '->', req && req.localPath, r);
-    return r;
-  });
-  handle('sftp:pause', (taskId, pause) => sftpManager.pauseTask(taskId, !!pause));
-  handle('sftp:cancel', async (taskId) => sftpManager.cancelTask(taskId));
-  const sftpTaskIds = (ids) =>
-    (Array.isArray(ids) ? ids : []).filter((x) => typeof x === 'string' && x.length > 0);
-  handle('sftp:pause-batch', (ids, pause) => sftpManager.pauseTasks(sftpTaskIds(ids), !!pause));
-  handle('sftp:cancel-batch', async (ids) => sftpManager.cancelTasks(sftpTaskIds(ids)));
-  handle('sftp:tasks', (connId) => sftpManager.listTasks(connId));
+  }, true);
+  handle('sftp:upload', (sender, req) => {
+    const connId = sftpConnOwner(sender, req && req.connId);
+    return sftpManager.upload({ connId, localPath: sftpLocalPath(req.localPath), remotePath: sftpRemotePath(req.remotePath) });
+  }, true);
+  handle('sftp:download', (sender, req) => {
+    const connId = sftpConnOwner(sender, req && req.connId);
+    return sftpManager.download({ connId, remotePath: sftpRemotePath(req.remotePath), localPath: sftpLocalPath(req.localPath) });
+  }, true);
+  handle('sftp:pause', (sender, taskId, pause) => sftpManager.pauseTask(sftpTaskOwner(sender, taskId)[0], !!pause), true);
+  handle('sftp:cancel', (sender, taskId) => sftpManager.markCanceled(sftpTaskOwner(sender, taskId)[0]), true);
+  handle('sftp:pause-batch', (sender, ids, pause) => sftpManager.pauseTasks(sftpTaskOwner(sender, ids), !!pause), true);
+  handle('sftp:cancel-batch', (sender, ids) => sftpManager.cancelTasks(sftpTaskOwner(sender, ids)), true);
+  handle('sftp:tasks', (sender, connId) => sftpManager.listTasks(sftpConnOwner(sender, connId)), true);
   handle('sftp:close', (sender, connId) => {
     const rec = sftpManager.conns.get(connId);
-    if (rec && rec.ownerId !== sender.id) throw Object.assign(new Error('SFTP session is not owned by this window'), { code: 'SSH_OWNER' });
+    if (rec && rec.ownerId !== sender.id) throw sftpNotOwner();
     return sftpManager.closeSession(connId);
   }, true);
-  handle('sftp:pick-local-files', async () => {
-    const en = store.getSettings().lang === 'en';
-    const r = await dialog.showOpenDialog(win || BrowserWindow.getFocusedWindow(), {
-      properties: ['openFile', 'multiSelections'],
-      title: en ? 'Select files to upload' : '选择要上传的文件',
-    });
-    return r.canceled ? [] : r.filePaths;
-  });
   handle('sftp:clipboard-files', async (fullList) => {
     const out = [];
     const pushFile = (p) => {
@@ -1969,45 +2007,16 @@ function registerIpc() {
     }
     return out;
   });
-  handle('sftp:pick-local-dir', async () => {
+  handle('sftp:pick-local-dir', (sender) => {
     const en = store.getSettings().lang === 'en';
-    const r = await dialog.showOpenDialog(win || BrowserWindow.getFocusedWindow(), {
-      properties: ['openDirectory', 'createDirectory'],
-      title: en ? 'Select save folder' : '选择保存目录',
-    });
-    return r.canceled ? null : r.filePaths[0];
-  });
-  handle('sftp:local-home', () => os.homedir());
-
-  // Native OS drag-out: download remote → temp, then startDrag (Explorer / local folders)
-  ipcMain.on('sftp:start-drag', async (event, req) => {
-    try {
-      if (!req || !req.connId || !req.remotePath) return;
-      send('sftp:state', { type: 'drag-preparing', message: req.name || req.remotePath });
-      const prepared = await sftpManager.prepareDragOut({
-        connId: req.connId,
-        remotePath: req.remotePath,
-        isDir: !!req.isDir,
-        name: req.name,
-      });
-      const iconPath = path.join(__dirname, 'assets', 'icon.png');
-      let icon;
-      try {
-        icon = require('electron').nativeImage.createFromPath(iconPath);
-      } catch (_) {
-        icon = null;
-      }
-      if (event.sender.isDestroyed()) return;
-      event.sender.startDrag({
-        file: prepared.localPath,
-        icon: icon && !icon.isEmpty() ? icon : undefined,
-      });
-      send('sftp:drag-ready', prepared);
-    } catch (e) {
-      console.error('[sftp] start-drag failed', e);
-      send('sftp:state', { type: 'drag-error', message: e.message || String(e) });
-    }
-  });
+    const parent = BrowserWindow.fromWebContents(sender) || win;
+    return dialog
+      .showOpenDialog(parent, {
+        properties: ['openDirectory', 'createDirectory'],
+        title: en ? 'Select save folder' : '选择保存目录',
+      })
+      .then((r) => (r.canceled ? null : r.filePaths[0]));
+  }, true);
 }
 
 app.whenReady().then(() => {
