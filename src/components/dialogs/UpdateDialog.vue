@@ -15,26 +15,11 @@
       <div class="update-notes-title">{{ $t('update.notes') }}</div>
       <div class="update-notes">{{ info.notes }}</div>
     </template>
-    <div slot="footer" class="update-footer">
+    <div class="update-footer">
       <el-checkbox v-model="ignoreChecked">{{ $t('update.ignoreVersion') }}</el-checkbox>
       <div class="update-footer-actions">
         <el-button size="mini" @click="visible = false">{{ $t('msg.cancel') }}</el-button>
-        <el-popover v-model="releasePopover" placement="top" width="160" trigger="click">
-          <div class="release-picks">
-            <button
-              v-if="githubReleasesUrl"
-              type="button"
-              class="release-pick"
-              @click="goRelease(githubReleasesUrl)"
-            >
-              <img class="brand brand-github" :src="'icons/github.svg'" alt="" />GitHub
-            </button>
-            <button type="button" class="release-pick" @click="goRelease(giteeReleasesUrl)">
-              <img class="brand" :src="'icons/gitee.svg'" alt="" />Gitee
-            </button>
-          </div>
-          <el-button slot="reference" size="mini" type="primary">{{ $t('settings.aboutReleases') }}</el-button>
-        </el-popover>
+        <el-button size="mini" type="primary" @click="goRelease">{{ $t('settings.aboutReleases') }}</el-button>
       </div>
     </div>
   </el-dialog>
@@ -48,11 +33,7 @@ export default {
   data() {
     return {
       ignoreChecked: false,
-      releasePopover: false,
-      giteeReleasesUrl: import.meta.env.VITE_HOMEPAGE + '/releases',
-      githubReleasesUrl: import.meta.env.VITE_GITHUB_HOMEPAGE
-        ? import.meta.env.VITE_GITHUB_HOMEPAGE + '/releases'
-        : '',
+      releasesUrl: import.meta.env.VITE_HOMEPAGE + '/releases',
     };
   },
   computed: {
@@ -69,9 +50,8 @@ export default {
     },
   },
   methods: {
-    goRelease(url) {
-      this.releasePopover = false;
-      if (url && api.openExternal) api.openExternal(url);
+    goRelease() {
+      if (this.releasesUrl && api.openExternal) api.openExternal(this.releasesUrl);
     },
     /** 勾选「忽略此版本」后经任意方式关闭才落盘；同版本下次不再提示。 */
     onClose() {
@@ -141,40 +121,5 @@ export default {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-.release-picks {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.release-pick {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-.release-pick:hover {
-  background: var(--bg-elevated);
-}
-.brand {
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  object-fit: contain;
-}
-/* GitHub 原色为黑，深色主题反相为白以保证可见；Gitee 保持原红不动 */
-.brand-github {
-  filter: invert(1);
-}
-html.theme-light .brand-github {
-  filter: none;
 }
 </style>

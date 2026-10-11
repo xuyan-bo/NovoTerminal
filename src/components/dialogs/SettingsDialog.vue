@@ -396,12 +396,8 @@
               <dd>Apache-2.0 License</dd>
               <dt>{{ $t('settings.aboutSource') }}</dt>
               <dd>
-                <a class="about-link" @click="openUrl(githubUrl)">
-                  <img class="brand brand-github" :src="'icons/github.svg'" alt="" />GitHub
-                </a>
-                <span class="about-sep">·</span>
                 <a class="about-link" @click="openUrl(repoUrl)">
-                  <img class="brand" :src="'icons/gitee.svg'" alt="" />Gitee
+                  <img class="brand brand-github" :src="'icons/github.svg'" alt="" />GitHub
                 </a>
               </dd>
             </dl>
@@ -429,24 +425,14 @@
             <el-button size="small" icon="el-icon-refresh" :loading="checkingUpdate" @click="checkUpdate">
               {{ $t('settings.aboutCheckUpdate') }}
             </el-button>
-            <el-popover v-model="releasePopover" placement="top" width="160" trigger="click">
-              <div class="release-picks">
-                <button
-                  v-if="githubReleasesUrl"
-                  type="button"
-                  class="release-pick"
-                  @click="goRelease(githubReleasesUrl)"
-                >
-                  <img class="brand brand-github" :src="'icons/github.svg'" alt="" />GitHub
-                </button>
-                <button type="button" class="release-pick" @click="goRelease(releasesUrl)">
-                  <img class="brand" :src="'icons/gitee.svg'" alt="" />Gitee
-                </button>
-              </div>
-              <el-button slot="reference" size="small" type="primary" icon="el-icon-upload2">
-                {{ $t('settings.aboutReleases') }}
-              </el-button>
-            </el-popover>
+            <el-button
+              size="small"
+              type="primary"
+              icon="el-icon-upload2"
+              @click="openUrl(releasesUrl)"
+            >
+              {{ $t('settings.aboutReleases') }}
+            </el-button>
           </div>
 
           <div class="about-footer">
@@ -595,12 +581,7 @@ export default {
       browsing: false,
       checkingUpdate: false,
       repoUrl: import.meta.env.VITE_HOMEPAGE,
-      githubUrl: import.meta.env.VITE_GITHUB_HOMEPAGE,
       releasesUrl: import.meta.env.VITE_HOMEPAGE + '/releases',
-      githubReleasesUrl: import.meta.env.VITE_GITHUB_HOMEPAGE
-        ? import.meta.env.VITE_GITHUB_HOMEPAGE + '/releases'
-        : '',
-      releasePopover: false,
       activeMenu: 'general',
       appVersion: import.meta.env.VITE_APP_VERSION || '0.1.0',
       newSvcIds: new Set(),
@@ -725,10 +706,6 @@ export default {
       if (window.novoTerminal && window.novoTerminal.openExternal) {
         window.novoTerminal.openExternal(url);
       }
-    },
-    goRelease(url) {
-      this.releasePopover = false;
-      this.openUrl(url);
     },
     /** 手动检查必须给结果；有新版本时弹窗已由 store 打开，这里只补「没有更新」「还没有发行版」两种反馈。 */
     async checkUpdate() {
@@ -1493,38 +1470,11 @@ export default {
 .about-link:hover {
   text-decoration: underline;
 }
-.about-sep {
-  display: inline-block;
-  margin: 0 6px;
-  color: var(--text-3);
-}
 .about-actions {
   display: flex;
   gap: 10px;
   justify-content: center;
   margin-top: 14px;
-}
-.release-picks {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.release-pick {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-.release-pick:hover {
-  background: var(--bg-elevated);
 }
 .brand {
   flex: 0 0 auto;
@@ -1532,7 +1482,7 @@ export default {
   height: 16px;
   object-fit: contain;
 }
-/* GitHub 原色为黑，深色主题反相为白以保证可见；Gitee 保持原红不动 */
+/* GitHub 原色为黑，深色主题反相为白以保证可见 */
 .brand-github {
   filter: invert(1);
 }

@@ -34,19 +34,13 @@ const { LogStore } = require('./logs/logStore');
 const { verifySystemAuth, resetAuthCache } = require('./auth/systemAuth');
 const pkg = require('../package.json');
 
-// 更新检查同时探测 Gitee 与 GitHub（两平台同步开源发布）；发行版对象没有 html_url，发布页地址由仓库地址拼出
+// 更新检查只探测 GitHub 发行版；发行版对象没有稳定的 html_url 时发布页地址由仓库地址拼出
 const repoUrl = new URL(pkg.homepage);
 const repoPath = repoUrl.pathname.replace(/\/+$/, '');
 const RELEASES_PAGE = repoUrl.origin + repoPath + '/releases';
-const RELEASES_API = repoUrl.origin + '/api/v5/repos' + repoPath + '/releases?per_page=10&direction=desc';
-// GitHub 仓库地址由 githubHomepage 提供，缺失时只走 Gitee 单路；发行列表固定走 api.github.com
-const githubUrl = pkg.githubHomepage ? new URL(pkg.githubHomepage) : null;
-const githubPath = githubUrl && githubUrl.pathname.replace(/\/+$/, '');
-const GITHUB_RELEASES_PAGE = githubUrl ? githubUrl.origin + githubPath + '/releases' : '';
-const GITHUB_RELEASES_API = githubUrl ? 'https://api.github.com/repos' + githubPath + '/releases?per_page=10' : '';
-// 两路各自独立的超时：实测两路热连接都在 400ms 内，留出弱网余量即可，不能让慢的一路拖住整次检查
-const GITEE_TIMEOUT_MS = 4000;
-const GITHUB_TIMEOUT_MS = 6000;
+const RELEASES_API = 'https://api.github.com/repos' + repoPath + '/releases?per_page=10';
+// 弱网余量即可，避免一次检查长时间挂起
+const RELEASES_TIMEOUT_MS = 6000;
 
 /** Advanced defaults mirrored from renderer constants — used when method.advanced is missing */
 const ADVANCED_DEFAULTS = {
@@ -160,24 +154,23 @@ function isNewerVersion(a, b) {
 }
 
 /**
- * 取单个源的最新正式版本：不依赖接口的默认排序，在返回的这页里挑可解析出的最高版本；
- * GitHub 还要排除 draft，其发布页用自身的 html_url，Gitee 没有该字段只能回到 releases 页。
+ * 取最新正式版本：不依赖接口的默认排序，在返回的这页里挑可解析出的最高版本；
+ * 排除 draft 与 prerelease，发布页用自身的 html_url，缺失时回落仓库 releases 页。
  */
-async function fetchLatestRelease(source) {
-  const github = source === 'github';
-  const res = await net.fetch(github ? GITHUB_RELEASES_API : RELEASES_API, {
-    headers: { Accept: 'application/json', ...(github ? { 'User-Agent': pkg.name } : null) },
-    signal: AbortSignal.timeout(github ? GITHUB_TIMEOUT_MS : GITEE_TIMEOUT_MS),
+async function fetchLatestRelease() {
+  const res = await net.fetch(RELEASES_API, {
+    headers: { Accept: 'application/json', 'User-Agent': pkg.name },
+    signal: AbortSignal.timeout(RELEASES_TIMEOUT_MS),
   });
   if (!res.ok) {
-    throw new Error((github ? 'GitHub' : 'Gitee') + ' releases HTTP ' + res.status);
+    throw new Error('GitHub releases HTTP ' + res.status);
   }
   const list = await res.json();
   const items = Array.isArray(list) ? list : [];
   let hit = null;
   let version = null;
   for (const r of items) {
-    if (!r || r.prerelease || (github && r.draft)) continue;
+    if (!r || r.prerelease || r.draft) continue;
     const v = parseVersion(r.tag_name);
     if (v && (!version || isNewerVersion(v, version))) {
       hit = r;
@@ -186,41 +179,22 @@ async function fetchLatestRelease(source) {
   }
   if (!hit) return null;
   return {
-    source,
     tag: String(hit.tag_name).trim(),
     version,
     notes: String(hit.body || ''),
-    url: github ? hit.html_url || GITHUB_RELEASES_PAGE : RELEASES_PAGE,
+    url: hit.html_url || RELEASES_PAGE,
   };
 }
 
-/**
- * 以 Gitee 为准：用户配了 Gitee 自动同步到 GitHub，两边发行版一致，所以主源一旦拿到发行版就立刻出结论，
- * 不为兜底再等 GitHub（它可能慢几秒）。GitHub 那一路仍然并发发出，只在主源失败或还没有任何发行版时接管。
- * 未 await 的那一路自带异常吞掉，避免晚到的 reject 变成未处理拒绝。
- */
-async function probeReleases(sources) {
-  const jobs = sources.map((source) => ({
-    source,
-    promise: fetchLatestRelease(source).then(
-      (hit) => ({ hit }),
-      (e) => ({ error: e && e.message ? e.message : String(e) }),
-    ),
-  }));
-  const failures = [];
-  const timings = [];
+/** 单源探测：把异常收敛成 failure，交由调用方决定是「检查失败」还是「还没有发行版」 */
+async function probeReleases() {
   const startedAt = Date.now();
-  for (const job of jobs) {
-    const r = await job.promise;
-    timings.push(job.source + ':' + (Date.now() - startedAt) + 'ms');
-    if (r.error) {
-      failures.push(job.source + ': ' + r.error);
-      continue;
-    }
-    // 该源还没有任何发行版就继续问下一路，拿到发行版即可出结论
-    if (r.hit) return { best: r.hit, failures, timings };
+  try {
+    const hit = await fetchLatestRelease();
+    return { best: hit, failure: '', timing: (Date.now() - startedAt) + 'ms' };
+  } catch (e) {
+    return { best: null, failure: (e && e.message ? e.message : String(e)), timing: (Date.now() - startedAt) + 'ms' };
   }
-  return { best: null, failures, timings };
 }
 
 /**
@@ -831,16 +805,14 @@ function registerIpc() {
   handle('update:check', async () => {
     const current = app.getVersion();
     const cur = parseVersion(current);
-    const sources = githubUrl ? ['gitee', 'github'] : ['gitee'];
-    const probed = await probeReleases(sources);
-    if (probed.failures.length === sources.length) {
+    const probed = await probeReleases();
+    if (probed.failure) {
       logger.warn('update', 'update check failed', {
         current,
-        sources: sources.join(','),
-        timings: probed.timings.join(' '),
-        failures: probed.failures.join(' | '),
+        timing: probed.timing,
+        failure: probed.failure,
       });
-      throw Object.assign(new Error(probed.failures.join('; ') || 'no releases found'), { code: 'UPDATE_UNAVAILABLE' });
+      throw Object.assign(new Error(probed.failure || 'no releases found'), { code: 'UPDATE_UNAVAILABLE' });
     }
     const best = probed.best;
     // 被忽略的版本按数值比较，避免标签大小写/前缀差异（V1.0.0 与 1.0.0 视为同一版本）
@@ -852,12 +824,10 @@ function registerIpc() {
     logger.info('update', 'update checked', {
       current,
       latest: best ? best.tag : '',
-      source: best ? best.source : '',
       skipped,
       ignored,
-      probed: sources.join(','),
-      timings: probed.timings.join(' '),
-      failures: probed.failures.join(' | '),
+      timing: probed.timing,
+      failure: probed.failure,
       hasUpdate,
     });
     return {
