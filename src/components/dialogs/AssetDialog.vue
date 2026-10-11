@@ -12,8 +12,8 @@
         v-for="tp in types"
         :key="tp.id"
         class="type-card"
-        :class="[tp.id, { on: form.os === tp.id }]"
-        @click="setType(tp.id)"
+        :class="[tp.id, { on: form.os === tp.id, disabled: isView }]"
+        @click="!isView && setType(tp.id)"
       >
         <div class="os-slot" :class="tp.id" v-html="osSvg(tp.id)"></div>
         <div class="nm">{{ $t('os.' + tp.id) }}</div>
@@ -29,6 +29,7 @@
       ref="form"
       :model="form"
       :rules="rules"
+      :disabled="isView"
       label-width="100px"
       size="small"
       style="margin-bottom:8px"
@@ -81,12 +82,11 @@
         <MethodConfig
           :catalog="catalog"
           :draft="draft"
-          :primary-id="primaryId"
           :testing="testing"
           :testing-id="testingId"
+          :disabled="isView"
           @toggle="onToggle"
           @port-change="onPortChange"
-          @primary-change="syncPrimary"
           @advanced="openAdvanced"
           @test="testMethod"
         />
@@ -94,9 +94,11 @@
     </el-form>
 
     <template #footer>
-      <span style="float:left;color:var(--text-3);font-size:11px;line-height:28px">{{ summary }}</span>
-      <el-button size="mini" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
-      <el-button size="mini" type="primary" :loading="saving" @click="save">
+      <span style="float:left;color:var(--text-3);font-size:11px;line-height:28px" v-if="!isView">{{ summary }}</span>
+      <el-button size="mini" @click="visible = false">
+        {{ isView ? $t('settings.close') : $t('settings.cancel') }}
+      </el-button>
+      <el-button size="mini" type="primary" :loading="saving" @click="save" v-if="!isView">
         {{ $t('asset.save') }}
       </el-button>
     </template>
@@ -111,7 +113,6 @@ import {
   createAsset,
   updateAsset,
   findAsset,
-  openAssetDetail,
   openMethodAdvanced,
 } from '../../store';
 import { OS_SVG, OS_NAME, CATALOG } from '../../constants';
@@ -185,13 +186,12 @@ export default {
         children: 'children',
       },
       draft: {
-        rdp: { enabled: true, port: 3389, primary: true },
-        vnc: { enabled: false, port: 5900, primary: false },
-        ssh: { enabled: false, port: 22, primary: false },
+        rdp: { enabled: true, port: 3389 },
+        vnc: { enabled: false, port: 5900 },
+        ssh: { enabled: false, port: 22 },
       },
       passVisible: false,
       authChecking: false,
-      primaryId: 'rdp',
       rules: {
         name: [
           {
@@ -276,7 +276,11 @@ export default {
         return store.assetDialog.visible;
       },
       set(v) {
-        store.assetDialog = { ...store.assetDialog, visible: v };
+        store.assetDialog = {
+          ...store.assetDialog,
+          visible: v,
+          ...(v ? {} : { viewId: null }),
+        };
         if (!v && this.$refs.form) {
           this.$nextTick(() => this.$refs.form.clearValidate());
         }
@@ -288,7 +292,11 @@ export default {
     isClone() {
       return !store.assetDialog.editId && !!store.assetDialog.cloneId;
     },
+    isView() {
+      return !!store.assetDialog.viewId;
+    },
     dialogTitle() {
+      if (this.isView) return this.$t('asset.dialogView');
       if (this.isEdit) return this.$t('asset.dialogEdit');
       return this.isClone ? this.$t('asset.dialogClone') : this.$t('asset.dialogNew');
     },
@@ -346,7 +354,7 @@ export default {
         methodId: m.id,
         methodName: t(m.nameKey),
         advanced: row.advanced || {},
-        context: { type: 'asset-dialog' },
+        context: { type: 'asset-dialog', isView: this.isView },
       });
     },
     osSvg(os) {
@@ -355,11 +363,8 @@ export default {
     defaultDraft(os) {
       const d = {};
       (CATALOG[os] || []).forEach((m) => {
-        d[m.id] = { enabled: m.rec, port: m.defaultPort, primary: false };
+        d[m.id] = { enabled: m.rec, port: m.defaultPort };
       });
-      const rec = (CATALOG[os] || []).find((m) => m.rec);
-      if (rec) d[rec.id].primary = true;
-      this.primaryId = rec ? rec.id : Object.keys(d)[0];
       return d;
     },
     setType(tp) {
@@ -378,34 +383,9 @@ export default {
       const conf = this.draftRow(m.id);
       if (!conf) return;
       this.$set(conf, 'enabled', enabled);
-      if (conf.enabled) {
-        if (!conf.port) conf.port = m.defaultPort;
-        const enabled = Object.keys(this.draft).filter(
-          (k) => this.draft[k] && this.draft[k].enabled
-        );
-        if (!enabled.some((k) => this.draft[k].primary)) {
-          conf.primary = true;
-          this.primaryId = m.id;
-        }
-      } else {
-        conf.primary = false;
-        const enabled = Object.keys(this.draft).filter(
-          (k) => this.draft[k] && this.draft[k].enabled
-        );
-        if (enabled.length && !enabled.some((k) => this.draft[k].primary)) {
-          this.draft[enabled[0]].primary = true;
-          this.primaryId = enabled[0];
-        }
-      }
+      if (conf.enabled && !conf.port) conf.port = m.defaultPort;
       this.draft = { ...this.draft };
       this.validateMethods();
-    },
-    syncPrimary(id) {
-      Object.keys(this.draft).forEach((k) => {
-        if (this.draft[k]) this.draft[k].primary = k === id;
-      });
-      this.primaryId = id;
-      this.draft = { ...this.draft };
     },
     validateMethods() {
       if (!this.$refs.form) return;
@@ -459,8 +439,9 @@ export default {
       this.passVisible = false;
       const editId = store.assetDialog.editId;
       const cloneId = store.assetDialog.cloneId;
+      const viewId = store.assetDialog.viewId;
       const fallbackGid = store.assetDialog.gid || '';
-      const hit = editId || cloneId ? findAsset(editId || cloneId) : null;
+      const hit = (editId || cloneId || viewId) ? findAsset(editId || cloneId || viewId) : null;
       if (hit) {
         const a = hit.asset;
         this.form = {
@@ -474,10 +455,6 @@ export default {
           note: a.note || '',
         };
         this.draft = JSON.parse(JSON.stringify(a.methods || {}));
-        const pri = Object.keys(this.draft).find(
-          (k) => this.draft[k] && this.draft[k].primary && this.draft[k].enabled
-        );
-        this.primaryId = pri || Object.keys(this.draft)[0] || '';
       } else {
         // 源资产已不在快照里时按新增表单打开，不留下一次编辑的残留内容
         this.form = {
@@ -567,6 +544,7 @@ export default {
       }
     },
     save() {
+      if (this.isView) return;
       this.$refs.form.validate(async (valid) => {
         if (!valid) return;
         this.saving = true;
@@ -574,17 +552,12 @@ export default {
           const enabled = Object.keys(this.draft).filter(
             (k) => this.draft[k] && this.draft[k].enabled
           );
-          if (!enabled.includes(this.primaryId)) {
-            this.primaryId = enabled[0];
-          }
-          this.syncPrimary(this.primaryId);
           const methods = {};
           enabled.forEach((k) => {
             const draftAdv = this.draft[k] && this.draft[k].advanced;
             methods[k] = {
               enabled: true,
               port: this.draft[k].port,
-              primary: k === this.primaryId,
               advanced: draftAdv && Object.keys(draftAdv).length
                 ? { ...draftAdv }
                 : undefined,
@@ -604,8 +577,7 @@ export default {
             await updateAsset(store.assetDialog.editId, payload);
             this.$message.success(t('msg.assetUpdated'));
           } else {
-            const created = await createAsset(payload.gid, payload);
-            if (created) openAssetDetail(created);
+            await createAsset(payload.gid, payload);
             this.$message.success(t('msg.assetCreated'));
           }
           this.visible = false;

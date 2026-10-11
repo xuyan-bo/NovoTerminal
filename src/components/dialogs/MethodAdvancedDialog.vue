@@ -15,7 +15,7 @@
       :rules="formRules"
       label-width="186px"
       size="small"
-      :disabled="saving"
+      :disabled="saving || isView"
       @submit.native.prevent
     >
       <el-form-item
@@ -125,9 +125,14 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button size="mini" :disabled="saving" @click="reset">{{ $t('adv.reset') }}</el-button>
-      <el-button size="mini" :disabled="saving" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
-      <el-button size="mini" type="primary" :loading="saving" :disabled="saving" @click="confirm">{{ $t('settings.save') }}</el-button>
+      <template v-if="isView">
+        <el-button size="mini" @click="visible = false">{{ $t('settings.close') }}</el-button>
+      </template>
+      <template v-else>
+        <el-button size="mini" :disabled="saving" @click="reset">{{ $t('adv.reset') }}</el-button>
+        <el-button size="mini" :disabled="saving" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
+        <el-button size="mini" type="primary" :loading="saving" :disabled="saving" @click="confirm">{{ $t('settings.save') }}</el-button>
+      </template>
     </template>
   </el-dialog>
 </template>
@@ -209,6 +214,9 @@ export default {
     },
     title() {
       return t('adv.title', { name: this.methodName });
+    },
+    isView() {
+      return !!(this.dlg && this.dlg.context && this.dlg.context.isView);
     },
   },
   watch: {
@@ -319,7 +327,7 @@ export default {
       return true;
     },
     async confirm() {
-      if (this.saving) return;
+      if (this.isView || this.saving) return;
       const formOk = await this.validateForm();
       if (!formOk || !this.validate()) return;
       const dlg = this.dlg;

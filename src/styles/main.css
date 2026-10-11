@@ -1114,158 +1114,7 @@ button {
   text-align: center;
 }
 
-/* asset detail view */
-.asset-detail-view {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px 24px;
-}
-
-.asset-detail {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 18px 20px;
-  max-width: 920px;
-}
-
-.ad-head {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  margin-bottom: 16px;
-}
-
-.ad-os {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  display: grid;
-  place-items: center;
-}
-
-.ad-os svg {
-  width: 22px;
-  height: 22px;
-}
-
-.ad-os.win {
-  color: var(--win);
-}
-.ad-os.mac {
-  color: var(--mac);
-}
-.ad-os.linux {
-  color: var(--linux);
-}
-
-.ad-title h3 {
-  font-size: 15px;
-  font-weight: 650;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.ad-title .sub {
-  font-size: 12px;
-  color: var(--text-2);
-  margin-top: 4px;
-  font-family: Consolas, monospace;
-}
-
-.ad-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.ad-block {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px 16px;
-}
-
-.ad-block h4 {
-  font-size: 12px;
-  color: var(--text-2);
-  font-weight: 600;
-  margin-bottom: 10px;
-}
-
-.ad-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px 24px;
-}
-
-.ad-field-wide {
-  grid-column: 1 / -1;
-}
-
-.ad-fields dt {
-  color: var(--text-3);
-  font-size: 11px;
-}
-
-.ad-fields dd {
-  color: var(--text);
-  font-family: Consolas, monospace;
-  font-size: 12.5px;
-  margin-top: 2px;
-  word-break: break-all;
-}
-
-.ad-note {
-  color: var(--text);
-  font-size: 12.5px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.method-connect-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.method-connect {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-}
-
-.method-connect.primary {
-  border-color: rgba(64, 158, 255, 0.45);
-  background: rgba(64, 158, 255, 0.08);
-}
-
-.method-connect .mc-info {
-  flex: 1;
-}
-
-.method-connect .mc-name {
-  font-size: 13px;
-  font-weight: 600;
-  display: flex;
-  gap: 8px;
-}
-
-.method-connect .mc-meta {
-  font-size: 11px;
-  color: var(--text-3);
-  font-family: Consolas, monospace;
-  margin-top: 2px;
-}
+/* asset detail view — removed: AssetDetailView.vue is gone, replaced by read-only AssetDialog */
 
 .gear-icon-btn {
   display: inline-flex;
@@ -1394,6 +1243,10 @@ button {
   padding: 12px;
   text-align: center;
   cursor: pointer;
+}
+.type-card.disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 .type-card .os-slot {
   height: 32px;

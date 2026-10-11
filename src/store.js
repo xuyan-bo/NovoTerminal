@@ -18,7 +18,7 @@ export const store = Vue.observable({
   /** 备份弹窗模式：'' 关闭，'export' 导出，'import' 导入 */
   backupDialog: '',
   logDialog: false,
-  assetDialog: { visible: false, editId: null, gid: null, cloneId: null },
+  assetDialog: { visible: false, editId: null, gid: null, cloneId: null, viewId: null },
   groupDialog: { visible: false, editId: null },
   methodAdvancedDialog: {
     visible: false,
@@ -414,13 +414,12 @@ export function enabledMethods(asset) {
         ...meta,
         proto: protocolLabel(meta.id),
         port: conf.port || meta.defaultPort,
-        primary: !!conf.primary,
         enabled: true,
         advanced: conf.advanced || null,
       });
     }
   }
-  out.sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0) || (b.rec ? 1 : 0) - (a.rec ? 1 : 0));
+  out.sort((a, b) => (b.rec ? 1 : 0) - (a.rec ? 1 : 0));
   return out;
 }
 
@@ -438,15 +437,7 @@ export function openMethodAdvanced({ methodId, methodName, advanced, context }) 
 export function openAssetDetail(asset) {
   store.activeAssetId = asset.id;
   store.activeGroupId = (findAsset(asset.id) || {}).group?.id || null;
-  openTab({
-    id: 'asset-' + asset.id,
-    title: asset.name,
-    closable: true,
-    icon: 'el-icon-postcard',
-    kind: 'asset',
-    os: asset.os,
-    assetId: asset.id,
-  });
+  store.assetDialog = { visible: true, editId: null, gid: null, cloneId: null, viewId: asset.id };
 }
 
 /**

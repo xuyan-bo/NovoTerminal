@@ -20,14 +20,6 @@
             <home-view />
           </div>
           <div
-            v-for="t in assetTabs"
-            :key="t.id"
-            class="view"
-            :class="{ show: activeTab === t.id }"
-          >
-            <asset-detail-view :asset-id="t.assetId" />
-          </div>
-          <div
             v-for="t in sessionTabs"
             :key="t.id + ':' + (tabRefreshKeys[t.id] || 0)"
             class="view"
@@ -66,7 +58,6 @@
 <script>
 import SideBar from './components/panels/SideBar.vue';
 import TabBar from './components/panels/TabBar.vue';
-import AssetDetailView from './components/views/AssetDetailView.vue';
 import SettingsDialog from './components/dialogs/SettingsDialog.vue';
 import BackupDialog from './components/dialogs/BackupDialog.vue';
 import LogDialog from './components/dialogs/LogDialog.vue';
@@ -118,7 +109,6 @@ export default {
     SideBar,
     TabBar,
     HomeView: () => import('./components/views/HomeView.vue'),
-    AssetDetailView,
     SettingsDialog,
     BackupDialog,
     LogDialog,
@@ -153,9 +143,6 @@ export default {
     },
     tabRefreshKeys() {
       return store.tabRefreshKeys;
-    },
-    assetTabs() {
-      return store.tabs.filter((t) => t.kind === 'asset');
     },
     sessionTabs() {
       return store.tabs.filter((t) => {

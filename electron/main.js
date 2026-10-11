@@ -1049,7 +1049,6 @@ function registerIpc() {
       id: req.methodId,
       protocol: protocolKey(req.methodId),
       port: method.port,
-      primary: !!method.primary,
       advanced,
     };
     return sessions.connect({

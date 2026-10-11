@@ -11,13 +11,12 @@
     >
       <el-checkbox
         :value="draftRow(m).enabled"
+        :disabled="disabled"
         @change="$emit('toggle', m, $event)"
       />
       <div>
         <div style="font-weight:600;font-size:13px">
           {{ $t(m.nameKey) }}
-          <el-tag v-if="m.rec" size="mini" type="success">{{ $t('asset.rec') }}</el-tag>
-          <el-tag v-if="draftRow(m).enabled && draftRow(m).primary" size="mini">{{ $t('asset.primary') }}</el-tag>
         </div>
         <div class="hint">{{ $t(m.descKey) }}</div>
       </div>
@@ -34,12 +33,6 @@
           @change="$emit('port-change', m, $event)"
         />
       </div>
-      <el-radio
-        :value="primaryId"
-        :label="m.id"
-        :disabled="!draftRow(m).enabled"
-        @input="$emit('primary-change', $event)"
-      >{{ $t('asset.primary') }}</el-radio>
       <div class="method-icon-actions">
         <el-tooltip :content="$t('adv.gearTip')" placement="top">
           <button
@@ -74,16 +67,15 @@ export default {
   props: {
     catalog: { type: Array, required: true },
     draft: { type: Object, required: true },
-    primaryId: { type: String, default: '' },
     testing: { type: Boolean, default: false },
     testingId: { type: String, default: null },
+    disabled: { type: Boolean, default: false },
   },
   methods: {
     draftRow(method) {
       return this.draft[method.id] || {
         enabled: false,
         port: method.defaultPort,
-        primary: false,
       };
     },
     hasCustomAdv(id) {

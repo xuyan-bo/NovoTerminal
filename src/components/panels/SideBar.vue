@@ -167,10 +167,7 @@ export default {
       return OS_SVG[os] || '';
     },
     hostLabel(n) {
-      const methods = enabledMethods(n);
-      const m = methods.find((x) => x.primary) || methods[0];
-      const addr = m ? n.host + ':' + m.port : n.host;
-      return n.user ? addr + ' · ' + n.user : addr;
+      return n.user ? n.host + ' · ' + n.user : n.host;
     },
     openLog() {
       store.logDialog = true;
