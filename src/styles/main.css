@@ -166,6 +166,89 @@ button {
   background: transparent;
 }
 
+/* ===== el-table（日志弹窗与 SFTP 传输队列共用）=====
+   Element 把表格底色、斑马纹、悬停与边框全写死成浅色值（#FFF/#FAFAFA/#F5F7FA/#EBEEF5），
+   深色主题下整张表是白的。浅色主题下这些 token 与 Element 原值几乎一致，观感不变。
+   选择器必须与 Element 原规则同权重并排在它之后（main.css 在 theme-chalk 之后引入）才压得住。 */
+.el-table,
+.el-table tr,
+.el-table th.el-table__cell,
+.el-table td.el-table__cell {
+  background-color: var(--bg-panel);
+}
+
+.el-table {
+  color: var(--text-2);
+}
+
+.el-table thead {
+  color: var(--text-3);
+}
+
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background-color: var(--bg-elevated);
+}
+
+/* hover-row 是 Element 用 JS 补的类，斑马行的那条权重更高，只能靠 !important 一并压住 */
+.el-table--enable-row-hover .el-table__body tr:hover > td.el-table__cell,
+.el-table__body tr.hover-row > td.el-table__cell {
+  background-color: var(--bg-hover) !important;
+}
+
+.el-table th.el-table__cell,
+.el-table th.el-table__cell.is-leaf,
+.el-table td.el-table__cell,
+.el-table--border th.el-table__cell.gutter:last-of-type {
+  border-color: var(--border);
+}
+
+.el-table--border,
+.el-table--group {
+  border-color: var(--border);
+}
+
+/* 右、下两条外框是伪元素画的，不吃 border-color */
+.el-table--border::after,
+.el-table--group::after,
+.el-table::before {
+  background-color: var(--border);
+}
+
+.el-table__expand-icon {
+  color: var(--text-3);
+}
+
+/* ===== el-pagination（运行日志弹窗的分页条）=====
+   页码 li 与左右翻页按钮的底色写死 #FFF、数字写死 #303133：深色下是一条白带，
+   而只把白带去掉又会让数字看不见，所以底色与文字必须同一条规则里一起收。
+   激活/悬停的 #409EFF 与 --accent 同值，不动。 */
+.el-pagination,
+.el-pagination .btn-next,
+.el-pagination .btn-prev,
+.el-pager li.btn-quicknext,
+.el-pager li.btn-quickprev {
+  color: var(--text);
+}
+
+.el-pagination .btn-next,
+.el-pagination .btn-prev,
+.el-pager li {
+  background-color: transparent;
+}
+
+.el-pagination__total,
+.el-pagination__sizes,
+.el-pagination__jump {
+  color: var(--text-2);
+}
+
+/* disabled 的 #C0C4CC 在暗底上反而比正文更亮，换成 --text-3 才读得出「不可点」 */
+.el-pagination button:disabled,
+.el-pagination .el-pager li.disabled {
+  color: var(--text-3);
+  background-color: transparent;
+}
+
 /* Element 的加载遮罩是不透明底色淡入淡出，会把表格框线整个盖掉（实测淡入峰值 0.74，框线对比减半），
    翻页时就成了「框线消失一瞬」。遮罩只承载 spinner，底色透明。 */
 .log-table .el-loading-mask {
@@ -173,8 +256,8 @@ button {
 }
 /* Element 还会在挂上 loading 父类时把外框 border-color 清成 transparent（它假定遮罩不透明），
    上、左两条外框就此消失，右、下由伪元素画所以还在。底色既然透明，外框也要留着。 */
-.log-table.el-table--border.el-loading-parent--relative {
-  border-color: #ebeef5;
+.el-table--border.el-loading-parent--relative {
+  border-color: var(--border);
 }
 
 .el-dialog__title,

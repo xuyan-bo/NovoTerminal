@@ -122,23 +122,6 @@ export default {
 }
 .sftp-el-table {
   height: 100%;
-  background: transparent;
-}
-.sftp-el-table /deep/ .el-table__header-wrapper th,
-.sftp-el-table /deep/ .el-table__body-wrapper td {
-  background: transparent;
-  color: var(--text-2);
-  border-color: var(--border) !important;
-}
-.sftp-el-table /deep/ .el-table__header-wrapper th {
-  color: var(--text-3);
-}
-.sftp-el-table /deep/ .el-table--border,
-.sftp-el-table /deep/ .el-table--group {
-  border-color: var(--border) !important;
-}
-.sftp-el-table /deep/ .el-table__body tr:hover > td {
-  background: var(--bg-hover) !important;
 }
 .folder-tag {
   margin-right: 4px;
