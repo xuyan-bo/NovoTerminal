@@ -74,7 +74,8 @@
         @dragover.prevent.stop="$emit('row-over', $event, side, f)"
         @dragleave="$emit('drag-leave', $event)"
       >
-        <span class="c-name"><img class="f-ico" :src="f.isDir ? 'icons/folder.svg' : 'icons/file.svg'" alt="" />{{ f.name }}</span>
+        <!-- Static src turns into a Vite import; public icons must resolve relative to the document (file:// included). -->
+        <span class="c-name"><img v-if="f.isDir" class="f-ico" :src="'icons/folder.svg'" alt="" /><svg-icon v-else class="f-ico-file" name="file" :size="13" />{{ f.name }}</span>
         <span class="c-size">{{ f.sizeText }}</span>
         <span class="c-time">{{ f.mtime }}</span>
       </div>
@@ -335,6 +336,11 @@ export default {
   margin-right: 4px;
   vertical-align: -2px;
   object-fit: contain;
+}
+/* SvgIcon's own scoped rule pins vertical-align: middle, so outrank it to match the folder image. */
+.c-name .f-ico-file {
+  margin-right: 4px;
+  vertical-align: -2px;
 }
 .marquee {
   position: fixed;

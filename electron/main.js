@@ -2108,6 +2108,10 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
+  // Windows/Linux 不挂应用菜单：Electron 的默认菜单（File/Edit/View/Window/Help）平时靠
+  // autoHideMenuBar 藏着，但 Alt 会把它唤出来，顺带的 Ctrl+R 重载与 Ctrl+W 关窗也会绕过页签确认。
+  // macOS 保留系统菜单，编辑类 role 与 Cmd+Q 依赖它。
+  if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
   // 日志目录跟随「存储位置」，因此数据仓库必须先于 LogStore 建立
   store = new AssetStore(logger);
   logStore = new LogStore({

@@ -143,7 +143,7 @@
               </el-tooltip>
             </template>
             <div class="path-row">
-              <el-input v-model="form.fileEditor" maxlength="1000" clearable />
+              <el-input v-model="form.fileEditor" readonly />
               <el-button :loading="pickingEditor" @click="browseEditor">{{ $t('settings.browse') }}</el-button>
             </div>
           </el-form-item>
@@ -832,7 +832,7 @@ export default {
         this.browsing = false;
       }
     },
-    /** 浏览只收可执行程序，主进程选完即判；手填的路径起不来仍由点「编辑文件」那次如实报错。 */
+    /** 浏览只收可执行程序，主进程选完即判；输入框只读，遗留或导入的坏值仍由点「编辑文件」那次如实报错。 */
     async browseEditor() {
       if (!api.browseFileEditor) {
         this.$message.warning(t('msg.needElectron'));

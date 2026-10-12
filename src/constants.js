@@ -452,7 +452,7 @@ export const AI_DEFAULTS = {
   permission: 'auto',
   readScreen: true,
   commandTimeoutSec: 300,
-  maxTurns: 30,
+  maxTurns: 80,
   temperature: 0.2,
   services: [],
   defaultRef: null,
@@ -460,7 +460,7 @@ export const AI_DEFAULTS = {
 
 export const AI_LIMITS = {
   commandTimeoutSec: [10, 1800],
-  maxTurns: [3, 60],
+  maxTurns: [3, 300],
   temperature: [0, 0.5],
   // 上下文窗口按 k token 输入（1k = 1000 token），与 electron/ai/aiSettings.js 的收敛范围一致
   contextK: [64, 1024],
