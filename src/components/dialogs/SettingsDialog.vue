@@ -135,6 +135,18 @@
               <el-button :loading="browsing" @click="browse">{{ $t('settings.browse') }}</el-button>
             </div>
           </el-form-item>
+          <el-form-item>
+            <template slot="label">
+              {{ $t('settings.fileEditor') }}
+              <el-tooltip :content="$t('settings.fileEditorTip')" placement="top">
+                <i class="el-icon-info"></i>
+              </el-tooltip>
+            </template>
+            <div class="path-row">
+              <el-input v-model="form.fileEditor" maxlength="1000" clearable />
+              <el-button :loading="pickingEditor" @click="browseEditor">{{ $t('settings.browse') }}</el-button>
+            </div>
+          </el-form-item>
           <el-form-item :label="$t('settings.backup')">
             <el-button size="mini" icon="el-icon-download" @click="openBackup('export')">{{ $t('settings.exportCfg') }}</el-button>
             <el-button size="mini" icon="el-icon-upload2" @click="openBackup('import')">{{ $t('settings.importCfg') }}</el-button>
@@ -509,7 +521,7 @@
 </template>
 
 <script>
-import { store, api, unwrap, refresh, checkForUpdates } from '../../store';
+import { store, api, unwrap, refresh, checkForUpdates, connectionErrorMessage } from '../../store';
 import { applyTheme, applyFont, setLocale, t } from '../../i18n';
 import {
   UI_FONTS,
@@ -579,6 +591,7 @@ export default {
     return {
       saving: false,
       browsing: false,
+      pickingEditor: false,
       checkingUpdate: false,
       repoUrl: import.meta.env.VITE_HOMEPAGE,
       releasesUrl: import.meta.env.VITE_HOMEPAGE + '/releases',
@@ -614,6 +627,7 @@ export default {
         autoUpdateCheck: true,
         recentLimit: RECENT_LIMIT_DEFAULT,
         logTotalMb: LOG_TOTAL_DEFAULT_MB,
+        fileEditor: '',
       },
       rules: {
         theme: [
@@ -758,6 +772,7 @@ export default {
         autoUpdateCheck: s.autoUpdateCheck !== false,
         recentLimit: this.clampedRecentLimit(s.recentLimit),
         logTotalMb: this.clampedLogTotalMb(s.logTotalMb),
+        fileEditor: s.fileEditor || '',
       };
       const ai = s.ai || {};
       const services = (Array.isArray(ai.services) ? ai.services : []).map(cleanService);
@@ -815,6 +830,22 @@ export default {
         this.$message.error(e.message);
       } finally {
         this.browsing = false;
+      }
+    },
+    /** 浏览只收可执行程序，主进程选完即判；手填的路径起不来仍由点「编辑文件」那次如实报错。 */
+    async browseEditor() {
+      if (!api.browseFileEditor) {
+        this.$message.warning(t('msg.needElectron'));
+        return;
+      }
+      this.pickingEditor = true;
+      try {
+        const r = unwrap(await api.browseFileEditor());
+        if (r && r.path) this.form.fileEditor = r.path;
+      } catch (e) {
+        this.$message.error(connectionErrorMessage(e));
+      } finally {
+        this.pickingEditor = false;
       }
     },
     /* ---- AI 服务与模型：与终端面板共用同一份 settings.ai ---- */
@@ -1158,6 +1189,7 @@ export default {
               autoUpdateCheck: !!this.form.autoUpdateCheck,
               recentLimit: this.clampedRecentLimit(this.form.recentLimit),
               logTotalMb: this.clampedLogTotalMb(this.form.logTotalMb),
+              fileEditor: this.form.fileEditor,
               ai: this.aiPayload(),
             })
           );

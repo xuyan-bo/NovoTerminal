@@ -31,6 +31,7 @@ const { fileURLToPath } = require('url');
 const { VncSessionManager } = require('./vnc/VncSessionManager');
 const { RdpSessionManager } = require('./rdp/RdpSessionManager');
 const { SftpManager } = require('./sftp/SftpManager');
+const { EditManager } = require('./sftp/EditManager');
 const { LogStore } = require('./logs/logStore');
 const { verifySystemAuth, resetAuthCache } = require('./auth/systemAuth');
 const pkg = require('../package.json');
@@ -114,6 +115,7 @@ let aiAssistant = null;
 let vncSessions = null;
 let rdpSessions = null;
 let sftpManager = null;
+let editManager = null;
 let tray = null;
 let trayDestroying = false;
 let logStore = null;
@@ -308,6 +310,7 @@ function closeSshOwner(ownerId) {
   if (sshSessions) sshSessions.closeOwner(ownerId);
   if (sshMonitor) sshMonitor.stopOwner(ownerId);
   if (sftpManager) sftpManager.closeOwner(ownerId);
+  if (editManager) editManager.closeOwner(ownerId);
   // 内嵌 VNC/RDP 的本地代理同样按渲染进程归属回收：WebSocket 还没建立的会话不会自行结束
   if (vncSessions) vncSessions.closeOwner(ownerId);
   if (rdpSessions) rdpSessions.closeOwner(ownerId);
@@ -751,6 +754,17 @@ function readWinClipboardFiles() {
   });
 }
 
+/** 文件编辑器必须是可执行程序：Windows 只认扩展名（X_OK 在那边等于写权限判定），类 Unix 认 X_OK 且必须是普通文件。 */
+function isProgramPath(p) {
+  if (process.platform === 'win32') return /\.(exe|com)$/i.test(p) && fs.existsSync(p);
+  try {
+    fs.accessSync(p, fs.constants.X_OK);
+    return fs.statSync(p).isFile();
+  } catch (_) {
+    return false;
+  }
+}
+
 function untrustedSenderError() {
   return Object.assign(new Error('Untrusted SSH IPC sender'), { code: 'SSH_OWNER' });
 }
@@ -902,6 +916,7 @@ function registerIpc() {
       );
     }
     if ('logTotalMb' in clean) clean.logTotalMb = clampedLogTotalMb(clean.logTotalMb);
+    if ('fileEditor' in clean) clean.fileEditor = String(clean.fileEditor == null ? '' : clean.fileEditor).trim().slice(0, 1000);
     if ('zoom' in clean) clean.zoom = clampedZoom(clean.zoom);
     if ('theme' in clean && !SETTING_THEMES.includes(clean.theme)) clean.theme = 'system';
     if ('lang' in clean) clean.lang = clean.lang === 'en' ? 'en' : 'zh';
@@ -1042,6 +1057,27 @@ function registerIpc() {
       aiSessions: summary.aiSessions,
     });
     return { ok: true, summary, manifest: parsed.manifest };
+  });
+  /** 设置里的「文件编辑器」浏览：只允许挑可执行程序，选到别的当场拒绝，不回路径。 */
+  handle('app:browse-file-editor', async () => {
+    const en = store.getSettings().lang === 'en';
+    const r = await dialog.showOpenDialog(win, {
+      properties: ['openFile'],
+      title: en ? 'Select file editor executable' : '选择文件编辑器可执行文件',
+      filters: [
+        {
+          name: en ? 'Programs' : '应用程序',
+          extensions: process.platform === 'win32' ? ['exe', 'com'] : ['*'],
+        },
+      ],
+    });
+    if (r.canceled || !r.filePaths[0]) return null;
+    const p = r.filePaths[0];
+    if (!isProgramPath(p)) {
+      logger.warn('sftp', 'file editor pick rejected', { path: p });
+      throw Object.assign(new Error('picked file is not an executable program'), { code: 'NOT_EXECUTABLE' });
+    }
+    return { path: p };
   });
   handle('app:browse-data-path', async () => {
     const en = store.getSettings().lang === 'en';
@@ -1958,6 +1994,9 @@ function registerIpc() {
   handle('sftp:open', (sender, req) => sftpManager.openSession({ assetId: req && req.assetId, ...sshRequestContext(sender) }), true);
   handle('sftp:list', (sender, connId, remotePath) => sftpManager.list(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
   handle('sftp:stat', (sender, connId, remotePath) => sftpManager.stat(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
+  handle('sftp:edit-local', (sender, p) => editManager.openLocal(sftpLocalPath(p)), true);
+  handle('sftp:edit-open', (sender, connId, remotePath) =>
+    editManager.openRemote({ ownerId: sender.id, connId: sftpConnOwner(sender, connId), remotePath: sftpRemotePath(remotePath) }), true);
   handle('sftp:local-exists', (sender, p) => sftpManager.localExists(sftpLocalPath(p)), true);
   handle('sftp:local-list', (sender, p) => sftpManager.localList(sftpLocalPathOrHome(p)), true);
   handle('sftp:drives', () => sftpManager.drives());
@@ -1967,6 +2006,10 @@ function registerIpc() {
   handle('sftp:unlink', (sender, connId, remotePath, isDir) =>
     sftpManager.unlink(sftpConnOwner(sender, connId), sftpRemotePath(remotePath), !!isDir), true);
   handle('sftp:local-mkdir', (sender, dirPath, name) => sftpManager.localMkdir(sftpLocalPath(dirPath), sftpLocalName(name)), true);
+  handle('sftp:create-file', (sender, connId, remotePath) =>
+    sftpManager.createFile(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
+  handle('sftp:local-create-file', (sender, dirPath, name) =>
+    sftpManager.localCreateFile(sftpLocalPath(dirPath), sftpLocalName(name)), true);
   handle('sftp:local-rename', (sender, oldPath, newPath) => sftpManager.localRename(sftpLocalPath(oldPath), sftpLocalPath(newPath)), true);
   handle('sftp:local-unlink', (sender, p, isDir) => sftpManager.localUnlink(sftpLocalPath(p), !!isDir), true);
   handle('sftp:local-copy', async (sender, src, destDir) => {
@@ -1996,6 +2039,7 @@ function registerIpc() {
   handle('sftp:close', (sender, connId) => {
     const rec = sftpManager.conns.get(connId);
     if (rec && rec.ownerId !== sender.id) throw sftpNotOwner();
+    if (editManager) editManager.closeConn(connId);
     return sftpManager.closeSession(connId);
   }, true);
   handle('sftp:clipboard-files', async (sender, fullList) => {
@@ -2092,6 +2136,7 @@ app.whenReady().then(() => {
   vncSessions = new VncSessionManager({ send, log: logger });
   rdpSessions = new RdpSessionManager({ send, log: logger });
   sftpManager = new SftpManager({ send, store, log: logger });
+  editManager = new EditManager({ store, log: logger, sftp: sftpManager });
   registerIpc();
   app.on('browser-window-created', () => applyZoom());
   // 生产模式预热 asar FUSE：Node.js 对 asar 有特殊补丁，readFileSync 会先触发并稳定 FUSE 挂载，
@@ -2142,6 +2187,10 @@ function quitCleanup() {
   if (sshSessions) sshSessions.destroyAll();
   if (sshMonitor) sshMonitor.destroyAll();
   if (aiAssistant) aiAssistant.destroyAll();
+  if (editManager) {
+    editManager.destroyAll();
+    editManager.purge();
+  }
   for (const tests of sshTests.values()) for (const connection of tests) connection.close();
   sshTests.clear();
   sshPrompts.destroyAll();

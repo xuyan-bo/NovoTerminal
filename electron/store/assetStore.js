@@ -23,6 +23,15 @@ const RECENT_DEFAULT_PORTS = new Map([
   ['rdp', 3389],
 ]);
 
+/** 系统自带编辑器的默认值：只有主进程知道真实平台与 SystemRoot，渲染端拿不到。 */
+function defaultFileEditor() {
+  if (process.platform === 'win32') {
+    return path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'notepad.exe');
+  }
+  if (process.platform === 'darwin') return '/System/Applications/TextEdit.app/Contents/MacOS/TextEdit';
+  return 'xdg-open';
+}
+
 function defaultData() {
   return {
     version: 2,
@@ -37,6 +46,8 @@ function defaultData() {
       closeAction: 'ask', // 'ask' = 每次询问, 'minimize' = 直接最小化, 'quit' = 直接退出
       homeWelcome: true,
       autoUpdateCheck: true,
+      // SFTP「编辑文件」调用的程序；清空即视为无可用编辑器，不再回落到系统默认
+      fileEditor: defaultFileEditor(),
       // 用户勾选「忽略此版本」后记住的发行版标签；同版本不再提示更新
       skippedUpdateVersion: '',
       recentLimit: RECENT_LIMIT_DEFAULT,

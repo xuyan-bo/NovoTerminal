@@ -164,6 +164,8 @@
         @click="!it.disabled && runCtx(it)"
       >{{ it.label }}</div>
     </div>
+
+    <sftp-name-dialog ref="nameDialog" />
   </div>
 </template>
 
@@ -171,6 +173,7 @@
 import { api, unwrap, connectionErrorMessage } from '../../store';
 import { t } from '../../i18n';
 import CtxMenu from '../common/CtxMenu.vue';
+import SftpNameDialog from '../dialogs/SftpNameDialog.vue';
 import SftpFilePanel from '../sftp/SftpFilePanel.vue';
 import SftpTransferQueue from '../sftp/SftpTransferQueue.vue';
 import { PARENT_ROW, joinLocal, joinRemote, localPathOf, parentLocal, parentRemote, normalizeRemotePath, sortItems } from '../sftp/utils';
@@ -218,7 +221,7 @@ function createSession(meta, id, seq) {
 
 export default {
   name: 'SftpPage',
-  components: { CtxMenu, SftpFilePanel, SftpTransferQueue },
+  components: { CtxMenu, SftpNameDialog, SftpFilePanel, SftpTransferQueue },
   data() {
     return {
       sessions: [],
@@ -293,6 +296,8 @@ export default {
     this._marqueeBase = null;
     this._split = null;
     this._pollTimer = null;
+    this._doneNames = [];
+    this._doneToastTimer = null;
     this._seq = 0;
     this._destroyed = false;
     this._tabDragging = false;
@@ -401,6 +406,8 @@ export default {
     this._tabScrollFrame = 0;
     if (this._pollTimer) clearInterval(this._pollTimer);
     this._pollTimer = null;
+    if (this._doneToastTimer) clearTimeout(this._doneToastTimer);
+    this._doneToastTimer = null;
     this.sessions.forEach((s) => this.releaseSession(s));
     if (this._offProgress) this._offProgress();
     if (this._offState) this._offState();
@@ -895,7 +902,10 @@ export default {
       // 「此电脑」视图里没有一个真实目录能承载新建/全选，只留刷新
       const computerView = side === 'local' && this.localComputer;
       const items = [];
-      if (!computerView) items.push({ act: 'mkdir', label: t('sftp.mkdir') });
+      if (!computerView) {
+        items.push({ act: 'mkdir', label: t('sftp.mkdir') });
+        items.push({ act: 'mkfile', label: t('sftp.mkfile') });
+      }
       if (side === 'remote') {
         items.push({ act: 'paste', label: t('sftp.paste'), disabled: !this.clipHasFiles });
       }
@@ -951,7 +961,10 @@ export default {
       } else {
         items.push({ act: 'download-folder', label: t('sftp.downloadFolder') });
       }
-      if (!many) items.push({ act: 'rename', label: t('sftp.rename') });
+      if (!many) {
+        if (!f.isDir) items.push({ act: 'edit', label: t('sftp.edit') });
+        items.push({ act: 'rename', label: t('sftp.rename') });
+      }
       items.push({ act: 'delete', label: t('sftp.delete'), danger: true });
       this.openCtxAt(e, side, f, items);
     },
@@ -981,7 +994,6 @@ export default {
             await this.startDownload(s, remoteOf(x), joinLocal(dir, x.name));
           }
         }
-        if (list.some((x) => x.isDir)) this.$message.success(t('sftp.downloadDone'));
       };
       try {
         if (it.act === 'upload-folder' && item && item.isDir) {
@@ -1013,25 +1025,38 @@ export default {
           await downloadList(dir);
           return;
         }
+        if (it.act === 'edit' && item && !item.isDir) {
+          if (side === 'local') unwrap(await api.sftpEditLocal(localOf(item)));
+          else unwrap(await api.sftpEditOpen(s.connId, remoteOf(item)));
+          return;
+        }
         if (it.act === 'paste') {
           await this.pasteFromClipboard();
           return;
         }
-        if (it.act === 'mkdir') {
-          const r = await this.$prompt(t('sftp.mkdirName'), t('sftp.mkdir'), {
-            confirmButtonText: t('msg.confirm'),
-            cancelButtonText: t('msg.cancel'),
-            inputValue: 'new-folder',
-          });
-          const name = r && r.value ? String(r.value).trim() : '';
+        if (it.act === 'mkdir' || it.act === 'mkfile') {
+          const isDir = it.act === 'mkdir';
+          const name = await this.$refs.nameDialog.open(
+            t(isDir ? 'sftp.mkdir' : 'sftp.mkfile'),
+            t(isDir ? 'sftp.mkdirName' : 'sftp.fileName')
+          );
           if (!name) return;
           if (side === 'local') {
-            unwrap(await api.sftpLocalMkdir(this.localPath, name));
+            unwrap(
+              isDir
+                ? await api.sftpLocalMkdir(this.localPath, name)
+                : await api.sftpLocalCreateFile(this.localPath, name)
+            );
             await this.goLocal(this.localPath);
           } else {
-            unwrap(await api.sftpMkdir(s.connId, joinRemote(s.remotePath, name)));
+            unwrap(
+              isDir
+                ? await api.sftpMkdir(s.connId, joinRemote(s.remotePath, name))
+                : await api.sftpCreateFile(s.connId, joinRemote(s.remotePath, name))
+            );
             await this.goRemote(s, s.remotePath);
           }
+          this.$message.success(t(isDir ? 'sftp.mkdirDone' : 'sftp.mkfileDone', { name }));
           return;
         }
         if (it.act === 'refresh') {
@@ -1058,6 +1083,7 @@ export default {
             unwrap(await api.sftpRename(s.connId, remoteOf(item), joinRemote(s.remotePath, neu)));
             await this.goRemote(s, s.remotePath);
           }
+          this.$message.success(t('sftp.renameDone', { name: neu }));
           return;
         }
         if (it.act === 'delete' && list.length) {
@@ -1078,6 +1104,14 @@ export default {
           if (failed.length) this.$message.error(failed.join('\n'));
           if (side === 'local') await this.goLocal(this.localPath);
           else await this.goRemote(s, s.remotePath);
+          const removed = list.length - failed.length;
+          if (removed) {
+            this.$message.success(
+              removed === 1 && !failed.length
+                ? t('sftp.deleteDone', { name: list[0].name })
+                : t('sftp.deleteDoneMulti', { count: removed })
+            );
+          }
         }
       } catch (err) {
         if (err !== 'cancel' && err !== 'close') this.$message.error(connectionErrorMessage(err));

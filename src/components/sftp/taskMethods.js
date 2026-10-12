@@ -1,9 +1,13 @@
 import Vue from 'vue';
 import { api, unwrap, connectionErrorMessage } from '../../store';
+import { t } from '../../i18n';
 import { formatSize, parentLocal, parentRemote, isTaskFinished, transferErrorText } from './utils';
 
 /** Folder totals are only worth recomputing a few times per second, not per progress event. */
 const RECALC_THROTTLE_MS = 400;
+
+/** 完成提示合批窗口：多选上传、编辑器连续回传都不该逐条刷屏。 */
+const DONE_TOAST_MS = 1200;
 
 /**
  * Task rows live in their own session (`s.tasks`), because progress events keep arriving for
@@ -238,6 +242,7 @@ export default {
     // 整棵文件夹树跑完后按当前显示的目录原地刷新一次：不跳转，也不逐个文件刷新
     if (root && root.isFolder && root.status === 'done' && !root.panelRefreshed) {
       root.panelRefreshed = true;
+      this.notifyTaskDone(root.name);
       this.refreshAfterDone(s, root);
     }
     return root;
@@ -294,9 +299,25 @@ export default {
       this.$message.error(`${merged.name}: ${transferErrorText(merged)}`);
     }
     if (merged.status === 'done' && (!prev || prev.status !== 'done')) {
+      this.notifyTaskDone(merged.name);
       this.refreshAfterDone(s, merged);
       s.tasks = s.tasks.filter((x) => !(x.taskId === merged.taskId && x.status === 'done'));
     }
+  },
+  /** 完成提示合批：窗口内累计条数，只发一条，单项时仍报名字。 */
+  notifyTaskDone(name) {
+    this._doneNames.push(name);
+    if (this._doneToastTimer) return;
+    this._doneToastTimer = setTimeout(() => {
+      this._doneToastTimer = null;
+      const names = this._doneNames;
+      this._doneNames = [];
+      this.$message.success(
+        names.length === 1
+          ? t('sftp.taskDone', { name: names[0] })
+          : t('sftp.taskDoneMulti', { count: names.length })
+      );
+    }, DONE_TOAST_MS);
   },
   refreshAfterDone(s, task) {
     if (!task) return;

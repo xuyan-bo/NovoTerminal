@@ -43,6 +43,8 @@ const PROGRESS_INTERVAL_MS = 200;
 const DIR_CACHE_MAX = 20000;
 /** Concurrent partial-target cleanups while cancelling a folder subtree. */
 const CLEANUP_POOL = 16;
+/** Ceiling for a head read, so a caller asking for megabytes still costs one small round trip. */
+const HEAD_MAX_BYTES = 64 * 1024;
 
 function tunedInt(value, min, max, fallback) {
   const n = Number(value);
@@ -439,6 +441,31 @@ class SftpManager {
     });
   }
 
+  /** 新建空文件：同名目标已存在时直接失败，绝不截断已有内容。 */
+  createFile(connId, remotePath) {
+    const c = this._conn(connId);
+    return new Promise((resolve, reject) => {
+      c.sftp.stat(remotePath, (err) => {
+        if (!err) {
+          return reject(Object.assign(new Error('target already exists'), { code: 'SFTP_EXISTS' }));
+        }
+        c.sftp.open(remotePath, 'w', (openErr, handle) => {
+          if (openErr) {
+            return reject(
+              this._remoteError('CREATE', openErr, 'sftp create file failed', {
+                connId,
+                host: c.host,
+                port: c.port,
+                path: remotePath,
+              })
+            );
+          }
+          c.sftp.close(handle, () => resolve({ ok: true }));
+        });
+      });
+    });
+  }
+
   _rememberDir(c, dir) {
     if (!dir || dir === '/' || c.dirs.size >= DIR_CACHE_MAX) return;
     c.dirs.add(dir);
@@ -567,6 +594,16 @@ class SftpManager {
     return { ok: true, path: target };
   }
 
+  /** 新建空文件：同名目标已存在时直接失败，绝不截断已有内容。 */
+  localCreateFile(dirPath, name) {
+    const target = path.join(dirPath || os.homedir(), name);
+    if (fs.existsSync(target)) {
+      throw Object.assign(new Error('target already exists'), { code: 'LOCAL_EXISTS' });
+    }
+    fs.writeFileSync(target, '');
+    return { ok: true, path: target };
+  }
+
   localRename(oldPath, newPath) {
     fs.renameSync(oldPath, newPath);
     return { ok: true };
@@ -624,6 +661,58 @@ class SftpManager {
       } catch (_) {
         resolve({ exists: false });
       }
+    });
+  }
+
+  /** 只读文件开头若干字节，用于外部编辑前判定文本还是二进制。 */
+  readHead(connId, remotePath, bytes) {
+    return new Promise((resolve, reject) => {
+      let c;
+      try {
+        c = this._conn(connId);
+      } catch (e) {
+        return reject(e);
+      }
+      const length = Math.max(0, Math.min(Number(bytes) || 0, HEAD_MAX_BYTES));
+      const fail = (err) =>
+        reject(this._remoteError('READ', err, 'sftp read head failed', { connId, host: c.host, port: c.port }));
+      c.sftp.open(remotePath, 'r', (err, handle) => {
+        if (err) return fail(err);
+        const buf = Buffer.alloc(length);
+        c.sftp.read(handle, buf, 0, length, 0, (readErr, readLength) => {
+          c.sftp.close(handle, () => {});
+          if (readErr) return fail(readErr);
+          resolve(buf.slice(0, readLength || 0));
+        });
+      });
+    });
+  }
+
+  /** 外部编辑用的整文件取回：不进传输队列，失败必须删掉半截副本。 */
+  fetchToLocal({ connId, remotePath, localPath }) {
+    let c;
+    try {
+      c = this._conn(connId);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    return new Promise((resolve, reject) => {
+      c.sftp.fastGet(remotePath, localPath, (err) => {
+        if (err) {
+          try {
+            fs.rmSync(localPath, { force: true });
+          } catch (_) {}
+          return reject(
+            this._remoteError('READ', err, 'sftp fetch to local failed', {
+              connId,
+              host: c.host,
+              port: c.port,
+              remotePath,
+            })
+          );
+        }
+        resolve({ localPath });
+      });
     });
   }
 
