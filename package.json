@@ -30,6 +30,7 @@
     "@novnc/novnc": "^1.7.0",
     "@vitejs/plugin-vue2": "^2.3.3",
     "@xterm/addon-fit": "0.10.0",
+    "@xterm/addon-search": "0.15.0",
     "@xterm/xterm": "5.5.0",
     "cross-env": "^7.0.3",
     "echarts": "^6.1.0",

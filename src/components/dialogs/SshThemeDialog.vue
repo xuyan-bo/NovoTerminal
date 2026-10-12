@@ -56,7 +56,6 @@
         ></span>
       </div>
     </div>
-    <p class="hint theme-note">{{ $t('theme.boldUnsupported') }}</p>
 
     <template #footer>
       <el-button size="mini" @click="reset">{{ $t('theme.reset') }}</el-button>
@@ -179,10 +178,6 @@ export default {
 </script>
 
 <style scoped>
-.theme-note {
-  font-size: 12px;
-  line-height: 1.5;
-}
 .theme-sec-title {
   font-size: 12px;
   color: var(--text-3, #6b7789);

@@ -28,10 +28,12 @@ export default {
     return { visible: false, items: [], x: 0, y: 0 };
   },
   mounted() {
-    document.addEventListener('click', this.closeOutside);
+    // 捕获阶段收 mousedown：xterm 等组件会在自己元素上拦截/停止冒泡，冒泡 click 收不到；
+    // 菜单项自身的按下由 closeOutside 的 contains 判断放行。
+    document.addEventListener('mousedown', this.closeOutside, true);
   },
   beforeDestroy() {
-    document.removeEventListener('click', this.closeOutside);
+    document.removeEventListener('mousedown', this.closeOutside, true);
   },
   methods: {
     open(event, items) {

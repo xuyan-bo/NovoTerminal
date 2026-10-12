@@ -67,6 +67,29 @@
           <span v-if="aiUnread" class="ai-unread">{{ aiUnread > 9 ? '9+' : aiUnread }}</span>
         </button>
         <div ref="termEl" class="ssh-term"></div>
+        <div v-show="findOpen" class="find-bar">
+          <input
+            ref="findInput"
+            v-model="findText"
+            class="find-input"
+            type="text"
+            spellcheck="false"
+            :class="{ 'no-match': findMiss }"
+            :placeholder="$t('term.find')"
+            @input="onFindInput"
+            @keydown.enter.prevent="runFind($event.shiftKey)"
+            @keydown.esc.prevent="closeFind"
+          />
+          <span class="find-count" :class="{ 'no-match': findMiss }">{{ findCountText }}</span>
+          <button type="button" class="find-btn" :title="$t('term.findPrevTip')" @click="runFind(true)"><i class="el-icon-arrow-up" aria-hidden="true"></i></button>
+          <button type="button" class="find-btn" :title="$t('term.findNextTip')" @click="runFind(false)"><i class="el-icon-arrow-down" aria-hidden="true"></i></button>
+          <span class="find-sep"></span>
+          <button type="button" class="find-btn" :class="{ active: findCase }" :title="$t('term.findCaseTip')" @click="toggleFindCase">Cc</button>
+          <button type="button" class="find-btn" :class="{ active: findWord }" :title="$t('term.findWordTip')" @click="toggleFindWord">W</button>
+          <button type="button" class="find-btn" :class="{ active: findRegex }" :title="$t('term.findRegexTip')" @click="toggleFindRegex">.*</button>
+          <span class="find-sep"></span>
+          <button type="button" class="find-btn" :title="$t('term.findCloseTip')" @click="closeFind"><i class="el-icon-close" aria-hidden="true"></i></button>
+        </div>
       </div>
       <div class="ssh-monitor-host" :class="{ open: sideOpen, dragging: monitorDragging || sideDragging }" :style="monitorHostStyle">
         <div
@@ -114,6 +137,7 @@
         <kbd>Esc</kbd><span>{{ $t('ssh.fullscreenExitHint') }}</span>
       </div>
     </transition>
+    <ctx-menu ref="termCtx" @select="onTermCtxSelect" />
     <ssh-theme-dialog ref="themeDialog" :asset-id="assetId" :in-fullscreen="isFullscreen" @saved="onThemeSaved" />
   </div>
 </template>
@@ -121,11 +145,13 @@
 <script>
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { api, unwrap, refresh, findAsset, store, takeSessionHandover, connectionErrorMessage } from '../../store';
 import { t } from '../../i18n';
 import { sshThemeToXterm, resolveSshTheme, ADVANCED_DEFAULTS } from '../../constants';
 import SshThemeDialog from '../dialogs/SshThemeDialog.vue';
+import CtxMenu from '../common/CtxMenu.vue';
 import createFullscreenMixin from '../session/fullscreen';
 
 const FIT_DEBOUNCE_MS = 120;
@@ -137,6 +163,7 @@ export default {
   name: 'TerminalView',
   components: {
     SshThemeDialog,
+    CtxMenu,
     SshMonitorPanel: () => import('../panels/SshMonitorPanel.vue'),
     AiAssistantPanel: () => import('../panels/AiAssistantPanel.vue'),
   },
@@ -183,6 +210,13 @@ export default {
       /** 两个面板同时打开时的高度分配（监控占比 %），拖拽中间横条调整。 */
       sideSplit: 52,
       sideDragging: false,
+      findOpen: false,
+      findText: '',
+      findCase: false,
+      findWord: false,
+      findRegex: false,
+      findIndex: -1,
+      findCount: 0,
     };
   },
   computed: {
@@ -230,6 +264,17 @@ export default {
     connToggleTip() {
       void this.localeTick;
       return this.isDisconnected ? t('ssh.reconnect') : t('ssh.disconnect');
+    },
+    /** 有输入却零命中：输入框与计数一起标红（含正则非法）。 */
+    findMiss() {
+      return !!this.findText && this.findCount === 0;
+    },
+    findCountText() {
+      void this.localeTick;
+      if (!this.findText) return '';
+      if (this.findCount === 0) return t('term.findNoMatch');
+      if (this.findIndex < 0) return this.findCount + '+';
+      return (this.findIndex + 1) + '/' + this.findCount;
     },
   },
   watch: {
@@ -279,6 +324,10 @@ export default {
     this._sideMove = null;
     this._sideUp = null;
     this._offOsc7 = null;
+    this.search = null;
+    this._offSearchResults = null;
+    this._findDebounce = 0;
+    this._xtermTheme = null;
   },
   mounted() {
     this._fitTimer = null;
@@ -347,6 +396,7 @@ export default {
     /** Sync CSS background + xterm theme so both render surfaces match */
     syncSurface(colors) {
       const theme = sshThemeToXterm(colors);
+      this._xtermTheme = theme;
       const bg = theme.background || '#000000';
       const el = this.$refs.wrapEl;
       if (el) el.style.setProperty('--ssh-bg', bg);
@@ -374,12 +424,22 @@ export default {
         fontFamily: 'Consolas, "Courier New", monospace',
         cursorBlink: true,
         convertEol: false,
+        // SearchAddon 的全量命中高亮走 registerDecoration，需要开放 proposed API
+        allowProposedApi: true,
         // A big buffer makes every resize reflow expensive; the saved default stays modest on purpose
         scrollback: Number(this.sshAdvanced().scrollback) || ADVANCED_DEFAULTS.ssh.scrollback,
         theme: sshThemeToXterm(this.getAssetTheme()),
       });
       const fit = new FitAddon();
       term.loadAddon(fit);
+      const search = new SearchAddon();
+      term.loadAddon(search);
+      this.search = search;
+      this._offSearchResults = search.onDidChangeResults((ev) => {
+        if (this._disposed) return;
+        this.findCount = ev.resultCount;
+        this.findIndex = ev.resultIndex;
+      });
       term.open(this.$refs.termEl);
       this.term = term;
       this.fit = fit;
@@ -398,12 +458,27 @@ export default {
       this._inputSubscriptions.push(term.onData((data) => this.sendInput(data)));
       this._inputSubscriptions.push(term.onBinary((data) => this.sendInput(data, true)));
 
-      // Xshell-style right click: copy selection, or paste if none
+      // 终端区右键弹操作面板（复制/粘贴/全选/清屏/查找）
       this._onTermCtx = (e) => this.onTermContextmenu(e);
       const termEl = this.$refs.termEl;
       if (termEl) {
         termEl.addEventListener('contextmenu', this._onTermCtx);
       }
+
+      // Ctrl+F 打开查找条，F3/Shift+F3 在查找条打开时跳命中（终端有焦点时）
+      term.attachCustomKeyEventHandler((e) => {
+        if (e.type !== 'keydown') return true;
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'f' || e.key === 'F')) {
+          this.openFind();
+          return false;
+        }
+        if (e.key === 'F3' && !e.altKey) {
+          if (this.findOpen) this.runFind(e.shiftKey);
+          else this.openFind();
+          return false;
+        }
+        return true;
+      });
 
       // Observe the outer wrap (stable flex box), not the xterm DOM
       if (window.ResizeObserver) {
@@ -428,22 +503,161 @@ export default {
         if (this.liveSessionId === sid && !this._disposed) this.statusDetail = connectionErrorMessage(error);
       }
     },
-    onTermContextmenu(e) {
+    async onTermContextmenu(e) {
       e.preventDefault();
       e.stopPropagation();
       const term = this.term;
       if (!term) return;
-      let selected = '';
+      const hasSel = !!(term.hasSelection && term.hasSelection());
+      const clip = await this.readClipboardText();
+      if (this._disposed || !this.$refs.termCtx) return;
+      this.$refs.termCtx.open(e, [
+        { label: t('term.find'), icon: 'el-icon-search', action: 'find' },
+        { sep: true },
+        { label: t('term.copy'), icon: 'el-icon-document-copy', action: 'copy', disabled: !hasSel, hint: t('term.copyNoSel') },
+        { label: t('term.paste'), icon: 'el-icon-document-add', action: 'paste', disabled: clip === '', hint: t('clipboard.empty') },
+        { label: t('term.selectAll'), icon: 'el-icon-finished', action: 'selectAll' },
+        { label: t('term.clear'), icon: 'el-icon-delete', action: 'clear' },
+      ]);
+    },
+    onTermCtxSelect(item) {
+      const term = this.term;
+      if (!term || !item) return;
+      if (item.action === 'copy') this.copySelection(term.getSelection());
+      else if (item.action === 'paste') this.pasteFromClipboard();
+      else if (item.action === 'selectAll') term.selectAll();
+      else if (item.action === 'clear') this.clearScreen();
+      else if (item.action === 'find') this.openFind();
+    },
+    /** 返回 '' 表示确认剪贴板为空（粘贴置灰）；null 表示读不了或无桥接，不置灰。 */
+    async readClipboardText() {
+      if (!api.clipboardReadText) return null;
       try {
-        selected = term.hasSelection && term.hasSelection() ? term.getSelection() : '';
+        const text = await api.clipboardReadText();
+        return typeof text === 'string' ? text : '';
       } catch (_) {
-        selected = '';
+        return null;
       }
-      if (selected && String(selected).length) {
-        this.copySelection(selected);
-      } else {
-        this.pasteFromClipboard();
+    },
+    /** 只清本地显示（视口 + 回滚缓冲）并把光标拉回首行，不向 shell 发命令。 */
+    clearScreen() {
+      const term = this.term;
+      if (!term) return;
+      term.write('\x1b[2J\x1b[3J\x1b[H');
+      if (this.findOpen && this.findText) this.runFind(false);
+    },
+    openFind() {
+      this.findOpen = true;
+      this.$nextTick(() => {
+        const el = this.$refs.findInput;
+        if (el) {
+          el.focus();
+          el.select();
+        }
+      });
+    },
+    closeFind() {
+      this.findOpen = false;
+      if (this._findDebounce) {
+        clearTimeout(this._findDebounce);
+        this._findDebounce = 0;
       }
+      if (this.search) {
+        try {
+          this.search.clearDecorations();
+        } catch (_) {}
+      }
+      this.findCount = 0;
+      this.findIndex = -1;
+      try {
+        if (this.term) this.term.focus();
+      } catch (_) {}
+    },
+    onFindInput() {
+      if (this._findDebounce) clearTimeout(this._findDebounce);
+      this._findDebounce = setTimeout(() => {
+        this._findDebounce = 0;
+        this.runFind(false);
+      }, 120);
+    },
+    toggleFindCase() {
+      this.findCase = !this.findCase;
+      this.runFind(false);
+    },
+    toggleFindWord() {
+      this.findWord = !this.findWord;
+      this.runFind(false);
+    },
+    toggleFindRegex() {
+      this.findRegex = !this.findRegex;
+      this.runFind(false);
+    },
+    runFind(back) {
+      const term = this.term;
+      const search = this.search;
+      if (!term || !search) return;
+      const text = this.findText;
+      if (!text) {
+        this.findCount = 0;
+        this.findIndex = -1;
+        try {
+          search.clearDecorations();
+        } catch (_) {}
+        return;
+      }
+      // addon 0.15 的 wholeWord 有缺陷（一行只查首个出现位置），全词改用零宽边界正则自实现，
+      // 计数与跳转走同一条 regex 路径才一致；词边界按 \w（字母数字下划线）判定。
+      const useRegex = this.findRegex || this.findWord;
+      let pattern = text;
+      if (useRegex) {
+        pattern = this.findRegex ? text : this.escapeRegExp(text);
+        if (this.findWord) pattern = '(?<![A-Za-z0-9_])' + pattern + '(?![A-Za-z0-9_])';
+      }
+      const opts = { caseSensitive: this.findCase, regex: useRegex, decorations: this.findDecorations() };
+      let ok = false;
+      try {
+        ok = back ? search.findPrevious(pattern, opts) : search.findNext(pattern, opts);
+      } catch (_) {
+        ok = false;
+      }
+      if (!ok) {
+        this.findCount = 0;
+        this.findIndex = -1;
+      }
+    },
+    escapeRegExp(value) {
+      return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    },
+    /** 高亮色按当前终端底色亮度分深浅两套；registerDecoration 只收 #RRGGBB。 */
+    findDecorations() {
+      const light = this.isLightColor((this._xtermTheme && this._xtermTheme.background) || '');
+      return light
+        ? {
+          matchBackground: '#e8eef6',
+          matchBorder: '#909399',
+          matchOverviewRuler: '#409eff',
+          activeMatchBackground: '#f3b33d',
+          activeMatchBorder: '#e6a23c',
+          activeMatchColorOverviewRuler: '#e6a23c',
+        }
+        : {
+          matchBackground: '#243041',
+          matchBorder: '#5c6b80',
+          matchOverviewRuler: '#409eff',
+          activeMatchBackground: '#e6a23c',
+          activeMatchBorder: '#e6a23c',
+          activeMatchColorOverviewRuler: '#e6a23c',
+        };
+    },
+    isLightColor(hex) {
+      const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex || ''));
+      if (!m) return false;
+      let s = m[1];
+      if (s.length === 3) s = s[0] + s[0] + s[1] + s[1] + s[2] + s[2];
+      const r = parseInt(s.slice(0, 2), 16);
+      const g = parseInt(s.slice(2, 4), 16);
+      const b = parseInt(s.slice(4, 6), 16);
+      return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6;
     },
     async copySelection(text) {
       const value = String(text || '');
@@ -506,6 +720,10 @@ export default {
       try {
         if (typeof term.paste === 'function') {
           term.paste(text);
+          // term.paste 会把粘贴内容留成选区高亮（原生 Ctrl+V 由 selectionchange 自动清，这里没有），粘贴完即清
+          try {
+            term.clearSelection();
+          } catch (_) {}
         } else {
           await this.sendInput(text.replace(/\r?\n/g, '\r'));
         }
@@ -618,6 +836,21 @@ export default {
         } catch (_) {}
       }
       this._onTermCtx = null;
+      if (this._findDebounce) {
+        clearTimeout(this._findDebounce);
+        this._findDebounce = 0;
+      }
+      if (this._offSearchResults) {
+        try {
+          this._offSearchResults.dispose();
+        } catch (_) {}
+        this._offSearchResults = null;
+      }
+      this.search = null;
+      this.findOpen = false;
+      this.findText = '';
+      this.findCount = 0;
+      this.findIndex = -1;
       if (this._offOsc7) {
         try {
           this._offOsc7.dispose();
@@ -1369,5 +1602,79 @@ export default {
 }
 .ssh-term /deep/ .xterm-screen canvas {
   background: transparent;
+}
+/* 查找条：悬浮在终端右上角，right 让开右侧半圆监控/AI 按钮（27px 宽贴右缘） */
+.find-bar {
+  position: absolute;
+  top: 8px;
+  right: 34px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 6px;
+  background: var(--bg-elevated, #1c2430);
+  border: 1px solid var(--border, #2a3544);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+.find-input {
+  box-sizing: border-box;
+  width: 180px;
+  height: 22px;
+  padding: 0 6px;
+  background: transparent;
+  border: 1px solid var(--border, #2a3544);
+  border-radius: 3px;
+  color: var(--text, #e6edf3);
+  font-size: 12px;
+  outline: none;
+}
+.find-input:focus {
+  border-color: var(--accent, #409eff);
+}
+.find-input.no-match {
+  border-color: var(--danger, #f56c6c);
+}
+.find-count {
+  min-width: 52px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3, #5c6b80);
+  user-select: none;
+}
+.find-count.no-match {
+  color: var(--danger, #f56c6c);
+}
+.find-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text-2, #8b9bb0);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.find-btn:hover {
+  background: var(--bg-hover, #243041);
+  color: var(--text, #e6edf3);
+}
+.find-btn.active {
+  color: var(--accent, #409eff);
+  background: var(--accent-soft, rgba(64, 158, 255, 0.15));
+  border-color: var(--accent, #409eff);
+}
+.find-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border, #2a3544);
+  margin: 0 2px;
 }
 </style>

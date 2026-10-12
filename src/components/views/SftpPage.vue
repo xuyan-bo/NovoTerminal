@@ -162,7 +162,7 @@
         class="sftp-ctx-item"
         :class="{ danger: it.danger, disabled: it.disabled }"
         @click="!it.disabled && runCtx(it)"
-      >{{ it.label }}</div>
+      ><i v-if="it.icon" :class="['ctx-icon', it.icon]" aria-hidden="true"></i>{{ it.label }}</div>
     </div>
 
     <sftp-name-dialog ref="nameDialog" />
@@ -903,14 +903,14 @@ export default {
       const computerView = side === 'local' && this.localComputer;
       const items = [];
       if (!computerView) {
-        items.push({ act: 'mkdir', label: t('sftp.mkdir') });
-        items.push({ act: 'mkfile', label: t('sftp.mkfile') });
+        items.push({ act: 'mkdir', label: t('sftp.mkdir'), icon: 'el-icon-folder-add' });
+        items.push({ act: 'mkfile', label: t('sftp.mkfile'), icon: 'el-icon-document' });
       }
       if (side === 'remote') {
-        items.push({ act: 'paste', label: t('sftp.paste'), disabled: !this.clipHasFiles });
+        items.push({ act: 'paste', label: t('sftp.paste'), icon: 'el-icon-document-add', disabled: !this.clipHasFiles });
       }
-      items.push({ act: 'refresh', label: t('sftp.refresh') });
-      if (!computerView) items.push({ act: 'select-all', label: t('sftp.selectAll') });
+      items.push({ act: 'refresh', label: t('sftp.refresh'), icon: 'el-icon-refresh' });
+      if (!computerView) items.push({ act: 'select-all', label: t('sftp.selectAll'), icon: 'el-icon-finished' });
       this.openCtxAt(e, side, null, items);
       if (side === 'remote') this.refreshClipFiles();
     },
@@ -952,20 +952,20 @@ export default {
       const many = targets.length > 1;
       const items = [];
       if (side === 'local') {
-        if (many) items.push({ act: 'upload-selected', label: t('sftp.uploadSelected') });
-        else if (f.isDir) items.push({ act: 'upload-folder', label: t('sftp.uploadFolder') });
-        else items.push({ act: 'upload-file', label: t('sftp.uploadFile') });
+        if (many) items.push({ act: 'upload-selected', label: t('sftp.uploadSelected'), icon: 'el-icon-upload2' });
+        else if (f.isDir) items.push({ act: 'upload-folder', label: t('sftp.uploadFolder'), icon: 'el-icon-upload2' });
+        else items.push({ act: 'upload-file', label: t('sftp.uploadFile'), icon: 'el-icon-upload2' });
       } else if (many || !f.isDir) {
-        items.push({ act: 'download-here', label: t('sftp.downloadHere') });
-        items.push({ act: 'download-to', label: t('sftp.downloadTo') });
+        items.push({ act: 'download-here', label: t('sftp.downloadHere'), icon: 'el-icon-download' });
+        items.push({ act: 'download-to', label: t('sftp.downloadTo'), icon: 'el-icon-download' });
       } else {
-        items.push({ act: 'download-folder', label: t('sftp.downloadFolder') });
+        items.push({ act: 'download-folder', label: t('sftp.downloadFolder'), icon: 'el-icon-download' });
       }
       if (!many) {
-        if (!f.isDir) items.push({ act: 'edit', label: t('sftp.edit') });
-        items.push({ act: 'rename', label: t('sftp.rename') });
+        if (!f.isDir) items.push({ act: 'edit', label: t('sftp.edit'), icon: 'el-icon-edit' });
+        items.push({ act: 'rename', label: t('sftp.rename'), icon: 'el-icon-edit-outline' });
       }
-      items.push({ act: 'delete', label: t('sftp.delete'), danger: true });
+      items.push({ act: 'delete', label: t('sftp.delete'), icon: 'el-icon-delete', danger: true });
       this.openCtxAt(e, side, f, items);
     },
     /** 远端侧（以及本机→远端的上传）要先有连接；本机侧操作不该依赖有没有页签。 */
@@ -1283,10 +1283,17 @@ export default {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 .sftp-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 7px 14px;
   font-size: 12px;
   color: var(--text-2);
   cursor: pointer;
+}
+/* 图标颜色跟随菜单项文字（hover/危险/置灰态一起变），覆盖全局 ctx-icon 的固定色 */
+.sftp-ctx-item .ctx-icon {
+  color: inherit;
 }
 .sftp-ctx-item:hover {
   background: var(--accent-soft);
