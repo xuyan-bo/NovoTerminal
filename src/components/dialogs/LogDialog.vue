@@ -10,7 +10,7 @@
     <div class="log-toolbar">
       <el-select
         v-model="level"
-        size="mini"
+        size="small"
         style="width: 120px"
         :placeholder="$t('log.allLevels')"
         @change="reload"
@@ -22,16 +22,17 @@
       </el-select>
       <el-input
         v-model="keyword"
-        size="mini"
+        size="small"
         :placeholder="$t('log.keyword')"
         clearable
+        prefix-icon="el-icon-search"
         style="width: 240px"
         @keyup.enter.native="reload"
         @clear="reload"
       />
-      <el-button size="mini" @click="load">{{ $t('log.refresh') }}</el-button>
+      <el-button size="small" @click="load">{{ $t('log.refresh') }}</el-button>
       <div class="spacer"></div>
-      <el-button size="mini" type="danger" plain :disabled="!total" @click="onClear">
+      <el-button size="small" type="danger" plain icon="el-icon-delete" :disabled="!total" @click="onClear">
         {{ $t('log.clear') }}
       </el-button>
     </div>

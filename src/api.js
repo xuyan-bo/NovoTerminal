@@ -10,6 +10,7 @@ const mockState = {
     { id: 'g-east', pid: 'g-prod', name: '华东区', color: '#67C23A', open: true, nodes: [] },
     { id: 'g-office', pid: '', name: '办公室', color: '#E6A23C', open: true, nodes: [] },
   ],
+  credentials: [],
   recent: [],
 };
 
@@ -67,6 +68,24 @@ export const api = hasBridge
         return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       async removeRecent() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async createCredential() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async updateCredential() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async deleteCredential() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async reorderCredential() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async revealCredential() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async browseCredentialKey() {
         return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },
       async sessionDetach() {

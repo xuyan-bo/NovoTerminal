@@ -15,6 +15,14 @@ const LOG_TOTAL_DEFAULT_MB = 20;
 const LOG_TOTAL_MIN_MB = 10;
 const LOG_TOTAL_MAX_MB = 200;
 
+/** 凭据库的取值边界：秘密字段整库密文落盘，这里只收类型与长度，不做字段级加密。 */
+const CREDENTIAL_KINDS = ['password', 'key'];
+const CREDENTIAL_NAME_MAX = 128;
+const CREDENTIAL_USER_MAX = 256;
+const CREDENTIAL_NOTE_MAX = 512;
+const CREDENTIAL_SECRET_MAX = 8192;
+const CREDENTIAL_PASSPHRASE_MAX = 512;
+
 /** 最近连接缺端口时的回落值；只登记主进程真正支持的协议 */
 const RECENT_DEFAULT_PORTS = new Map([
   ['ssh', 22],
@@ -32,10 +40,52 @@ function defaultFileEditor() {
   return 'xdg-open';
 }
 
+/** 文本型凭据字段的边界收敛：脏值、非字符串都回落到空串。 */
+function credText(value, max) {
+  const s = typeof value === 'string' ? value : value == null ? '' : String(value);
+  return s.slice(0, max);
+}
+
+/** 快照会下发到每个窗口，凭据只带摘要；秘密字段留在主进程，取用走 credential:reveal。 */
+function credentialSummary(c) {
+  return {
+    id: c.id,
+    kind: c.kind,
+    name: c.name,
+    user: c.user || '',
+    note: c.note || '',
+    createdAt: c.createdAt || 0,
+    updatedAt: c.updatedAt || 0,
+  };
+}
+
+/** 表单提交与持久化记录共用同一套归一化，只保留当前类型用到的秘密。 */
+function normalizeCredential(input, base) {
+  const src = input && typeof input === 'object' ? input : {};
+  const kind = CREDENTIAL_KINDS.includes(src.kind) ? src.kind : 'password';
+  const out = {
+    id: base && base.id ? base.id : newId('c'),
+    kind,
+    name: credText(src.name, CREDENTIAL_NAME_MAX).trim(),
+    user: credText(src.user, CREDENTIAL_USER_MAX),
+    note: credText(src.note, CREDENTIAL_NOTE_MAX),
+    createdAt: base && base.createdAt ? base.createdAt : Date.now(),
+    updatedAt: Date.now(),
+  };
+  if (kind === 'key') {
+    out.privateKey = credText(src.privateKey, CREDENTIAL_SECRET_MAX);
+    out.passphrase = credText(src.passphrase, CREDENTIAL_PASSPHRASE_MAX);
+  } else {
+    out.pass = credText(src.pass, CREDENTIAL_SECRET_MAX);
+  }
+  return out;
+}
+
 function defaultData() {
   return {
     version: 2,
     groups: [],
+    credentials: [],
     recent: [],
     settings: {
       theme: 'system',
@@ -204,6 +254,10 @@ class AssetStore {
     }
     const data = Object.assign(defaultData(), parsed);
     data.settings = Object.assign(defaultData().settings, parsed.settings || {});
+    // 手改或旧库的凭据段可能缺项/带脏值，一律按表单同一套边界收敛
+    data.credentials = (Array.isArray(parsed.credentials) ? parsed.credentials : [])
+      .filter((c) => c && typeof c === 'object' && c.id)
+      .map((c) => normalizeCredential(c, c));
     return data;
   }
 
@@ -308,7 +362,9 @@ class AssetStore {
 
   snapshot() {
     this.data.settings.dataPath = path.dirname(this.file);
-    return JSON.parse(JSON.stringify(this.data));
+    const data = JSON.parse(JSON.stringify(this.data));
+    data.credentials = (data.credentials || []).map(credentialSummary);
+    return data;
   }
 
   /** 展开/折叠这类高频小改动合并落盘，避免每次点击都同步重写整个数据文件 */
@@ -607,6 +663,72 @@ class AssetStore {
     return this.snapshot();
   }
 
+  findCredential(cid) {
+    return cid ? this.data.credentials.find((c) => c.id === cid) || null : null;
+  }
+
+  requireCredential(cid) {
+    const c = this.findCredential(cid);
+    if (!c) {
+      throw new Error(this.L('凭据不存在或已被删除', 'Credential not found'));
+    }
+    return c;
+  }
+
+  createCredential(payload) {
+    const credential = normalizeCredential(payload, null);
+    credential.name = credential.name || this.L('未命名凭据', 'Unnamed credential');
+    this.data.credentials.push(credential);
+    this.persist();
+    this.logEvent('info', 'credential created', {
+      credentialId: credential.id,
+      name: credential.name,
+      kind: credential.kind,
+    });
+    return this.snapshot();
+  }
+
+  /** 换类型即换字段：normalizeCredential 只保留当前 kind 用到的秘密，另一类的旧值自然消失。 */
+  updateCredential(cid, payload) {
+    const current = this.requireCredential(cid);
+    const index = this.data.credentials.indexOf(current);
+    const credential = normalizeCredential(payload, current);
+    credential.name = credential.name || this.L('未命名凭据', 'Unnamed credential');
+    this.data.credentials[index] = credential;
+    this.persist();
+    this.logEvent('info', 'credential updated', {
+      credentialId: cid,
+      name: credential.name,
+      kind: credential.kind,
+    });
+    return this.snapshot();
+  }
+
+  deleteCredential(cid) {
+    const current = this.requireCredential(cid);
+    this.data.credentials = this.data.credentials.filter((c) => c !== current);
+    this.persist();
+    this.logEvent('info', 'credential deleted', { credentialId: cid, name: current.name });
+    return this.snapshot();
+  }
+
+  /** 凭据列表是扁平数组，排序只按参考点插入；beforeId 为空表示移到末尾。 */
+  reorderCredential(p) {
+    const fromId = p && p.fromId;
+    const moved = this.requireCredential(fromId);
+    const beforeId = p && p.beforeId && p.beforeId !== fromId ? p.beforeId : null;
+    const before = beforeId ? this.requireCredential(beforeId) : null;
+    this.data.credentials.splice(this.data.credentials.indexOf(moved), 1);
+    this.data.credentials.splice(
+      before ? this.data.credentials.indexOf(before) : this.data.credentials.length,
+      0,
+      moved
+    );
+    this.persist();
+    this.logEvent('info', 'credential moved', { credentialId: fromId, beforeId });
+    return this.snapshot();
+  }
+
   /** 最近连接上限：设置值越界或缺失都回落到默认 20。 */
   recentCap() {
     const n = Number(this.data.settings && this.data.settings.recentLimit);
@@ -680,6 +802,7 @@ class AssetStore {
 
 module.exports = {
   AssetStore,
+  CREDENTIAL_SECRET_MAX,
   RECENT_LIMIT_DEFAULT,
   RECENT_LIMIT_MAX,
   LOG_TOTAL_DEFAULT_MB,

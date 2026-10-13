@@ -8,6 +8,7 @@ const { execFile } = require('child_process');
 const APP_BUILD = 'rd2-1647';
 const {
   AssetStore,
+  CREDENTIAL_SECRET_MAX,
   RECENT_LIMIT_DEFAULT,
   RECENT_LIMIT_MAX,
   LOG_TOTAL_DEFAULT_MB,
@@ -765,6 +766,15 @@ function isProgramPath(p) {
   }
 }
 
+/** 私钥文件必须是文本私钥：PEM 各家族、SSH2 与 PuTTY PPK 都认，二进制一律不认。 */
+function isPrivateKeyFileText(text) {
+  if (typeof text !== 'string' || !text || text.indexOf('\0') >= 0) return false;
+  return (
+    /-{3,}\s*(BEGIN|START)[A-Z0-9 ]*PRIVATE KEY/.test(text.slice(0, 200)) ||
+    /^(sshprivate-v1|PuTTY-User-Key-File-)/.test(text)
+  );
+}
+
 function untrustedSenderError() {
   return Object.assign(new Error('Untrusted SSH IPC sender'), { code: 'SSH_OWNER' });
 }
@@ -898,6 +908,60 @@ function registerIpc() {
   handle('store:update-asset', (aid, p) => unwrap(store.updateAsset(aid, p)));
   handle('store:delete-asset', (aid) => unwrap(store.deleteAsset(aid)));
   handle('store:remove-recent', (p) => unwrap(store.removeRecent(p && p.id, p && p.method)));
+  handle('credential:create', (p) => unwrap(store.createCredential(p)));
+  handle('credential:update', (cid, p) => unwrap(store.updateCredential(cid, p)));
+  handle('credential:delete', (cid) => unwrap(store.deleteCredential(cid)));
+  handle('credential:reorder', (p) => unwrap(store.reorderCredential(p)));
+  /** 凭据的秘密字段只从这条通道离开主进程：限宿主窗口，且必须先过系统身份验证。 */
+  handle('credential:reveal', async (sender, cid) => {
+    if (!isMainWindow(sender)) {
+      throw Object.assign(new Error('credential reveal is limited to the main window'), {
+        code: 'CREDENTIAL_SCOPE',
+      });
+    }
+    const lang = store.getSettings().lang;
+    const auth = await verifySystemAuth(store.L('查看凭据内容', 'Reveal credential'), mainWindowHwnd(), {
+      lang,
+      log: logger,
+    });
+    if (!auth.ok) {
+      throw Object.assign(
+        new Error(auth.message || (lang === 'en' ? 'System identity verification failed' : '系统身份验证失败')),
+        { code: auth.code || 'AUTH_FAILED' }
+      );
+    }
+    logger.info('credentials', 'credential revealed', { credentialId: cid });
+    return store.requireCredential(cid);
+  }, true);
+  /** 私钥文件浏览：只挑文件、读内容回渲染端填表，落库仍走 credential:create/update；取消回 null。 */
+  handle('credential:browse-key', async (sender) => {
+    if (!isMainWindow(sender)) {
+      throw Object.assign(new Error('credential key pick is limited to the main window'), {
+        code: 'CREDENTIAL_SCOPE',
+      });
+    }
+    const en = store.getSettings().lang === 'en';
+    const r = await dialog.showOpenDialog(win, {
+      properties: ['openFile'],
+      title: en ? 'Select private key file' : '选择私钥文件',
+    });
+    if (r.canceled || !r.filePaths[0]) return null;
+    const p = r.filePaths[0];
+    // 私钥文件按约定都是文本封装（含 OpenSSH 与 PPK 的 base64 段），超限或带 NUL 一律不收
+    const st = await fs.promises.stat(p);
+    if (!st.isFile()) throw Object.assign(new Error('picked path is not a file'), { code: 'NOT_PRIVATE_KEY' });
+    if (st.size > CREDENTIAL_SECRET_MAX) {
+      logger.warn('credentials', 'private key pick rejected', { path: p, size: st.size });
+      throw Object.assign(new Error('private key file is too large'), { code: 'KEY_TOO_LARGE' });
+    }
+    const content = await fs.promises.readFile(p, 'utf8');
+    if (!isPrivateKeyFileText(content)) {
+      logger.warn('credentials', 'private key pick rejected', { path: p, reason: 'not-a-private-key' });
+      throw Object.assign(new Error('picked file is not a private key'), { code: 'NOT_PRIVATE_KEY' });
+    }
+    logger.info('credentials', 'private key loaded', { path: p, bytes: st.size });
+    return { content };
+  }, true);
   handle('store:settings', (sender) => {
     const s = store.getSettings();
     return isMainWindow(sender) ? s : withoutAiKeys(s);

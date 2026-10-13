@@ -43,6 +43,7 @@
     </div>
 
     <settings-dialog />
+    <credential-dialog />
     <backup-dialog />
     <log-dialog />
     <asset-dialog />
@@ -59,6 +60,7 @@
 import SideBar from './components/panels/SideBar.vue';
 import TabBar from './components/panels/TabBar.vue';
 import SettingsDialog from './components/dialogs/SettingsDialog.vue';
+import CredentialDialog from './components/dialogs/CredentialDialog.vue';
 import BackupDialog from './components/dialogs/BackupDialog.vue';
 import LogDialog from './components/dialogs/LogDialog.vue';
 import AssetDialog from './components/dialogs/AssetDialog.vue';
@@ -110,6 +112,7 @@ export default {
     TabBar,
     HomeView: () => import('./components/views/HomeView.vue'),
     SettingsDialog,
+    CredentialDialog,
     BackupDialog,
     LogDialog,
     AssetDialog,

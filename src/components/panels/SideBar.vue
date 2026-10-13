@@ -65,6 +65,14 @@
       <button
         type="button"
         class="gear-btn"
+        :title="$t('nav.credentials')"
+        @click="openCredentials"
+      >
+        <i class="el-icon-key gear-icon"></i>
+      </button>
+      <button
+        type="button"
+        class="gear-btn"
         :title="$t('nav.logs')"
         @click="openLog"
       >
@@ -171,6 +179,9 @@ export default {
     },
     openLog() {
       store.logDialog = true;
+    },
+    openCredentials() {
+      store.credentialDialog = true;
     },
     methodsOf(n) {
       return enabledMethods(n);
@@ -399,5 +410,8 @@ export default {
 /* 双击资产仍然打开详情页，单击只负责选中 */
 .tn-asset {
   cursor: pointer;
+}
+.gear-icon {
+  font-size: 16px;
 }
 </style>

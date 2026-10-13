@@ -5,12 +5,13 @@ import { osCatalog, resolveAdvanced } from './constants';
 import { getProtocol, protocolLabel } from './protocols';
 
 export const store = Vue.observable({
-  snapshot: { groups: [], recent: [], settings: { theme: 'system', lang: 'zh', dataPath: '', zoom: 100, font: 'default' } },
+  snapshot: { groups: [], credentials: [], recent: [], settings: { theme: 'system', lang: 'zh', dataPath: '', zoom: 100, font: 'default' } },
   activeTab: 'home',
   tabs: [{ id: 'home', title: '首页', closable: false, icon: 'el-icon-s-home', titleKey: 'nav.home' }],
   activeAssetId: null,
   activeGroupId: null,
   settingsDialog: false,
+  credentialDialog: false,
   /** 更新检查结果 { current, latest, notes, url }；弹窗开关独立，关闭结果仍保留 */
   update: null,
   updateDialog: false,
@@ -397,6 +398,26 @@ export async function updateAsset(aid, payload) {
 
 export async function deleteAsset(aid) {
   unwrap(await api.deleteAsset(aid));
+  await refresh();
+}
+
+export async function createCredential(payload) {
+  unwrap(await api.createCredential(payload));
+  await refresh();
+}
+
+export async function updateCredential(cid, payload) {
+  unwrap(await api.updateCredential(cid, payload));
+  await refresh();
+}
+
+export async function deleteCredential(cid) {
+  unwrap(await api.deleteCredential(cid));
+  await refresh();
+}
+
+export async function reorderCredential(payload) {
+  unwrap(await api.reorderCredential(payload));
   await refresh();
 }
 
