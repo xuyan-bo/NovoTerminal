@@ -51,6 +51,9 @@ import createFullscreenMixin from '../session/fullscreen';
 /** 页签状态点：ended 与 idle 同样归为未连接的灰色。 */
 const DOT_STATE = { connecting: 'connecting', ready: 'ready', error: 'error' };
 
+/** 认证失败后当场自动重问几次（与主进程 SSH_AUTH_RETRY 同值） */
+const VNC_AUTH_RETRY = 2;
+
 export default {
   name: 'VncView',
   mixins: [createFullscreenMixin({
@@ -126,6 +129,8 @@ export default {
     this._resizeObserver = null;
     this._disposed = false;
     this._connectVersion = 0;
+    this._reask = false;
+    this._authTries = 0;
     this.connect();
   },
   beforeDestroy() {
@@ -151,12 +156,13 @@ export default {
       }
 
       try {
-        const asset = findAsset(this.assetId);
-        const method = asset && asset.asset && asset.asset.methods && asset.asset.methods[this.methodId];
-        const advPassword = (method && method.advanced && method.advanced.password) || '';
-        const password = advPassword || (asset && asset.asset && asset.asset.pass) || '';
+        // noVNC 在渲染端做 RFB 握手，口令由主进程按凭证配置解析后只回给这个窗口
+        const auth = unwrap(
+          await api.sessionAuth({ assetId: this.assetId, methodId: this.methodId, reask: this._reask })
+        );
+        const password = auth.password || '';
         // RA2ne/ARD/MSLogonII 这几类安全类型必须带用户名，标准 VNC 认证会忽略它
-        const username = (asset && asset.asset && asset.asset.user) || '';
+        const username = auth.username || '';
 
         const r = unwrap(
           await api.vncConnect({
@@ -220,9 +226,32 @@ export default {
           if (this.rfb !== rfb) return;
           this.status = 'ready';
           this.statusDetail = '';
+          this._reask = false;
+          this._authTries = 0;
           this._applyVncScale();
           if (r.clipboard !== false && !rfb.viewOnly) {
             this._cleanupClipboard = this._setupClipboard(rfb);
+          }
+        });
+
+        /**
+         * RFB 握手阶段被服务器拒绝：noVNC 会先派 securityfailure（带服务器给的 Reason），
+         * 紧接着 _fail 关链再派 disconnect。不接住它就会被下面的 disconnect 归成「已断开」，
+         * 用户只能看到下一次重连时的 ECONNREFUSED（服务器多半已经退出或把本机拉黑），猜不到是口令错。
+         */
+        rfb.addEventListener('securityfailure', (e) => {
+          if (this.rfb !== rfb) return;
+          const reason = (e.detail && e.detail.reason) || '';
+          this.status = 'error';
+          this.statusDetail = reason ? `${t('vnc.authFailed')} — ${reason}` : t('vnc.authFailed');
+          this._reask = true;
+          /**
+           * 认证失败当场重新要一次凭证（与 SSH 的重问一致），而不是等用户去点重连。
+           * RFB 失败即断链，只能重新建连；上限同 SSH_AUTH_RETRY，防撞 TigerVNC 的失败黑名单。
+           */
+          if (this._authTries < VNC_AUTH_RETRY) {
+            this._authTries += 1;
+            this.connect();
           }
         });
 
@@ -401,6 +430,8 @@ export default {
     },
 
     reconnect() {
+      // 手动重连给一次新的重问预算
+      this._authTries = 0;
       this.connect();
     },
 

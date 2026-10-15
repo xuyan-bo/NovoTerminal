@@ -644,6 +644,15 @@ button {
   border-color: rgba(32, 182, 182, 0.45);
   color: #5fd3d3;
 }
+/* 凭证类型胶囊：资产与方式的下拉把选项 teleport 到 body，scoped 样式够不到，只能全局定义 */
+.pill.cred-kind-pass {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.pill.cred-kind-key {
+  border-color: var(--success);
+  color: var(--success);
+}
 
 .side-footer {
   border-top: 1px solid var(--border);
@@ -761,32 +770,6 @@ button {
 }
 .conn-dot.error {
   background: var(--danger);
-}
-
-.tab-os {
-  width: 14px;
-  height: 14px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  line-height: 0;
-}
-
-.tab-os svg {
-  width: 14px;
-  height: 14px;
-  display: block;
-}
-
-.tab-os.os-win {
-  color: var(--win);
-}
-.tab-os.os-mac {
-  color: var(--mac);
-}
-.tab-os.os-linux {
-  color: var(--linux);
 }
 
 .tab:hover {
@@ -1227,15 +1210,6 @@ button {
   cursor: not-allowed;
 }
 
-.badge-primary {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  background: rgba(64, 158, 255, 0.15);
-  color: var(--accent);
-  border: 1px solid rgba(64, 158, 255, 0.35);
-}
-
 /* settings */
 .set-row {
   display: grid;
@@ -1310,73 +1284,6 @@ button {
 .method-row.on {
   border-color: rgba(64, 158, 255, 0.45);
   background: rgba(64, 158, 255, 0.06);
-}
-
-.type-cards {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.type-card {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-panel);
-  padding: 12px;
-  text-align: center;
-  cursor: pointer;
-}
-.type-card.disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-.type-card .os-slot {
-  height: 32px;
-  display: grid;
-  place-items: center;
-  margin-bottom: 6px;
-  line-height: 0;
-}
-.type-card .os-slot svg {
-  width: 30px;
-  height: 30px;
-  display: block;
-}
-.type-card .os-slot.win {
-  color: var(--win);
-}
-.type-card .os-slot.mac {
-  color: var(--mac);
-}
-.type-card .os-slot.linux {
-  color: var(--linux);
-}
-
-.type-card.on {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.type-card.win.on {
-  border-color: var(--win);
-}
-.type-card.mac.on {
-  border-color: var(--mac);
-}
-.type-card.linux.on {
-  border-color: var(--linux);
-}
-
-.type-card .nm {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.type-card .sub {
-  font-size: 11px;
-  color: var(--text-2);
-  margin-top: 4px;
 }
 
 .ctx-menu {

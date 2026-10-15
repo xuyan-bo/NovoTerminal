@@ -1,8 +1,8 @@
 import Vue from 'vue';
 import { api, unwrap } from './api';
 import { applySettings, t } from './i18n';
-import { osCatalog, resolveAdvanced } from './constants';
-import { getProtocol, protocolLabel } from './protocols';
+import { resolveAdvanced } from './constants';
+import { getProtocol } from './protocols';
 
 export const store = Vue.observable({
   snapshot: { groups: [], credentials: [], recent: [], settings: { theme: 'system', lang: 'zh', dataPath: '', zoom: 100, font: 'default' } },
@@ -28,6 +28,16 @@ export const store = Vue.observable({
     context: null,
   },
   methodAdvancedResult: null,
+  /** 方式级凭证子表单：与高级设置同一套「草稿进、结果出」的嵌套弹窗约定 */
+  methodAuthDialog: {
+    visible: false,
+    methodId: '',
+    methodName: '',
+    auth: null,
+    main: { mode: 'none', kind: '' },
+    authKinds: [],
+  },
+  methodAuthResult: null,
   localeTick: 0,
   /** 跟随系统主题被 OS 翻转时由 App.vue 递增；只改 DOM 类不会惊动任何渲染依赖 */
   themeTick: 0,
@@ -198,7 +208,6 @@ export function tabPayload(tab) {
     kind: tab.kind,
     title: tab.title || '',
     icon: tab.icon || '',
-    os: tab.os || '',
     assetId: tab.assetId || '',
     methodId: tab.methodId || tab.kind,
     host: tab.host || '',
@@ -429,24 +438,41 @@ export function findAsset(aid) {
   return null;
 }
 
+/**
+ * 资产已配置的访问方式，按用户添加的先后排列（方式不再由资产图标决定）。
+ * 未登记的协议 id 直接忽略，不会被当成任何一种已知协议。
+ */
 export function enabledMethods(asset) {
   if (!asset || !asset.methods) return [];
-  const cat = osCatalog(asset.os);
   const out = [];
-  for (const meta of cat) {
-    const conf = asset.methods[meta.id];
-    if (conf && conf.enabled) {
-      out.push({
-        ...meta,
-        proto: protocolLabel(meta.id),
-        port: conf.port || meta.defaultPort,
-        enabled: true,
-        advanced: conf.advanced || null,
-      });
-    }
+  for (const id of Object.keys(asset.methods)) {
+    const protocol = getProtocol(id);
+    const conf = asset.methods[id];
+    if (!protocol || !conf) continue;
+    out.push({
+      id,
+      nameKey: protocol.nameKey,
+      descKey: protocol.descKey,
+      defaultPort: protocol.defaultPort,
+      port: conf.port || protocol.defaultPort,
+      advanced: conf.advanced || null,
+      auth: conf.auth || null,
+    });
   }
-  out.sort((a, b) => (b.rec ? 1 : 0) - (a.rec ? 1 : 0));
   return out;
+}
+
+/**
+ * 树上显示的登录名：用户名属于凭证，所以按主凭证的取法回查——手填取 auth.user，
+ * 引用凭证取库里那条的 user；连接时询问与未设置都没有可显示的登录名。
+ */
+export function assetDisplayUser(asset, credentials) {
+  const auth = asset && asset.auth;
+  if (!auth) return '';
+  if (auth.mode === 'inline') return auth.user || '';
+  if (auth.mode !== 'credential') return '';
+  const hit = (credentials || []).find((c) => c.id === auth.credentialId);
+  return hit ? hit.user || '' : '';
 }
 
 export function openMethodAdvanced({ methodId, methodName, advanced, context }) {
@@ -457,6 +483,19 @@ export function openMethodAdvanced({ methodId, methodName, advanced, context }) 
     methodName: methodName || methodId,
     advanced: advanced || {},
     context: context || null,
+  };
+}
+
+/** main 带 mode 与 kind：私钥型主凭证对只吃口令的方式不可用，子弹窗据此置灰选项 */
+export function openMethodAuth({ methodId, methodName, auth, main, authKinds }) {
+  store.methodAuthResult = null;
+  store.methodAuthDialog = {
+    visible: true,
+    methodId,
+    methodName: methodName || methodId,
+    auth: auth || null,
+    main: main || { mode: 'none', kind: '' },
+    authKinds: authKinds || ['password'],
   };
 }
 

@@ -138,23 +138,10 @@ export default {
         const colors = { ...(prev.advanced?.colors || {}), ...resolveSshTheme(this.form) };
         methods.ssh = {
           ...prev,
-          // 保存配色不应顺手把 SSH 方法启用：沿用原状态，仅在没有记录时默认启用
-          enabled: prev.enabled !== false,
           advanced: { ...(prev.advanced || {}), colors },
         };
-        unwrap(
-          await api.updateAsset(this.assetId, {
-            methods,
-            name: hit.asset.name,
-            os: hit.asset.os,
-            host: hit.asset.host,
-            user: hit.asset.user,
-            pass: hit.asset.pass,
-            tags: hit.asset.tags,
-            note: hit.asset.note,
-            gid: hit.group.id,
-          })
-        );
+        // 只提交 methods：其余字段由主进程按「未提供即保持原值」处理，不把密码回显进这条调用
+        unwrap(await api.updateAsset(this.assetId, { methods }));
         await refresh();
         api.logWrite?.({
           level: 'info', source: 'settings', message: 'ssh theme saved',

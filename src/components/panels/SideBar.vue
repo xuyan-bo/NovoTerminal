@@ -31,7 +31,8 @@
               <span class="pill">{{ data.count }}</span>
             </div>
             <div v-else class="tn tn-asset" @dblclick="onDblAsset(data)">
-              <span class="os-icon" :class="'os-' + data.raw.os" v-html="osSvg(data.raw.os)"></span>
+              <i v-if="iconGlyph(data.raw.icon)" class="os-icon" :class="iconGlyph(data.raw.icon)"></i>
+              <span v-else class="os-icon" :class="'os-' + data.raw.icon" v-html="iconSvg(data.raw.icon)"></span>
               <div class="tn-meta">
                 <div class="tn-name" :title="data.raw.name">{{ data.raw.name }}</div>
                 <div class="tn-pills">
@@ -96,8 +97,9 @@ import {
   reorderAsset,
   deleteGroup,
   deleteAsset,
+  assetDisplayUser,
 } from '../../store';
-import { osIcon, methodPillClass } from '../../constants';
+import { assetIcon, assetIconGlyph, methodPillClass } from '../../constants';
 import { protocolLabel } from '../../protocols';
 import { buildAssetTree, filterTree, folderKeys, isDescendantOf } from '../../lib/assetTree';
 import CtxMenu from '../common/CtxMenu.vue';
@@ -171,11 +173,15 @@ export default {
     this.$root.$off('open-settings', this._openSettings);
   },
   methods: {
-    osSvg(os) {
-      return osIcon(os);
+    iconSvg(icon) {
+      return assetIcon(icon);
+    },
+    iconGlyph(icon) {
+      return assetIconGlyph(icon);
     },
     hostLabel(n) {
-      return n.user ? n.host + ' · ' + n.user : n.host;
+      const user = assetDisplayUser(n, store.snapshot.credentials);
+      return user ? n.host + ' · ' + user : n.host;
     },
     openLog() {
       store.logDialog = true;

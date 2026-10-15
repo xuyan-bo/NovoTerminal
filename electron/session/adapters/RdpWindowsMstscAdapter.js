@@ -73,14 +73,13 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
       try { if (fs.existsSync(adv) && this.matchesBinary(adv)) mstsc = adv; } catch (_) {}
     }
     const args = this.buildMstscArgs(payload);
-    const password = payload._password;
-    const credTarget =
-      password && payload.auth && payload.auth.mode === 'cmdkey'
-        ? credentialTarget(payload.asset.host)
-        : '';
+    const auth = payload.auth || {};
+    const password = auth.password || '';
+    // mstsc 没有命令行口令参数：把库里的凭证写进 Windows 凭证管理器，它自己认领，避免弹框
+    const credTarget = password ? credentialTarget(payload.asset.host) : '';
     if (credTarget) {
       const cmdArgs = ['/generic:' + credTarget];
-      if (payload.asset.user) cmdArgs.push(`/user:${payload.asset.user}`);
+      if (auth.username) cmdArgs.push(`/user:${auth.username}`);
       cmdArgs.push('/pass:' + password);
       await new Promise((resolveStep) => {
         execFile('cmdkey.exe', cmdArgs, (error) => {
@@ -135,7 +134,7 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
     if (!entry) return false;
     this.sessions.delete(sessionId);
     if (entry.credTarget) {
-      // 只回收我们自己写的那条 generic 凭据，用户在 mstsc 里勾「记住我的凭据」留下的条目不动
+      // 只回收我们自己写的那条 generic 凭证，用户在 mstsc 里勾「记住我的凭证」留下的条目不动
       execFile('cmdkey.exe', ['/delete:' + entry.credTarget], (error) => {
         if (error && this.log) {
           this.log.warn('rdp', 'cmdkey credential cleanup failed', {

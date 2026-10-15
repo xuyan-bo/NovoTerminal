@@ -21,7 +21,7 @@
  * `nohup`、`strace`、`perf`、`watch`、`time`）会把参数当命令跑；常驻或交互式（`less`、`more`、
  * `vi`、`top`、`htop`、`dstat`、`mtr`）等不到结束标记；`ldd` 实际会拿目标二进制跑
  * 一遍动态链接器；`mysql`/`psql`/`redis-cli` 的语句直接写在 argv 里，判不了。
- * `curl`/`wget`/`nc`/`nmap` 会对外发起请求，metadata 地址还能钓出临时凭据，全部保持要确认。
+ * `curl`/`wget`/`nc`/`nmap` 会对外发起请求，metadata 地址还能钓出临时凭证，全部保持要确认。
  * Windows 自带 curl.exe，PowerShell 里 `curl`/`wget` 还是 Invoke-WebRequest 的别名，同样不在表里。
  */
 

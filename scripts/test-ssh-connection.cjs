@@ -142,15 +142,13 @@ function localConnection(t, server, options = {}) {
   return connection;
 }
 
-test('advanced defaults, enum validation, strict booleans and passphrase whitespace', () => {
-  assert.equal(Object.keys(SSH_DEFAULTS).length, 11);
+test('advanced defaults, enum validation and strict booleans', () => {
+  assert.equal(Object.keys(SSH_DEFAULTS).length, 8);
   assert.deepEqual(resolveAdvanced(), SSH_DEFAULTS);
   assert.deepEqual(resolveAdvanced(null), SSH_DEFAULTS);
   assert.equal(resolveAdvanced({ keepAlive: ' 0 ' }).keepAlive, 0);
   assert.equal(resolveAdvanced({ keepAlive: 3600 }).keepAlive, 3600);
   assert.equal(resolveAdvanced({ keepAlive: '', term: ' ' }).term, 'xterm-256color');
-  assert.equal(resolveAdvanced({ privateKeyPassphrase: '  fixture secret  ' }).privateKeyPassphrase, '  fixture secret  ');
-  assert.equal(resolveAdvanced({ privateKeyPath: ' ~/fixture.pem ' }).privateKeyPath, '~/fixture.pem');
   assert.equal(resolveAdvanced({ x11Display: ' localhost:0.0 ' }).x11Display, 'localhost:0.0');
   assert.equal(resolveAdvanced({ x11Forward: true, compression: true }).compression, true);
   assert.equal(resolveAdvanced(Object.create({ compression: true })).compression, false);
@@ -160,14 +158,13 @@ test('advanced defaults, enum validation, strict booleans and passphrase whitesp
   for (const term of ['xterm-256color', 'xterm', 'vt100', 'linux', 'ansi']) {
     assert.equal(resolveAdvanced({ term }).term, term);
   }
-  for (const saved of [[], 'ssh', { charset: 'utf-8' }, { term: 'screen' }, { authType: 'agent' },
-    { hostKeyPolicy: 'off' }, { authType: 'publickey' }, { privateKeyPassphrase: 123 },
-    { keepAlive: Infinity }, { keepAlive: NaN }, { keepAlive: -1 }, { keepAlive: 3601 },
-    { keepAlive: 1.5 }, { keepAlive: true }, { keepAlive: [] }, { keepAlive: '1e2' },
-    { compression: 'false' }, { x11Forward: 1 }, { compression: '' }, { privateKeyPath: 'a\0b' }]) {
+  for (const saved of [[], 'ssh', { charset: 'utf-8' }, { term: 'screen' },
+    { hostKeyPolicy: 'off' }, { keepAlive: Infinity }, { keepAlive: NaN }, { keepAlive: -1 },
+    { keepAlive: 3601 }, { keepAlive: 1.5 }, { keepAlive: true }, { keepAlive: [] },
+    { keepAlive: '1e2' }, { compression: 'false' }, { x11Forward: 1 }, { compression: '' },
+    { x11Display: 'a\0b' }]) {
     assert.throws(() => resolveAdvanced(saved), { code: 'SSH_CONFIG' });
   }
-  assert.equal(resolveAdvanced({ authType: 'publickey', privateKeyPath: 'fixture.pem' }).authType, 'publickey');
 });
 
 test('ProxyJump accepts hostnames, bracketed IPv6, URI usernames and multiple hops', () => {
@@ -380,9 +377,9 @@ test('fake chain: all hosts verified, independent usernames, compression, auth a
   assert.equal(JSON.stringify(log.records).includes('fixture-password'), false);
 });
 
-test('fake password auth ignores unreadable irrelevant private key and keeps default compression off', async () => {
-  const fake = fakeConnection({}, { fs: { promises: { readFile: () => { throw new Error('Must not read'); } } } });
-  const connection = fake.open({ advanced: { privateKeyPath: '~/does-not-exist.pem', privateKeyPassphrase: 'ignored' } });
+test('fake password auth without a private key keeps default compression off', async () => {
+  const fake = fakeConnection();
+  const connection = fake.open();
   const client = await connection.ready;
   assert.deepEqual(client.options.algorithms.compress, ['none']);
   assert.equal(client.options.keepaliveInterval, 30000);
@@ -391,28 +388,23 @@ test('fake password auth ignores unreadable irrelevant private key and keeps def
   connection.close();
 });
 
-test('fake public key auth expands home and passes an encrypted key passphrase to every hop', async (t) => {
-  const { directory } = temporary(t);
+test('fake public key auth passes the encrypted key content and passphrase to every hop', async () => {
   const passphrase = '  fixture passphrase  ';
   const pair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
   const encrypted = pair.privateKey.export({ type: 'pkcs1', format: 'pem', cipher: 'aes-256-cbc', passphrase });
-  fs.writeFileSync(path.join(directory, 'encrypted.pem'), encrypted);
-  const fake = fakeConnection({}, { os: { homedir: () => directory } });
-  const connection = fake.open({ advanced: { authType: 'publickey', privateKeyPath: '~/encrypted.pem',
-    privateKeyPassphrase: passphrase, proxyJump: 'jump.invalid' } });
+  const fake = fakeConnection();
+  const connection = fake.open({ privateKey: encrypted, passphrase, advanced: { proxyJump: 'jump.invalid' } });
   await connection.ready;
   for (const client of fake.clients) {
-    assert.equal(client.options.privateKey.toString(), encrypted);
+    assert.equal(client.options.privateKey, encrypted);
     assert.equal(client.options.passphrase, passphrase);
     assert.deepEqual(client.options.authHandler, ['publickey']);
     assert.equal(client.options.password, undefined);
   }
   connection.close();
-  const invalid = fake.open({ advanced: { authType: 'publickey', privateKeyPath: '~/encrypted.pem', privateKeyPassphrase: 'wrong' } });
+  const invalid = fake.open({ privateKey: encrypted, passphrase: 'wrong' });
   await assert.rejects(invalid.ready, { code: 'SSH_KEY_PARSE' });
   assert.equal(fake.clients.length, 2);
-  const missing = fake.open({ advanced: { authType: 'publickey', privateKeyPath: '~/missing.pem' } });
-  await assert.rejects(missing.ready, { code: 'SSH_KEY_READ' });
 });
 
 test('close before initialization rejects ready once and does not create a Client', async () => {
@@ -428,19 +420,6 @@ test('close before initialization rejects ready once and does not create a Clien
   assert.equal(fake.clients.length, 0);
   assert.equal(closed.length, 1);
   assert.equal(closed[0].code, 'SSH_CANCELED');
-});
-
-test('close during private key read cannot start a late client', async () => {
-  const pending = deferred();
-  const fake = fakeConnection({}, { fs: { promises: { readFile: () => pending.promise } } });
-  const connection = fake.open({ advanced: { authType: 'publickey', privateKeyPath: 'fixture.pem' } });
-  await flush();
-  const rejected = assert.rejects(connection.ready, { code: 'SSH_CANCELED' });
-  connection.close();
-  pending.resolve(Buffer.from(hostPair.private));
-  await rejected;
-  await flush();
-  assert.equal(fake.clients.length, 0);
 });
 
 test('close during host confirmation destroys handshake Client and late approval cannot persist', async (t) => {
@@ -852,19 +831,16 @@ test('local ssh2 Server negotiates enabled/disabled compression and authenticate
 });
 
 test('local ssh2 Server authenticates encrypted private keys without password fallback', { timeout: 15000 }, async (t) => {
-  const { directory } = temporary(t);
   const passphrase = ' fixture encrypted passphrase ';
   const pair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
   const privateKey = pair.privateKey.export({ type: 'pkcs1', format: 'pem', cipher: 'aes-256-cbc', passphrase });
   const publicKey = ssh2.utils.parseKey(privateKey, passphrase);
-  const keyFile = path.join(directory, 'encrypted.pem');
-  fs.writeFileSync(keyFile, privateKey);
   const server = await serverFixture(t, { authenticate: (ctx) => {
     if (ctx.method !== 'publickey' || !ctx.key.data.equals(publicKey.getPublicSSH())) return ctx.reject(['publickey']);
     if (ctx.signature && publicKey.verify(ctx.blob, ctx.signature, ctx.hashAlgo) !== true) return ctx.reject(['publickey']);
     ctx.accept();
   } });
-  const connection = localConnection(t, server, { advanced: { authType: 'publickey', privateKeyPath: keyFile, privateKeyPassphrase: passphrase } });
+  const connection = localConnection(t, server, { privateKey, passphrase });
   await connection.ready;
   assert.ok(server.attempts.length >= 1);
   assert.ok(server.attempts.every(({ method }) => method === 'publickey'));
@@ -874,7 +850,7 @@ test('local ssh2 Server authenticates encrypted private keys without password fa
     if (ctx.method === 'password') return ctx.accept();
     ctx.reject(['password', 'publickey']);
   } });
-  const failed = localConnection(t, rejecting, { advanced: { authType: 'publickey', privateKeyPath: keyFile, privateKeyPassphrase: passphrase } });
+  const failed = localConnection(t, rejecting, { privateKey, passphrase });
   await assert.rejects(failed.ready, { code: 'SSH_AUTH_FAILED' });
   assert.ok(rejecting.attempts.every(({ method }) => method === 'publickey'));
 });

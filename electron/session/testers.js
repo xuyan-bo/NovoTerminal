@@ -47,11 +47,11 @@ function result(ok, code, message, latencyMs, extra) {
 
 // ---------- SSH: real authentication handshake ----------
 
-async function testSsh({ host, port, username, password, advanced, verifyHostKey, promptKeyboard, log, onConnection }) {
+async function testSsh({ host, port, username, password, privateKey, passphrase, advanced, verifyHostKey, promptKeyboard, log, onConnection }) {
   const started = Date.now();
   let connection;
   try {
-    connection = createSshConnection({ host, port: Number(port) || 22, username, password, advanced, verifyHostKey, promptKeyboard, log });
+    connection = createSshConnection({ host, port: Number(port) || 22, username, password, privateKey, passphrase, advanced, verifyHostKey, promptKeyboard, log });
     if (onConnection) onConnection(connection);
     await connection.ready;
     log && log.info('ssh', 'ssh authentication test succeeded', { host, port: Number(port) || 22, durationMs: Date.now() - started });
@@ -74,13 +74,13 @@ async function testSsh({ host, port, username, password, advanced, verifyHostKey
  * SFTP 复用 SSH 认证，因此探测必须在认证之上真正打开 sftp 子系统并完成版本协商：
  * 只有 TCP 可达或 SSH 认证成功都不代表服务器装了 sftp-server。
  */
-async function testSftp({ host, port, username, password, advanced, verifyHostKey, promptKeyboard, log, onConnection }) {
+async function testSftp({ host, port, username, password, privateKey, passphrase, advanced, verifyHostKey, promptKeyboard, log, onConnection }) {
   const started = Date.now();
   const probePort = Number(port) || 22;
   const timeoutMs = sftpTimeoutMs(advanced);
   let connection;
   try {
-    connection = createSshConnection({ host, port: probePort, username, password, advanced, verifyHostKey, promptKeyboard, log, readyTimeout: timeoutMs });
+    connection = createSshConnection({ host, port: probePort, username, password, privateKey, passphrase, advanced, verifyHostKey, promptKeyboard, log, readyTimeout: timeoutMs });
     if (onConnection) onConnection(connection);
     const client = await connection.ready;
     await new Promise((resolve, reject) => {

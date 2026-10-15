@@ -15,15 +15,15 @@
         </div>
         <div class="stat-chips">
           <span class="chip os-chip">
-            <span class="os-icon os-win" v-html="osSvg('win')"></span>
+            <span class="os-icon os-win" v-html="iconSvg('win')"></span>
             {{ $t('os.win') }} <b>{{ osCount.win }}</b>
           </span>
           <span class="chip os-chip">
-            <span class="os-icon os-mac" v-html="osSvg('mac')"></span>
+            <span class="os-icon os-mac" v-html="iconSvg('mac')"></span>
             {{ $t('os.mac') }} <b>{{ osCount.mac }}</b>
           </span>
           <span class="chip os-chip">
-            <span class="os-icon os-linux" v-html="osSvg('linux')"></span>
+            <span class="os-icon os-linux" v-html="iconSvg('linux')"></span>
             {{ $t('os.linux') }} <b>{{ osCount.linux }}</b>
           </span>
         </div>
@@ -39,7 +39,8 @@
           <el-scrollbar class="recent-scroll-wrap">
             <div class="recent-list">
               <div v-for="row in recentRows" :key="row.key" class="recent-item">
-                <span class="os-icon" :class="'os-' + row.os" v-html="osSvg(row.os)"></span>
+                <i v-if="iconGlyph(row.icon)" class="os-icon" :class="iconGlyph(row.icon)"></i>
+                <span v-else class="os-icon" :class="'os-' + row.icon" v-html="iconSvg(row.icon)"></span>
                 <div class="ri-main">
                   <div class="ri-name">{{ row.name }}</div>
                   <div class="ri-sub">{{ row.host }}:{{ row.port }} · {{ row.protoText }}</div>
@@ -78,7 +79,7 @@ import { LegendComponent, TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import { store, findAsset, enabledMethods, connectAsset, connectionErrorMessage, removeRecent } from '../../store';
 import { protocolLabel } from '../../protocols';
-import { osIcon, RECENT_LIMIT_DEFAULT, RECENT_LIMIT_MAX } from '../../constants';
+import { assetIcon, assetIconGlyph, RECENT_LIMIT_DEFAULT, RECENT_LIMIT_MAX } from '../../constants';
 import { t, formatTime } from '../../i18n';
 
 echarts.use([PieChart, LegendComponent, TooltipComponent, CanvasRenderer]);
@@ -113,7 +114,7 @@ export default {
       const c = { win: 0, mac: 0, linux: 0 };
       this.groups.forEach((g) =>
         g.nodes.forEach((n) => {
-          if (c[n.os] != null) c[n.os]++;
+          if (c[n.icon] != null) c[n.icon]++;
         })
       );
       return c;
@@ -137,7 +138,7 @@ export default {
           methodId: r.method,
           method,
           name: (asset && asset.name) || r.name,
-          os: (asset && asset.os) || r.os,
+          icon: (asset && asset.icon) || r.icon,
           host: (asset && asset.host) || r.host,
           port: (method && method.port) || r.port,
           protoText: protocolLabel(r.method),
@@ -183,8 +184,11 @@ export default {
     }
   },
   methods: {
-    osSvg(os) {
-      return osIcon(os);
+    iconSvg(icon) {
+      return assetIcon(icon);
+    },
+    iconGlyph(icon) {
+      return assetIconGlyph(icon);
     },
     /** 主题类写在 DOM 上，必须是每次现读的方法：computed 没有响应依赖，会被永久缓存 */
     isLight() {

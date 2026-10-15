@@ -15,7 +15,7 @@ const LOG_TOTAL_DEFAULT_MB = 20;
 const LOG_TOTAL_MIN_MB = 10;
 const LOG_TOTAL_MAX_MB = 200;
 
-/** 凭据库的取值边界：秘密字段整库密文落盘，这里只收类型与长度，不做字段级加密。 */
+/** 凭证库的取值边界：秘密字段整库密文落盘，这里只收类型与长度，不做字段级加密。 */
 const CREDENTIAL_KINDS = ['password', 'key'];
 const CREDENTIAL_NAME_MAX = 128;
 const CREDENTIAL_USER_MAX = 256;
@@ -40,13 +40,13 @@ function defaultFileEditor() {
   return 'xdg-open';
 }
 
-/** 文本型凭据字段的边界收敛：脏值、非字符串都回落到空串。 */
+/** 文本型凭证字段的边界收敛：脏值、非字符串都回落到空串。 */
 function credText(value, max) {
   const s = typeof value === 'string' ? value : value == null ? '' : String(value);
   return s.slice(0, max);
 }
 
-/** 快照会下发到每个窗口，凭据只带摘要；秘密字段留在主进程，取用走 credential:reveal。 */
+/** 快照会下发到每个窗口，凭证只带摘要；秘密字段留在主进程，取用走 credential:reveal。 */
 function credentialSummary(c) {
   return {
     id: c.id,
@@ -81,9 +81,120 @@ function normalizeCredential(input, base) {
   return out;
 }
 
+// 与 src/constants.js 的 ASSET_ICONS 保持一致，缺项会在保存时被回落成 generic
+const ASSET_ICONS = ['win', 'mac', 'linux', 'router', 'nas', 'firewall', 'generic'];
+/** 主凭证三选一；方式级自定义把 'none' 换成 'ask'（连接时询问）。 */
+const MAIN_AUTH_MODES = ['none', 'inline', 'credential'];
+const METHOD_AUTH_MODES = ['inline', 'credential', 'ask'];
+const ID_MAX = 64;
+
+function idText(value) {
+  return String(value == null ? '' : value).slice(0, ID_MAX);
+}
+
+/** 主凭证：用户名与口令同属一份凭证，换模式即清掉另一模式的残留。 */
+function normalizeMainAuth(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const mode = MAIN_AUTH_MODES.includes(src.mode)
+    ? src.mode
+    : String(src.pass || '').trim() || String(src.user || '').trim()
+      ? 'inline'
+      : 'none';
+  if (mode === 'inline') {
+    return {
+      mode,
+      user: credText(src.user, CREDENTIAL_USER_MAX),
+      pass: credText(src.pass, CREDENTIAL_SECRET_MAX),
+    };
+  }
+  if (mode === 'credential') return { mode, credentialId: idText(src.credentialId) };
+  return { mode: 'none' };
+}
+
+/** 方式级凭证：返回 null 表示沿用主凭证，界面上就是那颗「主凭证」胶囊。 */
+function normalizeMethodAuth(input) {
+  const src = input && typeof input === 'object' ? input : null;
+  if (!src || src.use !== 'custom') return null;
+  const mode = METHOD_AUTH_MODES.includes(src.mode) ? src.mode : 'inline';
+  if (mode === 'ask') return { use: 'custom', mode: 'ask' };
+  if (mode === 'credential') {
+    const credentialId = idText(src.credentialId);
+    return credentialId ? { use: 'custom', mode: 'credential', credentialId } : null;
+  }
+  return {
+    use: 'custom',
+    mode: 'inline',
+    user: credText(src.user, CREDENTIAL_USER_MAX),
+    pass: credText(src.pass, CREDENTIAL_SECRET_MAX),
+  };
+}
+
+/** 行存在即启用：旧库的 enabled:false 行直接丢弃，新表单不再产生这个字段。 */
+function normalizeAssetMethods(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const out = {};
+  for (const id of Object.keys(src)) {
+    const conf = src[id] && typeof src[id] === 'object' ? src[id] : null;
+    if (!conf || conf.enabled === false) continue;
+    const port = Number(conf.port);
+    const row = { port: Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 0 };
+    const advanced = normalizeMethodAdvanced(id, conf.advanced);
+    if (advanced) row.advanced = advanced;
+    const auth = normalizeMethodAuth(conf.auth);
+    if (auth) row.auth = auth;
+    out[id] = row;
+  }
+  return out;
+}
+
+/**
+ * 旧库（os + 资产级 pass + methods[].enabled）读入时一次收敛成新形状，消费端就不留两套字段：
+ * 图标不再决定可用方式，密码改由主凭证配置承载。落盘后即为新形状。
+ */
+function migrateAssets(nodes) {
+  if (!Array.isArray(nodes)) return;
+  nodes.forEach((node) => {
+    if (!node || typeof node !== 'object') return;
+    const icon = ASSET_ICONS.includes(node.icon)
+      ? node.icon
+      : ASSET_ICONS.includes(node.os)
+        ? node.os
+        : 'generic';
+    node.icon = icon;
+    delete node.os;
+    node.auth = normalizeMainAuth(
+      node.auth && typeof node.auth === 'object' ? node.auth : { user: node.user, pass: node.pass }
+    );
+    delete node.user;
+    delete node.pass;
+    node.methods = normalizeAssetMethods(node.methods);
+  });
+}
+
+/**
+ * 认证字段已从高级参数搬进凭证配置：私钥路径与 VNC 口令在旧库里属于高级设置，
+ * 读入时按字段清单丢掉，避免同一秘密有两个来源。其余参数（含 SSH 配色）原样保留。
+ */
+const DROPPED_ADVANCED = {
+  ssh: ['authType', 'privateKeyPath', 'privateKeyPassphrase'],
+  vnc: ['password'],
+};
+
+function normalizeMethodAdvanced(methodId, saved) {
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
+  const drop = Object.prototype.hasOwnProperty.call(DROPPED_ADVANCED, methodId)
+    ? DROPPED_ADVANCED[methodId]
+    : [];
+  const out = {};
+  for (const key of Object.keys(saved)) {
+    if (!drop.includes(key)) out[key] = saved[key];
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 function defaultData() {
   return {
-    version: 2,
+    version: 3,
     groups: [],
     credentials: [],
     recent: [],
@@ -254,10 +365,22 @@ class AssetStore {
     }
     const data = Object.assign(defaultData(), parsed);
     data.settings = Object.assign(defaultData().settings, parsed.settings || {});
-    // 手改或旧库的凭据段可能缺项/带脏值，一律按表单同一套边界收敛
+    // 手改或旧库的凭证段可能缺项/带脏值，一律按表单同一套边界收敛
     data.credentials = (Array.isArray(parsed.credentials) ? parsed.credentials : [])
       .filter((c) => c && typeof c === 'object' && c.id)
       .map((c) => normalizeCredential(c, c));
+    (Array.isArray(data.groups) ? data.groups : []).forEach((g) => migrateAssets(g && g.nodes));
+    if (Array.isArray(data.recent)) {
+      data.recent = data.recent.map((r) => {
+        if (!r || typeof r !== 'object') return r;
+        const icon = ASSET_ICONS.includes(r.icon) ? r.icon : ASSET_ICONS.includes(r.os) ? r.os : 'generic';
+        delete r.os;
+        r.icon = icon;
+        return r;
+      });
+    }
+    // 上面的迁移是无条件且幂等的，读完一律按 v3 形状描述自己，别让旧库永远挂着 version: 2
+    data.version = 3;
     return data;
   }
 
@@ -603,15 +726,14 @@ class AssetStore {
     const asset = {
       id: newId('a'),
       name: payload.name || this.L('未命名资产', 'Unnamed asset'),
-      os: payload.os || 'win',
+      icon: ASSET_ICONS.includes(payload.icon) ? payload.icon : 'generic',
       host: payload.host || '',
-      user: payload.user || '',
-      pass: payload.pass || '',
+      auth: normalizeMainAuth(payload.auth),
       tags: payload.tags || '',
       note: payload.note || '',
       ping: payload.ping || '—',
       pclass: payload.pclass || 'ok',
-      methods: payload.methods || {},
+      methods: normalizeAssetMethods(payload.methods),
     };
     g.nodes.push(asset);
     this.persist();
@@ -626,14 +748,18 @@ class AssetStore {
     let { group, asset } = hit;
     Object.assign(asset, {
       name: payload.name != null ? payload.name : asset.name,
-      os: payload.os != null ? payload.os : asset.os,
+      icon:
+        payload.icon != null
+          ? ASSET_ICONS.includes(payload.icon)
+            ? payload.icon
+            : 'generic'
+          : asset.icon,
       host: payload.host != null ? payload.host : asset.host,
-      user: payload.user != null ? payload.user : asset.user,
-      pass: payload.pass != null ? payload.pass : asset.pass,
       tags: payload.tags != null ? payload.tags : asset.tags,
       note: payload.note != null ? payload.note : asset.note,
-      methods: payload.methods != null ? payload.methods : asset.methods,
+      methods: payload.methods != null ? normalizeAssetMethods(payload.methods) : asset.methods,
     });
+    if (payload.auth != null) asset.auth = normalizeMainAuth(payload.auth);
     if (targetGid && targetGid !== group.id) {
       const ng = this.requireGroup(targetGid);
       const fromGid = group.id;
@@ -670,14 +796,80 @@ class AssetStore {
   requireCredential(cid) {
     const c = this.findCredential(cid);
     if (!c) {
-      throw new Error(this.L('凭据不存在或已被删除', 'Credential not found'));
+      throw new Error(this.L('凭证不存在或已被删除', 'Credential not found'));
     }
     return c;
   }
 
+  /**
+   * 连接用凭证的唯一收敛点：主凭证设了就用主凭证，方式自己选了自定义才覆盖它。
+   * 引用凭证的秘密只在这里取，不因为它进快照；口令为空时 needsPrompt 为真，由连接入口询问。
+   */
+  resolveAssetAuth(asset, methodId) {
+    const method = asset && asset.methods ? asset.methods[methodId] : null;
+    const custom = method && method.auth && method.auth.use === 'custom' ? method.auth : null;
+    const main = normalizeMainAuth(asset && asset.auth);
+    const cfg = custom || main;
+    const resolved = {
+      username: '',
+      password: '',
+      privateKey: '',
+      passphrase: '',
+      source: custom ? 'custom' : 'main',
+    };
+    if (cfg.mode === 'inline') {
+      resolved.username = String(cfg.user || '');
+      resolved.password = String(cfg.pass || '');
+    } else if (cfg.mode === 'credential') {
+      const credential = this.requireCredential(cfg.credentialId);
+      resolved.username = credential.user || '';
+      if (credential.kind === 'key') {
+        resolved.privateKey = credential.privateKey || '';
+        resolved.passphrase = credential.passphrase || '';
+      } else {
+        resolved.password = credential.pass || '';
+      }
+      resolved.source = 'credential';
+    } else if (cfg.mode === 'ask') {
+      resolved.source = 'ask';
+    } else {
+      resolved.source = 'none';
+    }
+    resolved.kind = resolved.privateKey ? 'key' : 'password';
+    resolved.needsPrompt = resolved.kind === 'password' && !resolved.password;
+    return resolved;
+  }
+
+  /**
+   * 连接时勾了「记住凭证」：把这次的答案写进该访问方式的凭证设置，之后这条方式不再询问。
+   * 只写方式级，不动资产级主凭证；日志只记模式，不记账号与口令。
+   */
+  rememberMethodAuth(aid, methodId, answer) {
+    const hit = this.findAsset(aid);
+    if (!hit) throw new Error('asset not found');
+    const methods = { ...(hit.asset.methods || {}) };
+    const row = { ...(methods[methodId] || {}) };
+    const auth = normalizeMethodAuth(
+      answer.mode === 'credential'
+        ? { use: 'custom', mode: 'credential', credentialId: answer.credentialId }
+        : { use: 'custom', mode: 'inline', user: answer.user, pass: answer.pass }
+    );
+    if (!auth) throw new Error(this.L('凭证信息不完整，无法记住', 'Credential is incomplete; nothing was saved'));
+    row.auth = auth;
+    methods[methodId] = row;
+    hit.asset.methods = methods;
+    this.persist();
+    this.logEvent('info', 'method credential remembered', {
+      assetId: aid,
+      methodId,
+      mode: auth.mode,
+    });
+    return this.snapshot();
+  }
+
   createCredential(payload) {
     const credential = normalizeCredential(payload, null);
-    credential.name = credential.name || this.L('未命名凭据', 'Unnamed credential');
+    credential.name = credential.name || this.L('未命名凭证', 'Unnamed credential');
     this.data.credentials.push(credential);
     this.persist();
     this.logEvent('info', 'credential created', {
@@ -693,7 +885,7 @@ class AssetStore {
     const current = this.requireCredential(cid);
     const index = this.data.credentials.indexOf(current);
     const credential = normalizeCredential(payload, current);
-    credential.name = credential.name || this.L('未命名凭据', 'Unnamed credential');
+    credential.name = credential.name || this.L('未命名凭证', 'Unnamed credential');
     this.data.credentials[index] = credential;
     this.persist();
     this.logEvent('info', 'credential updated', {
@@ -712,7 +904,7 @@ class AssetStore {
     return this.snapshot();
   }
 
-  /** 凭据列表是扁平数组，排序只按参考点插入；beforeId 为空表示移到末尾。 */
+  /** 凭证列表是扁平数组，排序只按参考点插入；beforeId 为空表示移到末尾。 */
   reorderCredential(p) {
     const fromId = p && p.fromId;
     const moved = this.requireCredential(fromId);
@@ -746,7 +938,7 @@ class AssetStore {
     const item = {
       id: asset.id,
       name: asset.name,
-      os: asset.os,
+      icon: asset.icon,
       host: asset.host,
       method: mid,
       port,

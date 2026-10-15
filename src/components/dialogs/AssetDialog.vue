@@ -6,24 +6,7 @@
     top="5vh"
     :close-on-click-modal="false"
   >
-    <div class="hint" style="margin-bottom:8px">{{ $t('asset.osType') }}</div>
-    <div class="type-cards">
-      <div
-        v-for="tp in types"
-        :key="tp.id"
-        class="type-card"
-        :class="[tp.id, { on: form.os === tp.id, disabled: isView }]"
-        @click="!isView && setType(tp.id)"
-      >
-        <div class="os-slot" :class="tp.id" v-html="osSvg(tp.id)"></div>
-        <div class="nm">{{ $t('os.' + tp.id) }}</div>
-        <div class="sub">{{ $t(tp.subKey) }}</div>
-      </div>
-    </div>
-
-    <div class="hint" style="margin-bottom:8px">
-      {{ $t('asset.info') }} <span class="badge-primary">{{ $t('asset.sharedTag') }}</span>
-    </div>
+    <el-divider content-position="left" class="section-divider">{{ $t('asset.info') }}</el-divider>
 
     <el-form
       ref="form"
@@ -35,6 +18,18 @@
       style="margin-bottom:8px"
       @submit.native.prevent
     >
+      <el-form-item :label="$t('asset.iconLabel')">
+        <el-tooltip v-for="ic in icons" :key="ic.id" :content="$t(ic.nameKey)" placement="top">
+          <div
+            class="icon-cell"
+            :class="{ on: form.icon === ic.id, disabled: isView }"
+            @click="!isView && (form.icon = ic.id)"
+          >
+            <i v-if="ic.glyph" class="glyph" :class="ic.glyph" aria-hidden="true"></i>
+            <span v-else class="slot" :class="ic.id" v-html="iconSvg(ic.id)"></span>
+          </div>
+        </el-tooltip>
+      </el-form-item>
       <el-form-item :label="$t('asset.name')" prop="name">
         <el-input v-model="form.name" :placeholder="$t('asset.namePh')" maxlength="128" clearable />
       </el-form-item>
@@ -52,12 +47,20 @@
       <el-form-item :label="$t('asset.host')" prop="host">
         <el-input v-model="form.host" :placeholder="$t('asset.hostPh')" clearable />
       </el-form-item>
-      <el-form-item :label="$t('asset.user')" prop="user">
-        <el-input v-model="form.user" :placeholder="$t('asset.userPh')" clearable />
+      <el-form-item :label="$t('asset.mainAuth')" class="auth-row">
+        <el-radio-group v-model="form.auth.mode" class="auth-modes" @change="onMainModeChange">
+          <el-radio label="credential">{{ $t('asset.mainCredential') }}</el-radio>
+          <el-radio label="inline">{{ $t('asset.mainInline') }}</el-radio>
+          <el-radio label="none">{{ $t('asset.mainNone') }}</el-radio>
+        </el-radio-group>
       </el-form-item>
-      <el-form-item :label="$t('asset.pass')" prop="pass">
+      <!-- 用户名与凭证各占一个 form-item：必填提示才会落在自己那一格下面，而不是整组的最末行 -->
+      <el-form-item v-if="form.auth.mode === 'inline'" prop="auth.user">
+        <el-input v-model="form.auth.user" :placeholder="$t('asset.userPh')" />
+      </el-form-item>
+      <el-form-item v-if="form.auth.mode === 'inline'" prop="auth.pass">
         <el-input
-          v-model="form.pass"
+          v-model="form.auth.pass"
           :type="passVisible ? 'text' : 'password'"
           :placeholder="$t('asset.passPh')"
         >
@@ -75,19 +78,32 @@
           </button>
         </el-input>
       </el-form-item>
+      <el-form-item v-if="form.auth.mode === 'credential'" prop="auth.credentialId">
+        <el-select v-model="form.auth.credentialId" :placeholder="$t('asset.credentialPh')">
+          <el-option v-for="c in credentials" :key="c.id" :label="c.name" :value="c.id">
+            <span class="opt-name">{{ c.name }}</span>
+            <span class="pill" :class="c.kind === 'key' ? 'cred-kind-key' : 'cred-kind-pass'">
+              {{ c.kind === 'key' ? $t('cred.kindKey') : $t('cred.kindPassword') }}
+            </span>
+          </el-option>
+        </el-select>
+      </el-form-item>
       <el-form-item :label="$t('asset.note')" prop="note">
         <el-input v-model="form.note" type="textarea" :rows="2" />
       </el-form-item>
+      <el-divider content-position="left" class="section-divider">{{ $t('asset.methods') }}</el-divider>
       <el-form-item label="" label-width="0" prop="methods" class="methods-item">
         <MethodConfig
-          :catalog="catalog"
           :draft="draft"
+          :main-mode="form.auth.mode"
           :testing="testing"
           :testing-id="testingId"
           :disabled="isView"
-          @toggle="onToggle"
+          @add="addMethod"
+          @remove="removeMethod"
           @port-change="onPortChange"
           @advanced="openAdvanced"
+          @auth="openAuth"
           @test="testMethod"
         />
       </el-form-item>
@@ -114,8 +130,10 @@ import {
   updateAsset,
   findAsset,
   openMethodAdvanced,
+  openMethodAuth,
 } from '../../store';
-import { osCatalog, osIcon, osName } from '../../constants';
+import { ASSET_ICONS, assetIcon } from '../../constants';
+import { getProtocol, protocolLabel } from '../../protocols';
 import { cascaderOptions, folderIdPath } from '../../lib/assetTree';
 import { t } from '../../i18n';
 import MethodConfig from '../common/MethodConfig.vue';
@@ -155,6 +173,11 @@ function normalizePort(value, fallback) {
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : fallback;
 }
 
+function emptyMainAuth() {
+  // 默认落在「引用凭证」：凭证库才是账号的归宿，手填与无都是少数场景
+  return { mode: 'credential', user: '', pass: '', credentialId: '' };
+}
+
 export default {
   name: 'AssetDialog',
   components: { MethodConfig },
@@ -163,20 +186,15 @@ export default {
       saving: false,
       testing: false,
       testingId: null,
-      types: [
-        { id: 'win', subKey: 'asset.subWin' },
-        { id: 'mac', subKey: 'asset.subMac' },
-        { id: 'linux', subKey: 'asset.subLinux' },
-      ],
+      icons: ASSET_ICONS,
       form: {
         name: '',
-        os: 'win',
+        icon: 'linux',
         gid: '',
         path: [],
         host: '',
-        user: '',
-        pass: '',
         note: '',
+        auth: emptyMainAuth(),
       },
       cascaderProps: {
         checkStrictly: true,
@@ -185,11 +203,8 @@ export default {
         label: 'label',
         children: 'children',
       },
-      draft: {
-        rdp: { enabled: true, port: 3389 },
-        vnc: { enabled: false, port: 5900 },
-        ssh: { enabled: false, port: 22 },
-      },
+      /** 已添加的访问方式：{ [methodId]: { port, advanced?, auth? } }，键序即展示顺序 */
+      draft: {},
       passVisible: false,
       authChecking: false,
       rules: {
@@ -234,34 +249,38 @@ export default {
             trigger: 'blur',
           },
         ],
-        user: [
+        'auth.user': [
           {
-            required: true,
-            validator(rule, value, cb) {
-              if (!String(value || '').trim()) cb(new Error(t('msg.userRequired')));
+            validator: (rule, value, cb) => {
+              if (this.form.auth.mode === 'inline' && !String(value || '').trim()) cb(new Error(t('msg.userRequired')));
               else cb();
             },
             trigger: 'blur',
           },
         ],
-        pass: [
+        'auth.pass': [
           {
-            required: true,
-            validator(rule, value, cb) {
-              if (!String(value || '').trim()) cb(new Error(t('msg.passRequired')));
+            validator: (rule, value, cb) => {
+              if (this.form.auth.mode === 'inline' && !String(value || '').trim()) cb(new Error(t('msg.passRequired')));
               else cb();
             },
             trigger: 'blur',
+          },
+        ],
+        'auth.credentialId': [
+          {
+            validator: (rule, value, cb) => {
+              if (this.form.auth.mode === 'credential' && !value) cb(new Error(t('asset.credentialSelect')));
+              else cb();
+            },
+            trigger: 'change',
           },
         ],
         methods: [
           {
             required: true,
             validator: (rule, value, cb) => {
-              const enabled = Object.keys(this.draft).filter(
-                (k) => this.draft[k] && this.draft[k].enabled
-              );
-              if (enabled.length) cb();
+              if (Object.keys(this.draft).length) cb();
               else cb(new Error(t('msg.methodsRequired')));
             },
             trigger: 'change',
@@ -306,23 +325,29 @@ export default {
     folderOptions() {
       return cascaderOptions(this.groups);
     },
-    catalog() {
-      return osCatalog(this.form.os);
+    credentials() {
+      return store.snapshot.credentials || [];
+    },
+    /** 主凭证的真实类型：引用凭证时取库里的 kind，手填口令恒为 password */
+    mainKind() {
+      if (this.form.auth.mode !== 'credential') {
+        return this.form.auth.mode === 'inline' ? 'password' : '';
+      }
+      const hit = this.credentials.find((c) => c.id === this.form.auth.credentialId);
+      return hit ? hit.kind : '';
     },
     summary() {
-      const on = this.catalog
-        .filter((m) => this.draft[m.id] && this.draft[m.id].enabled)
-        .map((m) => `${t(m.nameKey)}:${this.draft[m.id].port}`);
-      return `${osName(this.form.os)} · ${this.form.host || '?'} · ${
+      const on = Object.keys(this.draft).map((id) => `${protocolLabel(id)}:${this.draft[id].port}`);
+      return `${this.iconName(this.form.icon)} · ${this.form.host || '?'} · ${
         on.join(' | ') || t('asset.notEnabled')
       }`;
     },
     methodAdvancedResult() {
       return store.methodAdvancedResult;
     },
-  },
-  created() {
-    osCatalog('win').forEach((m) => this.draftRow(m.id));
+    methodAuthResult() {
+      return store.methodAuthResult;
+    },
   },
   watch: {
     visible(v) {
@@ -331,61 +356,74 @@ export default {
     },
     methodAdvancedResult(r) {
       if (!r || !this.visible) return;
-      const row = this.draftRow(r.methodId);
+      const row = this.draft[r.methodId];
       if (row) {
         this.$set(row, 'advanced', r.advanced);
         this.draft = { ...this.draft };
       }
     },
+    methodAuthResult(r) {
+      if (!r || !this.visible) return;
+      const row = this.draft[r.methodId];
+      if (row) {
+        this.$set(row, 'auth', r.auth);
+        this.draft = { ...this.draft };
+      }
+    },
   },
   methods: {
-    draftRow(id) {
-      if (!this.draft[id]) {
-        const method = this.catalog.find((m) => m.id === id);
-        if (!method) return;
-        this.$set(this.draft, id, { enabled: false, port: method.defaultPort, primary: false });
-      }
-      return this.draft[id];
+    iconName(id) {
+      const hit = this.icons.find((ic) => ic.id === id);
+      return hit ? t(hit.nameKey) : '';
     },
-    openAdvanced(m) {
-      const row = this.draftRow(m.id);
-      if (!row) return;
+    iconSvg(id) {
+      return assetIcon(id);
+    },
+    onMainModeChange(mode) {
+      // 三选一互斥：换模式即清掉另一模式的字段，不留填了却不生效的输入框
+      if (mode !== 'inline') {
+        this.form.auth.user = '';
+        this.form.auth.pass = '';
+      }
+      if (mode !== 'credential') this.form.auth.credentialId = '';
+      this.passVisible = false;
+    },
+    addMethod(id) {
+      const protocol = getProtocol(id);
+      if (!protocol || this.draft[id]) return;
+      this.$set(this.draft, id, { port: protocol.defaultPort });
+      this.draft = { ...this.draft };
+      this.validateMethods();
+    },
+    removeMethod(row) {
+      const draft = { ...this.draft };
+      delete draft[row.id];
+      this.draft = draft;
+      this.validateMethods();
+    },
+    onPortChange(row, port) {
+      // MethodConfig 给的是行包装对象，端口必须写回 draft 里那一行，否则改了不生效
+      const conf = this.draft[row.id];
+      if (!conf) return;
+      // 清空数字框时 Element 给出 undefined，回落到协议默认端口
+      this.$set(conf, 'port', normalizePort(port, row.meta.defaultPort));
+    },
+    openAdvanced(row) {
       openMethodAdvanced({
-        methodId: m.id,
-        methodName: t(m.nameKey),
-        advanced: row.advanced || {},
+        methodId: row.id,
+        methodName: t(row.meta.nameKey),
+        advanced: row.conf.advanced || {},
         context: { type: 'asset-dialog', isView: this.isView },
       });
     },
-    osSvg(os) {
-      return osIcon(os);
-    },
-    defaultDraft(os) {
-      const d = {};
-      osCatalog(os).forEach((m) => {
-        d[m.id] = { enabled: m.rec, port: m.defaultPort };
+    openAuth(row) {
+      openMethodAuth({
+        methodId: row.id,
+        methodName: t(row.meta.nameKey),
+        auth: row.conf.auth || null,
+        main: { mode: this.form.auth.mode, kind: this.mainKind },
+        authKinds: row.meta.authKinds || ['password'],
       });
-      return d;
-    },
-    setType(tp) {
-      // 点已选中的卡片不能清空端口和高级设置，只有真正换系统才重建默认配置
-      if (this.form.os === tp) return;
-      this.form.os = tp;
-      this.draft = this.defaultDraft(tp);
-      this.$nextTick(() => this.validateMethods());
-    },
-    onPortChange(m, port) {
-      const row = this.draftRow(m.id);
-      // 清空数字框时 Element 给出 undefined，回落到协议默认端口
-      if (row) this.$set(row, 'port', normalizePort(port, m.defaultPort));
-    },
-    onToggle(m, enabled) {
-      const conf = this.draftRow(m.id);
-      if (!conf) return;
-      this.$set(conf, 'enabled', enabled);
-      if (conf.enabled && !conf.port) conf.port = m.defaultPort;
-      this.draft = { ...this.draft };
-      this.validateMethods();
     },
     validateMethods() {
       if (!this.$refs.form) return;
@@ -398,6 +436,7 @@ export default {
         this.passVisible = false;
         return;
       }
+      // 新增时口令就是刚敲进去的，不必走系统认证；读回来的已存口令才需要
       if (!this.isEdit && !this.isClone && !this.isView) {
         this.passVisible = true;
         return;
@@ -412,22 +451,19 @@ export default {
         if (r && r.ok) {
           this.passVisible = true;
         } else {
-          const code = (r && r.code) || '';
-          let msg = t('auth.failed');
-          if (/Canceled|UserCanceled/i.test(code)) msg = t('auth.canceled');
-          else if (/NotConfigured/i.test(code)) msg = t('auth.notConfigured');
-          else if (r && r.message) msg = r.message;
-          this.$message.error(msg);
+          this.$message.error(this.authMessage(r));
         }
       } catch (e) {
-        const code = e.code || '';
-        let msg = e.message || t('auth.failed');
-        if (/Canceled|UserCanceled/i.test(code)) msg = t('auth.canceled');
-        else if (/NotConfigured/i.test(code)) msg = t('auth.notConfigured');
-        this.$message.error(msg);
+        this.$message.error(this.authMessage(e));
       } finally {
         this.authChecking = false;
       }
+    },
+    authMessage(r) {
+      const code = (r && r.code) || '';
+      if (/Canceled|UserCanceled/i.test(code)) return t('auth.canceled');
+      if (/NotConfigured/i.test(code)) return t('auth.notConfigured');
+      return (r && r.message) || t('auth.failed');
     },
     onFolderChange(val) {
       this.form.gid = Array.isArray(val) && val.length ? val[val.length - 1] : '';
@@ -444,44 +480,58 @@ export default {
       const hit = (editId || cloneId || viewId) ? findAsset(editId || cloneId || viewId) : null;
       if (hit) {
         const a = hit.asset;
+        const auth = a.auth || { mode: 'none' };
         this.form = {
           name: cloneId && !editId ? `${a.name} ${t('asset.cloneSuffix')}` : a.name,
-          os: a.os,
+          icon: a.icon || 'generic',
           gid: hit.group.id,
           path: folderIdPath(this.groups, hit.group.id),
           host: a.host,
-          user: a.user,
-          pass: a.pass || '',
           note: a.note || '',
+          // auth 必须跟着这次整体赋值一起进 form：后挂上去的属性在 Vue 2 里不是响应式的，单选点了不会重绘
+          auth: {
+            mode: auth.mode || 'none',
+            user: auth.user || '',
+            pass: auth.pass || '',
+            credentialId: auth.credentialId || '',
+          },
         };
         this.draft = JSON.parse(JSON.stringify(a.methods || {}));
+        // 手改或旧库的端口可能是 0/越界值，进表单先归一回协议默认端口
+        Object.keys(this.draft).forEach((id) => {
+          const protocol = getProtocol(id);
+          const row = this.draft[id];
+          if (protocol && row) this.$set(row, 'port', normalizePort(row.port, protocol.defaultPort));
+        });
       } else {
         // 源资产已不在快照里时按新增表单打开，不留下一次编辑的残留内容
         this.form = {
           name: '',
-          os: 'win',
+          icon: 'linux',
           gid: fallbackGid,
           path: fallbackGid ? folderIdPath(this.groups, fallbackGid) : [],
           host: '',
-          user: '',
-          pass: '',
           note: '',
+          auth: emptyMainAuth(),
         };
-        this.draft = this.defaultDraft('win');
+        this.draft = {};
       }
-      osCatalog(this.form.os).forEach((m) => {
-        const row = this.draftRow(m.id);
-        if (row) this.$set(row, 'port', normalizePort(row.port, m.defaultPort));
-      });
       this.$nextTick(() => {
         if (this.$refs.form) this.$refs.form.clearValidate();
       });
     },
-    async testMethod(m) {
-      const row = this.draftRow(m.id);
-      if (!row || !row.enabled || this.testing) return;
+    /** 探测按草稿形状解析凭证：资产可能还没落库，引用的凭证却要按库里的真实内容试 */
+    draftForProbe(methodId) {
+      const row = this.draft[methodId];
+      return {
+        auth: { ...this.form.auth },
+        methods: { [methodId]: { auth: (row && row.auth) || null } },
+      };
+    },
+    async testMethod(row) {
+      if (this.testing) return;
       const results = await Promise.all(
-        ['name', 'host', 'user'].map(
+        ["name", "host", "auth.user", "auth.pass"].map(
           (prop) =>
             new Promise((resolve) => {
               this.$refs.form.validateField(prop, (err) => resolve(!err));
@@ -490,51 +540,32 @@ export default {
       );
       if (!results.every(Boolean)) return;
       this.testing = true;
-      this.testingId = m.id;
-      const method = { protocol: m.id, port: row.port, advanced: row.advanced || {} };
-      if (m.id === 'sftp') {
-        // SFTP 会话复用 SSH 方式的认证与代理配置，探测也要按同一条合并配置发起；
-        // SSH 未启用时真实连接不会合并它，探测也不能合并，否则两边结论不一致
-        const sshRow = this.draftRow('ssh');
-        if (sshRow && sshRow.enabled) {
-          method.advanced = { ...(sshRow.advanced || {}), ...(row.advanced || {}) };
-          method.port = row.port || sshRow.port || 22;
+      this.testingId = row.id;
+      const method = { protocol: row.id, port: row.conf.port, advanced: row.conf.advanced || {} };
+      if (row.id === 'sftp') {
+        // SFTP 会话沿用同资产 SSH 行的跳板机与主机密钥策略，探测也要按同一条合并配置发起；
+        // 资产没配 SSH 行时不合并，否则探测结论和真实连接不一致
+        const sshRow = this.draft.ssh;
+        if (sshRow) {
+          method.advanced = { ...(sshRow.advanced || {}), ...(row.conf.advanced || {}) };
+          method.port = row.conf.port || sshRow.port || 22;
         }
       }
       try {
         const r = unwrap(
           await api.sessionTest({
-            asset: {
-              host: normalizeHost(this.form.host),
-              user: this.form.user,
-              pass: this.form.pass,
-            },
+            asset: { host: normalizeHost(this.form.host) },
             method,
+            draft: this.draftForProbe(row.id),
           })
         );
         if (r && r.ok) {
-          const parts = [`${t(m.nameKey)} · ${r.latencyMs ?? '-'} ms`];
+          const parts = [`${t(row.meta.nameKey)} · ${r.latencyMs ?? '-'} ms`];
           if (r.nla) parts.push(t('asset.testNla'));
           if (r.note) parts.push(r.note);
           this.$message.success(parts.join(' · '));
         } else {
-          const code = (r && r.code) || '';
-          const map = {
-            NO_HOST: t('asset.testNoHost'),
-            TCP_TIMEOUT: t('asset.testTcpFail'),
-            TCP_ERROR: t('asset.testTcpFail'),
-            AUTH_FAILED: t('asset.testAuthFail'),
-            HOSTKEY_REJECTED: t('asset.testHostkey'),
-            SSH_KEY_READ: t('asset.testKeyRead'),
-            VNC_NO_AUTH: t('asset.testVncNoAuth'),
-            VNC_REJECTED: t('asset.testVncRejected'),
-            RDP_BAD_RESPONSE: t('asset.testRdpBad'),
-            SFTP_UNAVAILABLE: t('asset.testSftpUnavailable'),
-          };
-          const detail = r && (r.error || r.__error);
-          const base = map[code];
-          const msg = base && detail ? base + ' — ' + detail : base || detail || t('asset.testFail');
-          this.$message.error(msg);
+          this.$message.error(this.testFailureMessage(r));
         }
       } catch (e) {
         this.$message.error(e.message);
@@ -543,32 +574,45 @@ export default {
         this.testingId = null;
       }
     },
+    testFailureMessage(r) {
+      const code = (r && r.code) || '';
+      const map = {
+        NO_HOST: t('asset.testNoHost'),
+        TCP_TIMEOUT: t('asset.testTcpFail'),
+        TCP_ERROR: t('asset.testTcpFail'),
+        AUTH_FAILED: t('asset.testAuthFail'),
+        HOSTKEY_REJECTED: t('asset.testHostkey'),
+        SSH_KEY_PARSE: t('asset.testKeyParse'),
+        VNC_NO_AUTH: t('asset.testVncNoAuth'),
+        VNC_REJECTED: t('asset.testVncRejected'),
+        RDP_BAD_RESPONSE: t('asset.testRdpBad'),
+        SFTP_UNAVAILABLE: t('asset.testSftpUnavailable'),
+      };
+      const detail = r && (r.error || r.__error);
+      const base = map[code];
+      return base && detail ? base + ' — ' + detail : base || detail || t('asset.testFail');
+    },
     save() {
       if (this.isView) return;
       this.$refs.form.validate(async (valid) => {
         if (!valid) return;
         this.saving = true;
         try {
-          const enabled = Object.keys(this.draft).filter(
-            (k) => this.draft[k] && this.draft[k].enabled
-          );
           const methods = {};
-          enabled.forEach((k) => {
-            const draftAdv = this.draft[k] && this.draft[k].advanced;
-            methods[k] = {
-              enabled: true,
-              port: this.draft[k].port,
-              advanced: draftAdv && Object.keys(draftAdv).length
-                ? { ...draftAdv }
-                : undefined,
+          Object.keys(this.draft).forEach((id) => {
+            const row = this.draft[id];
+            const draftAdv = row.advanced;
+            methods[id] = {
+              port: row.port,
+              advanced: draftAdv && Object.keys(draftAdv).length ? { ...draftAdv } : undefined,
+              auth: row.auth ? { ...row.auth } : undefined,
             };
           });
           const payload = {
             name: this.form.name.trim(),
-            os: this.form.os,
+            icon: this.form.icon,
             host: normalizeHost(this.form.host),
-            user: this.form.user.trim(),
-            pass: this.form.pass,
+            auth: { ...this.form.auth },
             note: this.form.note,
             methods,
             gid: this.form.gid,
@@ -593,30 +637,79 @@ export default {
 </script>
 
 <style scoped>
-.os-slot {
-  height: 32px;
+/* Element 把分隔线与标题底写成死浅色（#DCDFE6 / #FFF），深色主题下会是一块白底，全部换回主题变量 */
+.section-divider {
+  margin: 4px 0 16px;
+  background-color: var(--border);
+}
+.section-divider /deep/ .el-divider__text {
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+/* 图标格正方形、不带文字，名称走悬停 tooltip；tooltip 不额外包一层元素，格子仍是表单内容的直接子节点 */
+.icon-cell {
+  width: 38px;
+  height: 38px;
+  display: inline-grid;
+  place-items: center;
+  vertical-align: top;
+  margin-right: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  cursor: pointer;
+}
+.icon-cell .slot {
+  line-height: 0;
   display: grid;
   place-items: center;
-  margin-bottom: 6px;
-  line-height: 0;
 }
-.os-slot /deep/ svg {
-  width: 30px;
-  height: 30px;
+.icon-cell .slot /deep/ svg {
+  width: 20px;
+  height: 20px;
   display: block;
 }
-.os-slot.win {
+.icon-cell .slot.win {
   color: var(--win);
 }
-.os-slot.mac {
+.icon-cell .slot.mac {
   color: var(--mac);
 }
-.os-slot.linux {
-  color: var(--linux);
-}
-.os-slot.linux /deep/ svg {
-  /* Tux uses its own brand colors; keep CSS color off the paths */
+.icon-cell .slot.linux {
+  /* Tux 自带配色，不让 CSS 覆盖路径颜色 */
   color: inherit;
+}
+.icon-cell .glyph {
+  font-size: 20px;
+  line-height: 20px;
+  color: var(--text-2);
+}
+.icon-cell:hover:not(.disabled) {
+  background: var(--bg-hover);
+}
+.icon-cell.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.icon-cell.on .nm {
+  color: var(--text);
+}
+.icon-cell.disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.auth-modes {
+  display: block;
+  line-height: 32px;
+}
+/* 单选这行自己没有报错位，收紧到 6px；下面几格保留 Element 默认 22px，那正是必填提示那一行的位置 */
+.auth-row {
+  margin-bottom: 6px;
+}
+.opt-name {
+  margin-right: 8px;
 }
 .methods-item {
   width: 100%;

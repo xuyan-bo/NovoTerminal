@@ -47,12 +47,16 @@
     <backup-dialog />
     <log-dialog />
     <asset-dialog />
+    <method-auth-dialog />
     <group-dialog />
     <method-advanced-dialog />
     <close-prompt-dialog />
     <update-dialog />
     </template>
+    <!-- 连接时的凭证询问与服务器交互认证一样，必须每个宿主窗口都挂着：
+         SFTP 面板窗口和拆分出去的会话窗口都要能回答，否则请求没人接、等到超时连接直接失败 -->
     <ssh-auth-dialog />
+    <connect-auth-dialog />
   </div>
 </template>
 
@@ -66,6 +70,8 @@ import LogDialog from './components/dialogs/LogDialog.vue';
 import AssetDialog from './components/dialogs/AssetDialog.vue';
 import GroupDialog from './components/dialogs/GroupDialog.vue';
 import MethodAdvancedDialog from './components/dialogs/MethodAdvancedDialog.vue';
+import MethodAuthDialog from './components/dialogs/MethodAuthDialog.vue';
+import ConnectAuthDialog from './components/dialogs/ConnectAuthDialog.vue';
 import ClosePromptDialog from './components/dialogs/ClosePromptDialog.vue';
 import UpdateDialog from './components/dialogs/UpdateDialog.vue';
 import SshAuthDialog from './components/dialogs/SshAuthDialog.vue';
@@ -118,6 +124,8 @@ export default {
     AssetDialog,
     GroupDialog,
     MethodAdvancedDialog,
+    MethodAuthDialog,
+    ConnectAuthDialog,
     ClosePromptDialog,
     UpdateDialog,
     SshAuthDialog,

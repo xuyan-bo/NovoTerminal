@@ -60,6 +60,18 @@ const api = {
 
   sessionTest: (req) => ipcRenderer.invoke('session:test', req),
   sessionConnect: (req) => ipcRenderer.invoke('session:connect', req),
+  sessionAuth: (req) => ipcRenderer.invoke('session:auth', req),
+  sessionAuthReply: (requestId, answer) => ipcRenderer.invoke('session:auth-reply', requestId, answer),
+  onAuthRequest: (cb) => {
+    const handler = (_event, data) => cb(data);
+    ipcRenderer.on('session:auth-request', handler);
+    return () => ipcRenderer.removeListener('session:auth-request', handler);
+  },
+  onAuthCancel: (cb) => {
+    const handler = (_event, data) => cb(data);
+    ipcRenderer.on('session:auth-cancel', handler);
+    return () => ipcRenderer.removeListener('session:auth-cancel', handler);
+  },
   rdpProbeClient: (clientId) => ipcRenderer.invoke('rdp:probe-client', clientId),
   rdpPickClientBinary: (clientId) => ipcRenderer.invoke('rdp:pick-client-binary', clientId),
 

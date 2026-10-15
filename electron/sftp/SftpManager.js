@@ -206,15 +206,16 @@ class SftpManager {
   }
 
   /**
-   * SFTP 的端口与传输参数取资产自己的 sftp 行；认证、跳板机与主机密钥策略沿用同一资产的
-   * ssh 行，因此只有 SSH 配置的资产（从终端进入 SFTP）也能连接，此时用 SFTP 默认传输参数。
+   * SFTP 的端口与传输参数取资产自己的 sftp 行；跳板机与主机密钥策略沿用同一资产的 ssh 行，
+   * 因此只有 SSH 配置的资产（从终端进入 SFTP）也能连接，此时用 SFTP 默认传输参数。
+   * 认证走 sftp 行自己的凭证配置（未自定义即主凭证），由 openSession 经 store 解析。
    */
   _sessionConfig(asset) {
     const methods = asset.methods || {};
-    const sftp = methods.sftp && methods.sftp.enabled ? methods.sftp : null;
-    const ssh = methods.ssh && methods.ssh.enabled ? methods.ssh : null;
+    const sftp = methods.sftp || null;
+    const ssh = methods.ssh || null;
     if (!sftp && !ssh) {
-      throw Object.assign(new Error('SFTP or SSH method not enabled'), { code: 'SFTP_DISABLED' });
+      throw Object.assign(new Error('SFTP or SSH method not configured'), { code: 'SFTP_DISABLED' });
     }
     const advanced = { ...((ssh && ssh.advanced) || {}), ...((sftp && sftp.advanced) || {}) };
     const port = Number((sftp && sftp.port) || (ssh && ssh.port)) || 22;
@@ -235,7 +236,7 @@ class SftpManager {
     return { assetId: asset.id, host: asset.host || '', port, name: asset.name || '' };
   }
 
-  async openSession({ assetId, ownerId, verifyHostKey, promptKeyboard }) {
+  async openSession({ assetId, ownerId, auth, verifyHostKey, promptKeyboard }) {
     const hit = this.store.findAsset(assetId);
     if (!hit) throw Object.assign(new Error('asset not found'), { code: 'SFTP_NO_ASSET' });
     const asset = hit.asset;
@@ -248,7 +249,8 @@ class SftpManager {
     }
     const connId = `sftp-${Date.now()}-${(++this._seq).toString(36)}`;
     const connection = createSshConnection({
-      host: asset.host, port: config.port, username: asset.user || '', password: asset.pass,
+      host: asset.host, port: config.port, username: auth.username, password: auth.password,
+      privateKey: auth.privateKey, passphrase: auth.passphrase,
       advanced: config.advanced, verifyHostKey, promptKeyboard, log: this.log,
       readyTimeout: config.tune.readyTimeout,
     });

@@ -27,6 +27,7 @@ const { normalize: normalizeAi } = require('./ai/aiSettings');
 const { SSH_DEFAULTS } = require('./ssh/connection');
 const { createHostKeyVerifier } = require('./ssh/hostKeys');
 const { SshPrompts } = require('./ssh/SshPrompts');
+const { AuthRequests } = require('./session/AuthRequests');
 const { probeRemoteCwd, sanitizeRemotePath } = require('./ssh/cwdProbe');
 const { fileURLToPath } = require('url');
 const { VncSessionManager } = require('./vnc/VncSessionManager');
@@ -303,6 +304,7 @@ async function resolveSftpInitialPath(sender, req, assetId) {
 }
 
 const sshPrompts = new SshPrompts();
+const authRequests = new AuthRequests();
 const sshOwners = new Set();
 const sshTests = new Map();
 
@@ -319,6 +321,7 @@ function closeSshOwner(ownerId) {
   if (tests) for (const connection of tests) connection.close();
   sshTests.delete(ownerId);
   sshPrompts.closeOwner(ownerId);
+  authRequests.closeOwner(ownerId);
 }
 
 function trackSshOwner(sender) {
@@ -368,6 +371,86 @@ function sshRequestContext(sender) {
       });
     },
   };
+}
+
+/** 认证被拒后最多再问几次凭证（每次都是真实发往服务器的认证请求，防撞账号锁定策略） */
+const SSH_AUTH_RETRY = 3;
+
+/** 各访问方式能消费的凭证类型。主进程不 import 渲染端注册表：那份带 .vue 的动态 import */
+const AUTH_KINDS_BY_METHOD = {
+  ssh: ['password', 'key'],
+  sftp: ['password', 'key'],
+  rdp: ['password'],
+  vnc: ['password'],
+};
+
+function protocolAuthKinds(methodId) {
+  return Object.prototype.hasOwnProperty.call(AUTH_KINDS_BY_METHOD, methodId)
+    ? AUTH_KINDS_BY_METHOD[methodId]
+    : ['password'];
+}
+
+function authHint(kind, en) {
+  if (kind === 'rejected') {
+    return en ? 'Authentication was rejected. Enter the credential again.' : '认证未通过，请重新输入凭证。';
+  }
+  return en ? 'No credential is configured for this access method.' : '该访问方式未配置凭证，请输入登录信息。';
+}
+
+/** 把弹窗的一次回答换成连接用的凭证；被引用凭证的秘密只在这里从库里取 */
+function authFromAnswer(answer) {
+  if (answer.mode === 'credential') {
+    const credential = store.requireCredential(answer.credentialId);
+    const key = credential.kind === 'key';
+    return {
+      username: credential.user || '',
+      password: key ? '' : credential.pass || '',
+      privateKey: key ? credential.privateKey || '' : '',
+      passphrase: key ? credential.passphrase || '' : '',
+      kind: key ? 'key' : 'password',
+      source: 'credential',
+      needsPrompt: key ? !credential.privateKey : !credential.pass,
+    };
+  }
+  return {
+    username: answer.user,
+    password: answer.pass,
+    privateKey: '',
+    passphrase: '',
+    kind: 'password',
+    source: 'custom',
+    needsPrompt: !answer.pass.trim(),
+  };
+}
+
+/**
+ * 连接前的最后一道凭证解析：主凭证与方式配置都拿不到口令时，向发起连接的那个窗口要一次
+ * （选已有凭证或手填，与资产表单同一套口径）。只有勾了「记住」才写回该访问方式的凭证设置，
+ * 其余情况答案只用于本次连接。取消、超时或窗口销毁都回 null，由调用方中止连接。
+ */
+async function resolveAuthForWindow(sender, asset, methodId, port, reask) {
+  const en = store.getSettings().lang === 'en';
+  const title = `${String(methodId || '').toUpperCase()} · ${asset.name || asset.host || ''}`;
+  const askAgain = async (hintKind) => {
+    const answer = await authRequests.request(sender, {
+      title,
+      hint: authHint(hintKind, en),
+      kinds: protocolAuthKinds(methodId),
+    });
+    if (!answer) return null;
+    if (answer.remember) {
+      store.rememberMethodAuth(asset.id, methodId, answer);
+      send('store:changed', { reason: 'asset' });
+    }
+    return authFromAnswer(answer);
+  };
+  const auth = store.resolveAssetAuth(asset, methodId);
+  if (!reask && !auth.needsPrompt) return { auth, askAgain };
+  const asked = await askAgain(reask ? 'rejected' : 'missing');
+  if (!asked || asked.needsPrompt) {
+    throw Object.assign(new Error(en ? 'Password is required' : '需要口令'), { code: 'AUTH_REQUIRED' });
+  }
+  return { auth: asked, askAgain };
 }
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
@@ -834,7 +917,7 @@ function isMainWindow(sender) {
 }
 
 function registerIpc() {
-  // 快照会进每个窗口的 store，AI 配置里的凭据不能跟着扩散
+  // 快照会进每个窗口的 store，AI 配置里的凭证不能跟着扩散
   handle('store:snapshot', () => {
     const snap = store.snapshot();
     return snap && snap.settings ? { ...snap, settings: withoutAiKeys(snap.settings) } : snap;
@@ -912,7 +995,7 @@ function registerIpc() {
   handle('credential:update', (cid, p) => unwrap(store.updateCredential(cid, p)));
   handle('credential:delete', (cid) => unwrap(store.deleteCredential(cid)));
   handle('credential:reorder', (p) => unwrap(store.reorderCredential(p)));
-  /** 凭据的秘密字段只从这条通道离开主进程：限宿主窗口，且必须先过系统身份验证。 */
+  /** 凭证的秘密字段只从这条通道离开主进程：限宿主窗口，且必须先过系统身份验证。 */
   handle('credential:reveal', async (sender, cid) => {
     if (!isMainWindow(sender)) {
       throw Object.assign(new Error('credential reveal is limited to the main window'), {
@@ -920,7 +1003,7 @@ function registerIpc() {
       });
     }
     const lang = store.getSettings().lang;
-    const auth = await verifySystemAuth(store.L('查看凭据内容', 'Reveal credential'), mainWindowHwnd(), {
+    const auth = await verifySystemAuth(store.L('查看凭证内容', 'Reveal credential'), mainWindowHwnd(), {
       lang,
       log: logger,
     });
@@ -992,7 +1075,7 @@ function registerIpc() {
     if ('logTotalMb' in clean) logStore.setTotalBytes(clean.logTotalMb * MB);
     applyZoom();
     rebuildTrayMenu();
-    // AI 只记汇总，服务清单里有 baseUrl 与凭据，不进日志
+    // AI 只记汇总，服务清单里有 baseUrl 与凭证，不进日志
     const ai = clean.ai;
     logger.info('settings', 'settings updated', {
       keys: Object.keys(clean).sort().join(','),
@@ -1164,13 +1247,19 @@ function registerIpc() {
     return logStore.log(level, (p && p.source) || 'renderer', (p && p.message) || '', p && p.meta);
   }, true);
 
-  handle('session:test', (sender, req) => sessions.testConnection(req, sshRequestContext(sender)), true);
+  handle('session:test', (sender, req) => {
+    const methodId = String((req && req.method && req.method.protocol) || '');
+    // 表单里的资产还没落库，凭证按草稿形状解析：主凭证优先，方式自定义覆盖
+    if (req && req.draft && methodId) req = { ...req, auth: store.resolveAssetAuth(req.draft, methodId) };
+    return sessions.testConnection(req, sshRequestContext(sender));
+  }, true);
   handle('ssh:auth-reply', (sender, requestId, answers) => sshPrompts.reply(sender.id, requestId, answers), true);
+  handle('session:auth-reply', (sender, requestId, answer) => authRequests.reply(sender.id, requestId, answer), true);
   handle('session:connect', async (sender, req) => {
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
     const method = hit.asset.methods && hit.asset.methods[req.methodId];
-    if (!method || !method.enabled) throw new Error('method not enabled');
+    if (!method) throw new Error('method not found');
     const advanced = resolveAdvanced(req.methodId, method.advanced);
     const meta = {
       id: req.methodId,
@@ -1178,13 +1267,27 @@ function registerIpc() {
       port: method.port,
       advanced,
     };
+    const { auth } = await resolveAuthForWindow(sender, hit.asset, req.methodId, method.port);
     return sessions.connect({
       assetId: hit.asset.id,
       asset: hit.asset,
+      auth,
       method: meta,
       display: mapRdpDisplay(advanced),
-      auth: { mode: 'keytar' },
     });
+  }, true);
+  /**
+   * 内置引擎（IronRDP、noVNC）在渲染进程完成握手，凭证必须交给发起连接的那个窗口。
+   * 只回本次连接要用的那一条方式，秘密不因为它进快照，也不给别的宿主窗口回灌。
+   */
+  handle('session:auth', async (sender, req) => {
+    const hit = store.findAsset(req && req.assetId);
+    if (!hit) throw new Error('asset not found');
+    const methodId = String((req && req.methodId) || '');
+    const method = hit.asset.methods && hit.asset.methods[methodId];
+    if (!method) throw new Error('method not found');
+    const { auth } = await resolveAuthForWindow(sender, hit.asset, methodId, method.port, !!req.reask);
+    return { username: auth.username, password: auth.password };
   }, true);
   handle('rdp:probe-client', (sender, clientId) => sessions.probeClient(clientId), true);
   handle('rdp:pick-client-binary', async (sender, clientId) => {
@@ -1207,14 +1310,37 @@ function registerIpc() {
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
     const method = hit.asset.methods && hit.asset.methods.ssh;
-    if (!method || !method.enabled) throw new Error('method not enabled');
-    const result = await sshSessions.connect({
-      ...sshRequestContext(sender), requestId: req.requestId,
-      assetId: hit.asset.id,
-      asset: { host: hit.asset.host, user: hit.asset.user, pass: hit.asset.pass },
-      method: { id: 'ssh', port: method.port || 22, advanced: method.advanced },
-      cols: req.cols, rows: req.rows,
-    });
+    if (!method) throw new Error('method not found');
+    const port = method.port || 22;
+    const { auth, askAgain } = await resolveAuthForWindow(sender, hit.asset, 'ssh', port);
+    let used = auth;
+    let result;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        result = await sshSessions.connect({
+          ...sshRequestContext(sender), requestId: req.requestId,
+          assetId: hit.asset.id,
+          asset: { host: hit.asset.host },
+          auth: used,
+          method: { id: 'ssh', port, advanced: method.advanced },
+          cols: req.cols, rows: req.rows,
+          // 认证失败还要在同一条页签上重问重连，中间失败不能惊动视图（见 SshSessionManager 的 quiet）
+          quiet: true,
+        });
+        break;
+      } catch (error) {
+        /**
+         * 只有认证被服务器拒绝才重问口令；网络、主机密钥与超时错误重发没有意义，
+         * 而且连续撞 sshd MaxAuthTries 会封客户端。失败记录已由 SshSessionManager 清掉，
+         * 同一个 requestId 可以直接复用再连一次。
+         */
+        if (error.code !== 'SSH_AUTH_FAILED' || attempt >= SSH_AUTH_RETRY || sender.isDestroyed()) throw error;
+        const again = await askAgain('rejected');
+        if (!again || again.needsPrompt) throw error;
+        logger.warn('ssh', 'ssh authentication rejected, asking again', { host: hit.asset.host, port, attempt });
+        used = again;
+      }
+    }
     /**
      * 只有发起方窗口已经没了才收回这条连接：那时没人接手。所有权在握手中被 `ssh:attach` 转走
      * 是正常交接（页签被搬到另一个窗口），不能当成取消——否则刚接手的窗口只会拿到一条已断开的会话。
@@ -1224,7 +1350,7 @@ function registerIpc() {
       sshSessions.disconnect(result.sessionId);
       throw Object.assign(new Error('SSH connection canceled'), { code: 'SSH_CANCELED' });
     }
-    store.pushRecent(hit.asset, { id: 'ssh', port: method.port || 22 });
+    store.pushRecent(hit.asset, { id: 'ssh', port });
     send('store:changed', { reason: 'recent' });
     return result;
   }, true);
@@ -1259,7 +1385,7 @@ function registerIpc() {
   /**
    * 监控面板的开合、刷新间隔与宽度是界面偏好，但页签在宿主窗口之间移动时视图实例会被重建；
    * 存在主进程、按 tabId 取，拆分与合并就都不要求用户重开一次面板。
-   * 两个入口都走 handle 的来源校验（自有窗口的主框架）；状态本身只按形状校验，不含凭据也不触发远端动作。
+   * 两个入口都走 handle 的来源校验（自有窗口的主框架）；状态本身只按形状校验，不含凭证也不触发远端动作。
    */
   const monitorUi = new Map();
   handle('monitor:ui-get', (sender, tabId) => (typeof tabId === 'string' ? monitorUi.get(tabId) || null : null), true);
@@ -1331,7 +1457,7 @@ function registerIpc() {
     ownSsh(sender, req && req.sessionId);
     return aiAssistant.screenReply(req);
   }, true);
-  /** 测试连接与拉取模型清单共用同一份入参校验，凭据只在进程内使用。 */
+  /** 测试连接与拉取模型清单共用同一份入参校验，凭证只在进程内使用。 */
   function aiProbe(req) {
     const baseUrl = typeof (req && req.baseUrl) === 'string' ? req.baseUrl.trim().replace(/\/+$/, '') : '';
     if (!/^https?:\/\//i.test(baseUrl)) throw Object.assign(new Error('Invalid base URL'), { code: 'AI_URL' });
@@ -1340,7 +1466,7 @@ function registerIpc() {
     const model = typeof (req && req.model) === 'string' ? req.model.slice(0, 120) : '';
     return { baseUrl, apiKey, model };
   }
-  /** 日志只留协议+主机+端口+路径：有人把凭据写进 URL（userinfo 或 query）时不能跟着进日志文件。 */
+  /** 日志只留协议+主机+端口+路径：有人把凭证写进 URL（userinfo 或 query）时不能跟着进日志文件。 */
   function safeBaseUrl(baseUrl) {
     try {
       const u = new URL(baseUrl);
@@ -1408,7 +1534,7 @@ function registerIpc() {
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
     const method = hit.asset.methods && hit.asset.methods[req.methodId];
-    if (!method || !method.enabled) throw new Error('method not enabled');
+    if (!method) throw new Error('method not found');
     const host = String(hit.asset.host || '').trim();
     if (!host) throw Object.assign(new Error('asset host is required'), { code: 'HOST_MISSING' });
     const result = await vncSessions.connect({
@@ -1433,7 +1559,7 @@ function registerIpc() {
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
     const method = hit.asset.methods && hit.asset.methods[req.methodId];
-    if (!method || !method.enabled) throw new Error('method not enabled');
+    if (!method) throw new Error('method not found');
     const host = String(hit.asset.host || '').trim();
     if (!host) throw Object.assign(new Error('asset host is required'), { code: 'HOST_MISSING' });
     const result = await rdpSessions.connect({
@@ -1479,7 +1605,6 @@ function registerIpc() {
       kind,
       title: String(req.title || ''),
       icon: String(req.icon || ''),
-      os: String(req.os || ''),
       assetId: String(req.assetId || ''),
       methodId: String(req.methodId || kind),
       host: String(req.host || ''),
@@ -2055,7 +2180,14 @@ function registerIpc() {
     return s;
   };
 
-  handle('sftp:open', (sender, req) => sftpManager.openSession({ assetId: req && req.assetId, ...sshRequestContext(sender) }), true);
+  handle('sftp:open', async (sender, req) => {
+    const hit = store.findAsset(req && req.assetId);
+    if (!hit) throw Object.assign(new Error('asset not found'), { code: 'SFTP_NO_ASSET' });
+    const methods = hit.asset.methods || {};
+    const port = methods.sftp?.port || methods.ssh?.port || 22;
+    const { auth } = await resolveAuthForWindow(sender, hit.asset, 'sftp', port);
+    return sftpManager.openSession({ assetId: hit.asset.id, auth, ...sshRequestContext(sender) });
+  }, true);
   handle('sftp:list', (sender, connId, remotePath) => sftpManager.list(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
   handle('sftp:stat', (sender, connId, remotePath) => sftpManager.stat(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
   handle('sftp:edit-local', (sender, p) => editManager.openLocal(sftpLocalPath(p)), true);
@@ -2262,6 +2394,7 @@ function quitCleanup() {
   for (const tests of sshTests.values()) for (const connection of tests) connection.close();
   sshTests.clear();
   sshPrompts.destroyAll();
+  authRequests.destroyAll();
   destroyTray();
 }
 

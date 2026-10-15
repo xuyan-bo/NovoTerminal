@@ -48,6 +48,7 @@ class SshSessionManager {
     }
     const asset = req.asset || {};
     const method = req.method || {};
+    const auth = req.auth || {};
     const adv = resolveAdvanced(method.advanced || req.advanced);
     const dimension = (value, fallback) => Number.isInteger(value) && value > 0 && value <= 1000 ? value : fallback;
     const rec = {
@@ -74,8 +75,9 @@ class SshSessionManager {
       }
       if (this.sessions.get(sessionId) !== rec) throw canceled();
       rec.connection = createSshConnection({
-        host: rec.host, port: rec.port, username: asset.user || '',
-        password: req.password != null ? req.password : asset.pass,
+        host: rec.host, port: rec.port, username: auth.username || '',
+        password: req.password != null ? req.password : auth.password,
+        privateKey: auth.privateKey || '', passphrase: auth.passphrase || '',
         advanced: adv, verifyHostKey: req.verifyHostKey, promptKeyboard: req.promptKeyboard, log: this.log,
       });
       const onClosed = (error) => {
@@ -132,7 +134,14 @@ class SshSessionManager {
       return { sessionId, host: rec.host, port: rec.port, charset: adv.charset, term: adv.term };
     } catch (error) {
       if (this.sessions.get(sessionId) === rec) {
-        this._emit(sessionId, error.code === 'SSH_CANCELED' ? 'ended' : 'error', { code: error.code || 'SSH_ERROR', message: error.message });
+        /**
+         * quiet：调用方（主进程的认证失败重问循环）还要用同一个 requestId 再连一次，
+         * 这时不能把中间失败广播给视图——视图收到 error 会就地拆掉这条会话并递增连接版本号，
+         * 之后重试成功的 ready 就被 isCurrent() 判成过期丢弃，表现为"填对了也没反应"。
+         */
+        if (!req.quiet) {
+          this._emit(sessionId, error.code === 'SSH_CANCELED' ? 'ended' : 'error', { code: error.code || 'SSH_ERROR', message: error.message });
+        }
         this.cleanup(sessionId);
       }
       throw error;

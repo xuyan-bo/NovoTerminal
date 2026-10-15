@@ -131,6 +131,9 @@ const RDP_ERROR_KIND_KEYS = {
 /** 页签状态点：内嵌 RDP 的 connected 归到共用的 ready，ended 与 idle 是不连接的灰色。 */
 const DOT_STATE = { connecting: 'connecting', connected: 'ready', error: 'error' };
 
+/** 认证失败后当场自动重问几次（与主进程 SSH_AUTH_RETRY 同值） */
+const RDP_AUTH_RETRY = 2;
+
 export default {
   name: 'RdpView',
   mixins: [
@@ -211,6 +214,9 @@ export default {
     this._clipboardEnabled = true;
     this._disposed = false;
     this._connectVersion = 0;
+    this._reask = false;
+    this._authTries = 0;
+    this._lastAuthError = false;
     this.connect();
   },
   beforeDestroy() {
@@ -253,6 +259,24 @@ export default {
       }
       return this.errText(e);
     },
+    /** IronErrorKind 1/2 是口令类错误：记下重问标记，错误文案照旧返回给用户 */
+    authErrorText(e) {
+      const kind = e && typeof e.kind === 'function' ? e.kind() : -1;
+      this._lastAuthError = kind === 1 || kind === 2;
+      if (this._lastAuthError) this._reask = true;
+      return this.errUserText(e);
+    },
+    /**
+     * 口令被服务器拒绝时当场重新要一次凭证（与 VNC、SSH 的重问一致），不等用户点重连。
+     * 上限内自动重建会话；非认证错误或预算用尽就停在错误态。
+     */
+    retryAuth() {
+      if (!this._lastAuthError) return;
+      this._lastAuthError = false;
+      if (this._authTries >= RDP_AUTH_RETRY) return;
+      this._authTries += 1;
+      this.connect();
+    },
     async connect() {
       this.disconnectNow(true);
       this._closing = false;
@@ -271,7 +295,8 @@ export default {
         r = unwrap(await api.rdpConnect({ assetId: this.assetId, methodId: this.methodId }));
       } catch (e) {
         this.status = 'error';
-        this.statusDetail = this.errUserText(e);
+        this.statusDetail = this.authErrorText(e);
+        this.retryAuth();
         return;
       }
 
@@ -288,6 +313,7 @@ export default {
         if (ev.type === 'connected') {
           this.status = 'connected';
           this.statusDetail = '';
+          this._reask = false;
         } else if (ev.type === 'ended') {
           // 代理在报错后紧接着也会结束，不能让随后的 ended 把失败原因抹成「已断开」。
           if (this.status === 'error') return;
@@ -315,8 +341,12 @@ export default {
         const advanced = (method && method.advanced) || {};
         const host = r.host || (asset && asset.asset && asset.asset.host) || '';
         const port = r.port || 3389;
-        const logon = splitUserDomain((asset && asset.asset && asset.asset.user) || '');
-        const password = (asset && asset.asset && asset.asset.pass) || '';
+        // IronRDP 在渲染端建会话，登录名与口令由主进程按凭证解析后只回给这个窗口
+        const auth = unwrap(
+          await api.sessionAuth({ assetId: this.assetId, methodId: this.methodId, reask: this._reask })
+        );
+        const logon = splitUserDomain(auth.username || '');
+        const password = auth.password || '';
         const nla = advanced.nla !== false;
         const clipboard = advanced.clipboard !== false;
         this._clipboardEnabled = clipboard;
@@ -376,6 +406,8 @@ export default {
         this.showCanvas = true;
         this.status = 'connected';
         this.statusDetail = '';
+        this._reask = false;
+        this._authTries = 0;
         this.setupInput(canvas, session);
         this._applyScale();
         this._startClipPoll();
@@ -400,7 +432,8 @@ export default {
               this.session = null;
               this._stopClipPoll();
               this.status = 'error';
-              this.statusDetail = this.errUserText(e);
+              this.statusDetail = this.authErrorText(e);
+              this.retryAuth();
             }
           });
 
@@ -410,7 +443,8 @@ export default {
         // 代理已建立或订阅已挂上时失败要就地释放，不能留到组件销毁才清
         this.disconnectNow(true);
         this.status = 'error';
-        this.statusDetail = this.errUserText(e);
+        this.statusDetail = this.authErrorText(e);
+        this.retryAuth();
       }
     },
 
@@ -644,6 +678,8 @@ export default {
     },
 
     reconnect() {
+      // 手动重连给一次新的重问预算
+      this._authTries = 0;
       this.connect();
     },
 

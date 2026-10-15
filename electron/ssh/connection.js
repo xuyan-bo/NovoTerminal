@@ -1,5 +1,3 @@
-const fs = require('fs');
-const os = require('os');
 const net = require('net');
 const { EventEmitter } = require('events');
 const { Client, utils } = require('ssh2');
@@ -9,19 +7,15 @@ const SSH_DEFAULTS = Object.freeze({
   term: 'xterm-256color',
   keepAlive: 30,
   compression: false,
-  authType: 'password',
-  privateKeyPath: '',
   proxyJump: '',
   x11Forward: false,
   hostKeyPolicy: 'ask',
-  privateKeyPassphrase: '',
   x11Display: '',
 });
 
 const ENUMS = {
   charset: ['UTF-8', 'GBK', 'GB2312', 'Big5', 'ISO-8859-1', 'ASCII'],
   term: ['xterm-256color', 'xterm', 'vt100', 'linux', 'ansi'],
-  authType: ['password', 'publickey'],
   hostKeyPolicy: ['ask', 'accept-new', 'strict'],
 };
 const INTERACTION_TIMEOUT = 120000;
@@ -55,15 +49,12 @@ function resolveAdvanced(saved) {
       if (!Number.isInteger(value) || value < 0 || value > 3600) throw configError(field);
     } else {
       if (typeof value !== 'string') throw configError(field);
-      if (field !== 'privateKeyPassphrase') value = value.trim();
+      value = value.trim();
       if (!value) continue;
-      if (field !== 'privateKeyPassphrase' && /[\x00-\x1f\x7f]/.test(value)) throw configError(field);
+      if (/[\x00-\x1f\x7f]/.test(value)) throw configError(field);
       if (ENUMS[field] && !ENUMS[field].includes(value)) throw configError(field);
     }
     advanced[field] = value;
-  }
-  if (advanced.authType === 'publickey' && !advanced.privateKeyPath) {
-    throw configError('privateKeyPath');
   }
   parseProxyJump(advanced.proxyJump);
   return advanced;
@@ -111,7 +102,8 @@ function parseProxyJump(value) {
   });
 }
 
-function createSshConnection({ host, port = 22, username = '', password = '', advanced,
+function createSshConnection({ host, port = 22, username = '', password = '', privateKey = '', passphrase = '',
+  advanced,
   verifyHostKey, promptKeyboard, log, readyTimeout = 20000 }) {
   const normalized = resolveAdvanced(advanced);
   if (typeof host !== 'string' || !host.trim() || /[\s\x00-\x1f\x7f/?#@\\]/.test(host.trim())) {
@@ -124,6 +116,10 @@ function createSshConnection({ host, port = 22, username = '', password = '', ad
   port = parsePort(port);
   if (typeof username !== 'string') throw configError('username');
   if (password != null && typeof password !== 'string') throw configError('password');
+  if (typeof privateKey !== 'string') throw configError('privateKey');
+  if (passphrase != null && typeof passphrase !== 'string') throw configError('passphrase');
+  // 认证方式不再有独立开关：拿到私钥内容就是 publickey，否则走口令 / 键盘交互
+  const keyAuth = privateKey.trim() !== '';
   if (!Number.isInteger(readyTimeout) || readyTimeout <= 0 || readyTimeout > 2147483647) {
     throw configError('readyTimeout');
   }
@@ -242,7 +238,7 @@ function createSshConnection({ host, port = 22, username = '', password = '', ad
     client.on('close', () => stop(null));
     client.on('keyboard-interactive', (name, instructions, language, prompts, finish) => {
       if (!active) return;
-      if (normalized.authType !== 'password' || typeof promptKeyboard !== 'function') {
+      if (keyAuth || typeof promptKeyboard !== 'function') {
         stop(sshError('SSH_KEYBOARD_REQUIRED', 'Interactive SSH authentication requires a prompt handler'));
         return;
       }
@@ -307,7 +303,7 @@ function createSshConnection({ host, port = 22, username = '', password = '', ad
       ...endpoint,
       ...auth,
       tryKeyboard: true,
-      authHandler: normalized.authType === 'publickey' ? ['publickey'] : ['password', 'keyboard-interactive'],
+      authHandler: keyAuth ? ['publickey'] : ['password', 'keyboard-interactive'],
       // Own the deadline so UI prompts can pause it without ssh2 private fields.
       readyTimeout: 0,
       keepaliveInterval: normalized.keepAlive * 1000,
@@ -337,24 +333,16 @@ function createSshConnection({ host, port = 22, username = '', password = '', ad
     }
   }
 
-  queueMicrotask(async () => {
+  queueMicrotask(() => {
     try {
       if (!active) return;
       let auth = { password: password == null ? '' : password };
-      if (normalized.authType === 'publickey') {
-        const keyPath = normalized.privateKeyPath.replace(/^~(?=[/\\])/, os.homedir());
-        let privateKey;
-        try {
-          privateKey = await fs.promises.readFile(keyPath);
-        } catch (_) {
-          throw sshError('SSH_KEY_READ', 'Unable to read SSH private key');
-        }
-        if (!active) return;
-        const parsed = utils.parseKey(privateKey, normalized.privateKeyPassphrase);
+      if (keyAuth) {
+        const parsed = utils.parseKey(privateKey, passphrase);
         if (parsed instanceof Error || !parsed.isPrivateKey()) {
           throw sshError('SSH_KEY_PARSE', 'Unable to decrypt or parse SSH private key');
         }
-        auth = { privateKey, passphrase: normalized.privateKeyPassphrase };
+        auth = { privateKey, passphrase };
       }
       if (active) connectEndpoint(0, undefined, auth);
     } catch (error) {

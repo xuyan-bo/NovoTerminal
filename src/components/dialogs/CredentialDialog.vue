@@ -352,7 +352,7 @@ export default {
       this.revealing = true;
       try {
         const full = unwrap(await api.revealCredential(row.id));
-        // 认证期间可能又点了别的凭据，晚到的结果只让最后一次生效
+        // 认证期间可能又点了别的凭证，晚到的结果只让最后一次生效
         if (seq !== this._revealSeq) return;
         this.resetForm();
         this.editId = row.id;
@@ -511,14 +511,6 @@ export default {
 }
 .cred-del {
   color: var(--danger);
-}
-.cred-kind-pass {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.cred-kind-key {
-  border-color: var(--success);
-  color: var(--success);
 }
 .cred-pick + .el-textarea {
   margin-top: 8px;

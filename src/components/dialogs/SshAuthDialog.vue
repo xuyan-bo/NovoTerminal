@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     :visible="!!active"
-    :title="'SSH · ' + $t('adv.ssh.authType')"
+    :title="'SSH · ' + $t('ssh.authTitle')"
     width="480px"
     append-to-body
     :close-on-click-modal="false"

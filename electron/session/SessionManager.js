@@ -98,6 +98,7 @@ class SessionManager {
     const protocol = String((req.method && req.method.protocol) || '').toLowerCase();
     const asset = req.asset || {};
     const method = req.method || {};
+    const auth = req.auth || {};
     const host = asset.host;
     if (!host) return { ok: false, code: 'NO_HOST' };
     const port = method.port;
@@ -108,27 +109,31 @@ class SessionManager {
       return testSsh({
         host,
         port,
-        username: asset.user,
-        password: asset.pass,
+        username: auth.username,
+        password: auth.password,
+        privateKey: auth.privateKey,
+        passphrase: auth.passphrase,
         advanced,
         ...context,
         log: this.log,
       });
     }
     if (protocol === 'sftp') {
-      // advanced 由渲染层按「SSH 认证 + SFTP 传输参数」合并后传入，与 SftpManager 的会话配置同源
+      // advanced 由渲染层按「SSH 跳板机 + SFTP 传输参数」合并后传入，与 SftpManager 的会话配置同源
       return testSftp({
         host,
         port,
-        username: asset.user,
-        password: asset.pass,
+        username: auth.username,
+        password: auth.password,
+        privateKey: auth.privateKey,
+        passphrase: auth.passphrase,
         advanced,
         ...context,
         log: this.log,
       });
     }
     if (protocol === 'vnc') {
-      return testVnc({ host, port, password: advanced.password || asset.pass, lang });
+      return testVnc({ host, port, password: auth.password || '', lang });
     }
     if (protocol === 'rdp') {
       return testRdp({ host, port, lang });
@@ -153,10 +158,6 @@ class SessionManager {
     };
 
     const payload = { ...req, sessionId };
-    if (req.auth && req.auth.mode === 'keytar' && req.asset && req.asset.pass) {
-      payload._password = req.asset.pass;
-      payload.auth = { mode: 'cmdkey' };
-    }
 
     try {
       const result = await adapter.connect(payload, sessionId);

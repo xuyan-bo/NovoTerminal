@@ -49,11 +49,12 @@ class FreeRdpAdapterBase extends BaseAdapter {
   buildArgs(payload) {
     const { asset, method, display, advanced } = payload;
     const adv = advanced || (method && method.advanced) || {};
+    const auth = payload.auth || {};
     const args = [`/v:${targetSpec(asset.host, (method && method.port) || 3389)}`];
-    const logon = splitLogon(asset.user);
+    const logon = splitLogon(auth.username);
     if (logon.user) args.push(`/u:${logon.user}`);
     if (logon.domain) args.push(`/d:${logon.domain}`);
-    const password = payload._password;
+    const password = auth.password;
     if (password) args.push(`/p:${password}`);
 
     if (display && display.multimon) args.push('/multimon');

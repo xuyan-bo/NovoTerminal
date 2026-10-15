@@ -202,7 +202,7 @@ export default {
         for (const f of this.allFields) {
           const list = [];
           if (f.type === 'select') list.push({ validator: this.selectOptionRule(f), trigger: 'change' });
-          if (f.required) list.push({ ...requiredRule(t, 'adv.ssh.privateKeyRequired'), required: true });
+          if (f.required) list.push({ ...requiredRule(t, 'msg.fieldRequired'), required: true });
           if (list.length) rules[f.key] = list;
         }
       }
@@ -331,7 +331,7 @@ export default {
       const started = Date.now();
       const defaults = this.defaults();
       const payload = {};
-      // 隐藏字段仍参与保存；显式空值覆盖旧值，不能因合并配色而恢复已清除的凭据。
+      // 隐藏字段仍参与保存；显式空值覆盖旧值，不能因合并配色而恢复已清除的凭证。
       this.allFields.forEach((f) => {
         const v = this.form[f.key];
         if (v === undefined || v === null) {

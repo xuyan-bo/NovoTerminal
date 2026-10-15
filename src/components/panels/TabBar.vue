@@ -46,13 +46,7 @@
             @click="onTabClick(t)"
             @contextmenu.prevent="onTabContextmenu($event, t)"
           >
-            <span
-              v-if="t.os"
-              class="tab-os"
-              :class="'os-' + t.os"
-              v-html="osSvg(t.os)"
-            ></span>
-            <i v-else-if="isGlyphIcon(t.icon)" class="tab-glyph" :class="t.icon" aria-hidden="true"></i>
+            <i v-if="isGlyphIcon(t.icon)" class="tab-glyph" :class="t.icon" aria-hidden="true"></i>
             <svg-icon v-else class="tab-glyph" :name="t.icon" />
             <span>{{ tabTitle(t) }}</span>
             <span
@@ -100,7 +94,7 @@
 import CtxMenu from '../common/CtxMenu.vue';
 import { store, closeTab, moveTab, refreshSessionTab, api, detachTab, moveTabToWindow, copySessionToGroup, setDockTarget, clearDockTarget, tabPayload, findAsset, enabledMethods, openSshSession } from '../../store';
 import { t } from '../../i18n';
-import { osIcon, TAB_DRAG_TYPE } from '../../constants';
+import { TAB_DRAG_TYPE } from '../../constants';
 import { getProtocol } from '../../protocols';
 
 /** Preview size of the detached-window outline shown while a tab is dragged out. */
@@ -183,9 +177,6 @@ export default {
     window.removeEventListener('resize', this.scheduleReportBounds);
   },
   methods: {
-    osSvg(os) {
-      return osIcon(os);
-    },
     isGlyphIcon(icon) {
       return typeof icon === 'string' && icon.startsWith('el-icon-');
     },

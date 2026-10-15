@@ -154,6 +154,18 @@ export const api = hasBridge
       async sessionTest() {
         return { ok: false, error: t('msg.previewMode') };
       },
+      async sessionAuth() {
+        throw Object.assign(new Error(t('msg.previewConnect')), { code: 'NO_BRIDGE' });
+      },
+      async sessionAuthReply() {
+        return false;
+      },
+      onAuthRequest() {
+        return () => {};
+      },
+      onAuthCancel() {
+        return () => {};
+      },
       async rdpProbeClient() {
         return { ok: false, code: 'NO_BRIDGE', message: t('msg.needElectron') };
       },
