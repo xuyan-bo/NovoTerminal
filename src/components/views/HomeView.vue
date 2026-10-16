@@ -13,18 +13,30 @@
           <span class="num">{{ assetCount }}</span>
           <span class="unit">{{ $t('home.assets') }} · {{ groups.length }} {{ $t('home.groups') }}</span>
         </div>
-        <div class="stat-chips">
-          <span class="chip os-chip">
-            <span class="os-icon os-win" v-html="iconSvg('win')"></span>
-            {{ $t('os.win') }} <b>{{ osCount.win }}</b>
+        <div class="stat-chips" ref="chipsEl">
+          <span v-for="row in visibleTypes" :key="row.id" class="chip">
+            <span class="type-dot" :style="{ background: row.color }"></span>
+            <i v-if="row.glyph" class="os-icon" :class="row.glyph" aria-hidden="true"></i>
+            <span v-else class="os-icon" :class="'os-' + row.id" v-html="iconSvg(row.id)"></span>
+            {{ $t(row.nameKey) }} <b>{{ row.count }}</b>
           </span>
-          <span class="chip os-chip">
-            <span class="os-icon os-mac" v-html="iconSvg('mac')"></span>
-            {{ $t('os.mac') }} <b>{{ osCount.mac }}</b>
-          </span>
-          <span class="chip os-chip">
-            <span class="os-icon os-linux" v-html="iconSvg('linux')"></span>
-            {{ $t('os.linux') }} <b>{{ osCount.linux }}</b>
+          <el-tooltip v-if="hiddenTypes.length" placement="top">
+            <div slot="content">
+              <div v-for="row in hiddenTypes" :key="row.id" class="chip-more-row">
+                <span class="type-dot" :style="{ background: row.color }"></span>
+                {{ $t(row.nameKey) }} <b>{{ row.count }}</b>
+              </div>
+            </div>
+            <span class="chip chip-more">+{{ hiddenTypes.length }}</span>
+          </el-tooltip>
+        </div>
+        <!-- 等宽的隐藏量算层：始终铺全部类型，用来数出第三行起被折掉几颗，不参与布局高度 -->
+        <div class="stat-chips stat-chips-measure" ref="measureEl" aria-hidden="true">
+          <span v-for="row in typeRows" :key="row.id" class="chip">
+            <span class="type-dot" :style="{ background: row.color }"></span>
+            <i v-if="row.glyph" class="os-icon" :class="row.glyph"></i>
+            <span v-else class="os-icon" :class="'os-' + row.id" v-html="iconSvg(row.id)"></span>
+            {{ $t(row.nameKey) }} <b>{{ row.count }}</b>
           </span>
         </div>
         <div class="pie-wrap">
@@ -75,14 +87,35 @@
 <script>
 import * as echarts from 'echarts/core';
 import { PieChart } from 'echarts/charts';
-import { LegendComponent, TooltipComponent } from 'echarts/components';
+import { TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import { store, findAsset, enabledMethods, connectAsset, connectionErrorMessage, removeRecent } from '../../store';
 import { protocolLabel } from '../../protocols';
-import { assetIcon, assetIconGlyph, RECENT_LIMIT_DEFAULT, RECENT_LIMIT_MAX } from '../../constants';
+import { ASSET_ICONS, assetIcon, assetIconGlyph, RECENT_LIMIT_DEFAULT, RECENT_LIMIT_MAX } from '../../constants';
 import { t, formatTime } from '../../i18n';
 
-echarts.use([PieChart, LegendComponent, TooltipComponent, CanvasRenderer]);
+echarts.use([PieChart, TooltipComponent, CanvasRenderer]);
+
+// 类型色只服务于首页这一张分布图，明暗两套底色下都取得到对比度，所以不再按主题分支
+const TYPE_COLORS = {
+  win: '#3b82f6',
+  mac: '#909399',
+  linux: '#34d399',
+  router: '#f59e0b',
+  nas: '#a78bfa',
+  firewall: '#f43f5e',
+  generic: '#64748b',
+};
+// 目录新增类型时不必改这里：按下标从备用色板循环取色
+const TYPE_COLOR_CYCLE = ['#38bdf8', '#c084fc', '#2dd4bf', '#fb923c', '#e879f9', '#818cf8', '#facc15'];
+
+function typeColor(id, index) {
+  if (Object.prototype.hasOwnProperty.call(TYPE_COLORS, id)) return TYPE_COLORS[id];
+  return TYPE_COLOR_CYCLE[index % TYPE_COLOR_CYCLE.length];
+}
+
+/** 图例最多占两行，多余的折成 +N */
+const CHIP_MAX_ROWS = 2;
 
 export default {
   name: 'HomeView',
@@ -90,6 +123,7 @@ export default {
     return {
       nowMs: Date.now(),
       busyKey: null,
+      chipLimit: null,
     };
   },
   computed: {
@@ -110,14 +144,32 @@ export default {
     assetCount() {
       return this.groups.reduce((s, g) => s + g.nodes.length, 0);
     },
-    osCount() {
-      const c = { win: 0, mac: 0, linux: 0 };
+    iconStats() {
+      const counts = {};
+      ASSET_ICONS.forEach((ic) => {
+        counts[ic.id] = 0;
+      });
       this.groups.forEach((g) =>
         g.nodes.forEach((n) => {
-          if (c[n.icon] != null) c[n.icon]++;
+          if (counts[n.icon] != null) counts[n.icon]++;
         })
       );
-      return c;
+      return counts;
+    },
+    typeRows() {
+      return ASSET_ICONS.map((ic, i) => ({
+        id: ic.id,
+        nameKey: ic.nameKey,
+        glyph: assetIconGlyph(ic.id),
+        count: this.iconStats[ic.id],
+        color: typeColor(ic.id, i),
+      }));
+    },
+    visibleTypes() {
+      return this.chipLimit === null ? this.typeRows : this.typeRows.slice(0, this.chipLimit);
+    },
+    hiddenTypes() {
+      return this.chipLimit === null ? [] : this.typeRows.slice(this.chipLimit);
     },
     localeTick() {
       return store.localeTick;
@@ -148,20 +200,26 @@ export default {
       });
     },
     pieSignature() {
-      const c = this.osCount;
-      return [this.assetCount, c.win, c.mac, c.linux, this.localeTick, this.themeTick].join('|');
+      return [this.assetCount, Object.values(this.iconStats).join(','), this.localeTick, this.themeTick].join('|');
     },
   },
   watch: {
     pieSignature() {
       this.renderPie();
+      this.$nextTick(this.measureChips);
     },
   },
   mounted() {
     this.$nextTick(() => {
       this.initPie();
+      this.measureChips();
     });
     window.addEventListener('resize', this.resizePie);
+    if (window.ResizeObserver) {
+      // 卡片宽度一变换行的行数就变，两行的判定得重算
+      this._chipsRO = new ResizeObserver(() => this.measureChips());
+      this._chipsRO.observe(this.$refs.chipsEl);
+    }
     // 相对时间只到分钟粒度，不自己走就会一直停在渲染那一刻
     this._timeTimer = setInterval(() => {
       this.nowMs = Date.now();
@@ -170,6 +228,12 @@ export default {
   beforeDestroy() {
     clearInterval(this._timeTimer);
     window.removeEventListener('resize', this.resizePie);
+    if (this._chipsRO) {
+      try {
+        this._chipsRO.disconnect();
+      } catch (_) {}
+      this._chipsRO = null;
+    }
     if (this._pieRO) {
       try {
         this._pieRO.disconnect();
@@ -203,12 +267,8 @@ export default {
       const light = this.isLight();
       return {
         text: light ? '#303133' : '#e6edf3',
-        text2: light ? '#606266' : '#8b9bb0',
         text3: light ? '#909399' : '#5c6b80',
         track: light ? 'rgba(144,147,153,0.2)' : 'rgba(148,163,184,0.18)',
-        win: '#3b82f6',
-        mac: light ? '#111111' : '#1a1a1a',
-        linux: '#34d399',
       };
     },
     initPie() {
@@ -242,6 +302,20 @@ export default {
       el.style.height = `${size}px`;
       return size;
     },
+    /** 图例只占两行：用量算层的行顶数出第三行起的类型，折成末尾的 +N */
+    measureChips() {
+      const el = this.$refs.measureEl;
+      if (!el || !el.children.length) return;
+      const chips = [...el.children];
+      const rows = [...new Set(chips.map((c) => c.offsetTop))].sort((a, b) => a - b);
+      if (rows.length <= CHIP_MAX_ROWS) {
+        this.chipLimit = chips.length;
+        return;
+      }
+      const fitted = chips.filter((c) => c.offsetTop <= rows[CHIP_MAX_ROWS - 1]).length;
+      // 空出一颗的位置给 +N，免得它自己被挤到第三行
+      this.chipLimit = Math.max(1, fitted - 1);
+    },
     renderPie() {
       this.$nextTick(() => {
         if (!this._pie) {
@@ -249,19 +323,14 @@ export default {
           return;
         }
         const th = this.themeTokens();
-        const names = {
-          win: t('os.win'),
-          mac: t('os.mac'),
-          linux: t('os.linux'),
-        };
         const assetsLabel = t('home.assets');
         const total = this.assetCount;
-        // 0 值传 NaN 而不是删掉数据项：删项会让图例点掉色并报 series not exists，NaN 只跳过扇区
-        const raw = [
-          { name: names.win, value: this.osCount.win || NaN, itemStyle: { color: th.win } },
-          { name: names.mac, value: this.osCount.mac || NaN, itemStyle: { color: th.mac } },
-          { name: names.linux, value: this.osCount.linux || NaN, itemStyle: { color: th.linux } },
-        ];
+        // 0 值传 NaN 而不是删项：扇区跳过绘制，但类型顺序与配色不随数据增减跳动
+        const raw = this.typeRows.map((row) => ({
+          name: t(row.nameKey),
+          value: row.count || NaN,
+          itemStyle: { color: row.color },
+        }));
         const pieData = total
           ? raw
           : [{ name: '—', value: 1, itemStyle: { color: th.track } }, ...raw];
@@ -281,23 +350,11 @@ export default {
                 return `${p.name}<br/>${p.value} · ${p.percent}%`;
               },
             },
-            legend: {
-              bottom: 0,
-              left: 'center',
-              icon: 'circle',
-              itemWidth: 8,
-              itemHeight: 8,
-              itemGap: 10,
-              itemMargin: 0,
-              padding: [0, 0, 0, 0],
-              textStyle: { color: th.text2, fontSize: 10 },
-              data: [names.win, names.mac, names.linux],
-            },
             series: [
               {
                 type: 'pie',
                 radius: ['48%', '68%'],
-                center: ['50%', '42%'],
+                center: ['50%', '50%'],
                 minAngle: 6,
                 avoidLabelOverlap: true,
                 label: {

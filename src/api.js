@@ -127,6 +127,9 @@ export const api = hasBridge
       async sessionTabActive() {
         return { ok: false, code: 'NO_BRIDGE' };
       },
+      async sessionFocusTab() {
+        return { ok: false, code: 'NO_BRIDGE' };
+      },
       onSessionGroup() {
         return () => {};
       },

@@ -28,7 +28,6 @@
           <el-radio-group v-model="form.mode" @change="onModeChange">
             <el-radio label="inline">{{ $t('asset.authInline') }}</el-radio>
             <el-radio label="credential">{{ $t('asset.authCredential') }}</el-radio>
-            <el-radio label="ask">{{ $t('asset.authAsk') }}</el-radio>
           </el-radio-group>
         </el-form-item>
         <template v-if="form.mode === 'inline'">
@@ -80,7 +79,7 @@
 import { store, api, unwrap } from '../../store';
 import { t } from '../../i18n';
 
-const MODES = ['inline', 'credential', 'ask'];
+const MODES = ['inline', 'credential'];
 
 export default {
   name: 'MethodAuthDialog',
@@ -93,6 +92,7 @@ export default {
       rules: {
         user: [
           {
+            required: true,
             validator: (rule, value, cb) => {
               const inline = this.use === 'custom' && this.form.mode === 'inline';
               if (inline && !String(this.form.user || '').trim()) cb(new Error(t('msg.userRequired')));
@@ -103,6 +103,7 @@ export default {
         ],
         pass: [
           {
+            required: true,
             validator: (rule, value, cb) => {
               const inline = this.use === 'custom' && this.form.mode === 'inline';
               if (inline && !String(this.form.pass || '').trim()) cb(new Error(t('msg.passRequired')));
@@ -229,7 +230,6 @@ export default {
     },
     buildAuth() {
       if (this.use === 'main') return null;
-      if (this.form.mode === 'ask') return { use: 'custom', mode: 'ask' };
       if (this.form.mode === 'credential') {
         return { use: 'custom', mode: 'credential', credentialId: this.form.credentialId };
       }

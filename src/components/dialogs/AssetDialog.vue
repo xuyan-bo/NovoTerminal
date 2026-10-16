@@ -47,10 +47,11 @@
       <el-form-item :label="$t('asset.host')" prop="host">
         <el-input v-model="form.host" :placeholder="$t('asset.hostPh')" clearable />
       </el-form-item>
-      <el-form-item :label="$t('asset.mainAuth')" class="auth-row">
+      <!-- 红星只按 label 渲染，所以挂在这段有 label 的行上；不用 el-form-item 的 required 属性——这一段没有 prop，Element 会把它当校验规则塞进去 -->
+      <el-form-item :label="$t('asset.mainAuth')" class="auth-row" :class="{ 'is-required': form.auth.mode !== 'none' }">
         <el-radio-group v-model="form.auth.mode" class="auth-modes" @change="onMainModeChange">
-          <el-radio label="credential">{{ $t('asset.mainCredential') }}</el-radio>
           <el-radio label="inline">{{ $t('asset.mainInline') }}</el-radio>
+          <el-radio label="credential">{{ $t('asset.mainCredential') }}</el-radio>
           <el-radio label="none">{{ $t('asset.mainNone') }}</el-radio>
         </el-radio-group>
       </el-form-item>
@@ -174,8 +175,8 @@ function normalizePort(value, fallback) {
 }
 
 function emptyMainAuth() {
-  // 默认落在「引用凭证」：凭证库才是账号的归宿，手填与无都是少数场景
-  return { mode: 'credential', user: '', pass: '', credentialId: '' };
+  // 新建默认落在「手动输入」：先把账号口令填上，引用凭证库是后面才需要整理的分支
+  return { mode: 'inline', user: '', pass: '', credentialId: '' };
 }
 
 export default {
@@ -599,6 +600,7 @@ export default {
       const code = (r && r.code) || '';
       const map = {
         NO_HOST: t('asset.testNoHost'),
+        NO_CREDENTIAL: t('asset.testNoCredential'),
         TCP_TIMEOUT: t('asset.testTcpFail'),
         TCP_ERROR: t('asset.testTcpFail'),
         AUTH_FAILED: t('asset.testAuthFail'),

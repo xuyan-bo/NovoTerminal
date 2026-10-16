@@ -78,7 +78,7 @@ export async function ignoreUpdateVersion(version) {
 export function openTab(tab) {
   const found = store.tabs.find((t) => t.id === tab.id);
   if (found) {
-    store.activeTab = tab.id;
+    focusSessionTab(found.id);
     return;
   }
   store.tabs.push(tab);
@@ -117,6 +117,18 @@ export function refreshSessionTab(id) {
   const tab = findTab(id);
   if (tab) tab.liveSessionId = null;
   store.tabRefreshKeys = { ...store.tabRefreshKeys, [id]: (store.tabRefreshKeys[id] || 0) + 1 };
+}
+
+/**
+ * 再次连接命中已有页签时复用而不是新开：激活它，断开或失败的连接靠重建视图重新握手，
+ * 与页签右键「刷新」走同一条路径。连接中或已连上只激活，不打断正在跑的会话。
+ */
+export function focusSessionTab(tabId) {
+  const tab = findTab(tabId);
+  if (!tab) return;
+  store.activeTab = tabId;
+  if (tab.connState === 'connecting' || tab.connState === 'ready') return;
+  refreshSessionTab(tabId);
 }
 
 /**
@@ -464,7 +476,7 @@ export function enabledMethods(asset) {
 
 /**
  * 树上显示的登录名：用户名属于凭证，所以按主凭证的取法回查——手填取 auth.user，
- * 引用凭证取库里那条的 user；连接时询问与未设置都没有可显示的登录名。
+ * 引用凭证取库里那条的 user；没配凭证时没有可显示的登录名。
  */
 export function assetDisplayUser(asset, credentials) {
   const auth = asset && asset.auth;
@@ -557,9 +569,12 @@ export async function connectAsset(asset, method) {
   const useEmbedded =
     !!protocol.component && (method.id !== 'rdp' || _rdpEngine === 'ironrdp');
   if (useEmbedded) {
-    // SSH opens a fresh session on every connect; the other embedded protocols keep a stable tab id,
-    // so openTab's dedupe just activates the one session they allow per asset.
-    openTab(buildSessionTab(asset, method, protocol));
+    // SSH 每次连接都开一条新页签；其余内嵌协议每个资产只有一条，id 稳定所以能命中已有页签。
+    const tab = buildSessionTab(asset, method, protocol);
+    // 页签在独立窗口里时本窗口这份只是停放副本：抬到最前，重连由那个窗口的视图自己做。
+    const parked = store.tabs.find((t) => t.id === tab.id && t.detached);
+    if (parked && unwrap(await api.sessionFocusTab({ tabId: tab.id })).ok) return;
+    openTab(tab);
     return;
   }
   // SFTP 不占页签栏：单实例控制面板窗口，重复打开只是在面板里追加或激活对应会话页签

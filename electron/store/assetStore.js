@@ -83,9 +83,9 @@ function normalizeCredential(input, base) {
 
 // 与 src/constants.js 的 ASSET_ICONS 保持一致，缺项会在保存时被回落成 generic
 const ASSET_ICONS = ['win', 'mac', 'linux', 'router', 'nas', 'firewall', 'generic'];
-/** 主凭证三选一；方式级自定义把 'none' 换成 'ask'（连接时询问）。 */
+/** 主凭证三选一；方式级自定义只有两档，两边都没配凭证时由连接入口当场询问。 */
 const MAIN_AUTH_MODES = ['none', 'inline', 'credential'];
-const METHOD_AUTH_MODES = ['inline', 'credential', 'ask'];
+const METHOD_AUTH_MODES = ['inline', 'credential'];
 const ID_MAX = 64;
 
 /**
@@ -112,11 +112,7 @@ function idText(value) {
 /** 主凭证：用户名与口令同属一份凭证，换模式即清掉另一模式的残留。 */
 function normalizeMainAuth(input) {
   const src = input && typeof input === 'object' ? input : {};
-  const mode = MAIN_AUTH_MODES.includes(src.mode)
-    ? src.mode
-    : String(src.pass || '').trim() || String(src.user || '').trim()
-      ? 'inline'
-      : 'none';
+  const mode = MAIN_AUTH_MODES.includes(src.mode) ? src.mode : 'none';
   if (mode === 'inline') {
     return {
       mode,
@@ -133,7 +129,6 @@ function normalizeMethodAuth(input) {
   const src = input && typeof input === 'object' ? input : null;
   if (!src || src.use !== 'custom') return null;
   const mode = METHOD_AUTH_MODES.includes(src.mode) ? src.mode : 'inline';
-  if (mode === 'ask') return { use: 'custom', mode: 'ask' };
   if (mode === 'credential') {
     const credentialId = idText(src.credentialId);
     return credentialId ? { use: 'custom', mode: 'credential', credentialId } : null;
@@ -146,17 +141,20 @@ function normalizeMethodAuth(input) {
   };
 }
 
-/** 行存在即启用：旧库的 enabled:false 行直接丢弃，新表单不再产生这个字段。 */
+/** 行存在即启用；高级参数原样保留，取值由所属方式在使用时按 schema 收敛。 */
 function normalizeAssetMethods(input) {
   const src = input && typeof input === 'object' ? input : {};
   const out = {};
   for (const id of Object.keys(src)) {
     const conf = src[id] && typeof src[id] === 'object' ? src[id] : null;
-    if (!conf || conf.enabled === false) continue;
+    if (!conf) continue;
     const port = Number(conf.port);
     const row = { port: Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 0 };
-    const advanced = normalizeMethodAdvanced(id, conf.advanced);
-    if (advanced) row.advanced = advanced;
+    const advanced =
+      conf.advanced && typeof conf.advanced === 'object' && !Array.isArray(conf.advanced)
+        ? conf.advanced
+        : null;
+    if (advanced && Object.keys(advanced).length) row.advanced = advanced;
     const auth = normalizeMethodAuth(conf.auth);
     if (auth) row.auth = auth;
     out[id] = row;
@@ -164,49 +162,15 @@ function normalizeAssetMethods(input) {
   return out;
 }
 
-/**
- * 旧库（os + 资产级 pass + methods[].enabled）读入时一次收敛成新形状，消费端就不留两套字段：
- * 图标不再决定可用方式，密码改由主凭证配置承载。落盘后即为新形状。
- */
-function migrateAssets(nodes) {
+/** 读库与导入共用的收敛：脏值、越界端口回落到默认，消费端只见到一种形状。 */
+function normalizeAssets(nodes) {
   if (!Array.isArray(nodes)) return;
   nodes.forEach((node) => {
     if (!node || typeof node !== 'object') return;
-    const icon = ASSET_ICONS.includes(node.icon)
-      ? node.icon
-      : ASSET_ICONS.includes(node.os)
-        ? node.os
-        : 'generic';
-    node.icon = icon;
-    delete node.os;
-    node.auth = normalizeMainAuth(
-      node.auth && typeof node.auth === 'object' ? node.auth : { user: node.user, pass: node.pass }
-    );
-    delete node.user;
-    delete node.pass;
+    node.icon = ASSET_ICONS.includes(node.icon) ? node.icon : 'generic';
+    node.auth = normalizeMainAuth(node.auth);
     node.methods = normalizeAssetMethods(node.methods);
   });
-}
-
-/**
- * 认证字段已从高级参数搬进凭证配置：私钥路径与 VNC 口令在旧库里属于高级设置，
- * 读入时按字段清单丢掉，避免同一秘密有两个来源。其余参数（含 SSH 配色）原样保留。
- */
-const DROPPED_ADVANCED = {
-  ssh: ['authType', 'privateKeyPath', 'privateKeyPassphrase'],
-  vnc: ['password'],
-};
-
-function normalizeMethodAdvanced(methodId, saved) {
-  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
-  const drop = Object.prototype.hasOwnProperty.call(DROPPED_ADVANCED, methodId)
-    ? DROPPED_ADVANCED[methodId]
-    : [];
-  const out = {};
-  for (const key of Object.keys(saved)) {
-    if (!drop.includes(key)) out[key] = saved[key];
-  }
-  return Object.keys(out).length ? out : null;
 }
 
 function defaultData() {
@@ -375,29 +339,18 @@ class AssetStore {
     }
   }
 
-  /** 解析出的记录按默认值补齐，settings 单独合并，避免旧库缺字段时 snapshot 直接崩 */
+  /** 解析出的记录按默认值补齐，settings 单独合并，避免缺字段时 snapshot 直接崩 */
   mergeParsed(parsed) {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw Object.assign(new Error('asset store content is not an object'), { code: 'STORE_FORMAT' });
     }
     const data = Object.assign(defaultData(), parsed);
     data.settings = Object.assign(defaultData().settings, parsed.settings || {});
-    // 手改或旧库的凭证段可能缺项/带脏值，一律按表单同一套边界收敛
+    // 手改过的凭证段可能缺项/带脏值，一律按表单同一套边界收敛
     data.credentials = (Array.isArray(parsed.credentials) ? parsed.credentials : [])
       .filter((c) => c && typeof c === 'object' && c.id)
       .map((c) => normalizeCredential(c, c));
-    (Array.isArray(data.groups) ? data.groups : []).forEach((g) => migrateAssets(g && g.nodes));
-    if (Array.isArray(data.recent)) {
-      data.recent = data.recent.map((r) => {
-        if (!r || typeof r !== 'object') return r;
-        const icon = ASSET_ICONS.includes(r.icon) ? r.icon : ASSET_ICONS.includes(r.os) ? r.os : 'generic';
-        delete r.os;
-        r.icon = icon;
-        return r;
-      });
-    }
-    // 上面的迁移是无条件且幂等的，读完一律按 v3 形状描述自己，别让旧库永远挂着 version: 2
-    data.version = 3;
+    (Array.isArray(data.groups) ? data.groups : []).forEach((g) => normalizeAssets(g && g.nodes));
     return data;
   }
 
@@ -847,8 +800,6 @@ class AssetStore {
         resolved.password = credential.pass || '';
       }
       resolved.source = 'credential';
-    } else if (cfg.mode === 'ask') {
-      resolved.source = 'ask';
     } else {
       resolved.source = 'none';
     }
@@ -1060,8 +1011,8 @@ class AssetStore {
       throw new Error(this.L('导入内容不是有效的分组列表', 'Not a valid group list'));
     }
     this.data.groups = groups;
-    // 与读库同一条迁移：旧形状（os / 资产级 pass / methods[].enabled）不能绕过收敛直接进运行时
-    this.data.groups.forEach((g) => migrateAssets(g && g.nodes));
+    // 导入内容是外部输入，与读库走同一条收敛，脏值不能绕过校验直接进运行时
+    this.data.groups.forEach((g) => normalizeAssets(g && g.nodes));
     // 导出的扁平分组可能没有 pid，重新补默认值并修断链/成环
     this.normalizeTree();
     this.persist();

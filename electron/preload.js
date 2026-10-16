@@ -227,6 +227,7 @@ const api = {
   sessionTabCopy: (req) => ipcRenderer.invoke('session:tab-copy', req),
   sessionTabClose: (req) => ipcRenderer.invoke('session:tab-close', req),
   sessionTabActive: (req) => ipcRenderer.invoke('session:tab-active', req),
+  sessionFocusTab: (req) => ipcRenderer.invoke('session:focus-tab', req),
   onSessionConfirmClose: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('session:confirm-close', handler);
@@ -251,6 +252,11 @@ const api = {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('session:tab-state', handler);
     return () => ipcRenderer.removeListener('session:tab-state', handler);
+  },
+  onSessionTabFocus: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('session:tab-focus', handler);
+    return () => ipcRenderer.removeListener('session:tab-focus', handler);
   },
   onSessionDockClear: (cb) => {
     const handler = (_e, payload) => cb(payload);

@@ -1926,6 +1926,24 @@ function registerIpc() {
     return { ok: true };
   }, true);
 
+  /**
+   * 再次连接命中了独立窗口里的那条页签：本窗口那份只是停放副本，渲染不出任何东西，
+   * 所以把宿主窗口抬到最前，再让它自己按页签的实际连接状态决定是否重连。
+   * 状态只有宿主窗口的视图写得准，这里不替它判断。
+   */
+  handle('session:focus-tab', (sender, req) => {
+    const tabId = String((req && req.tabId) || '');
+    const group = groupOf(tabId);
+    if (!group) return { ok: false };
+    const w = group.window;
+    if (w.isMinimized()) w.restore();
+    w.moveTop();
+    w.focus();
+    w.webContents.send('session:tab-focus', { tabId });
+    logger.info('session', 'detached session tab focused', { groupId: group.id, tabId });
+    return { ok: true };
+  }, true);
+
   /** 该窗口的答复：confirmed 为真才真关；页面取消确认时只解除这次拦截。 */
   handle('session:close-answer', (sender, req) => {
     const group = senderGroup(sender);

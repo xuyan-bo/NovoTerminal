@@ -105,6 +105,14 @@ class SessionManager {
     const advanced = method.advanced || {};
     const lang = (this.store && this.store.getSettings && this.store.getSettings().lang) || 'zh';
 
+    if (protocol === 'ssh' || protocol === 'sftp') {
+      // 没配凭证还照原样握手，sshd 只会回「All configured authentication methods failed」，读起来像账号密码错
+      if (auth.needsPrompt) {
+        this.log && this.log.warn(protocol, 'connection test skipped: no credential', { host, port });
+        return { ok: false, code: 'NO_CREDENTIAL' };
+      }
+    }
+
     if (protocol === 'ssh') {
       return testSsh({
         host,

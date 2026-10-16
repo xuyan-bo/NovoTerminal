@@ -35,6 +35,7 @@ import {
   reportTabState,
   reportActiveTab,
   markSessionHandover,
+  focusSessionTab,
 } from '../../store';
 import { t } from '../../i18n';
 import { getProtocol } from '../../protocols';
@@ -77,6 +78,7 @@ export default {
     this._offGroup = null;
     this._offHandover = null;
     this._offConfirm = null;
+    this._offTabFocus = null;
     if (api.onSessionGroup) {
       this._offGroup = api.onSessionGroup((payload) => {
         if (payload && String(payload.groupId || '') === this.groupId) applyGroupTabs(payload.tabs);
@@ -91,12 +93,19 @@ export default {
     if (api.onSessionConfirmClose) {
       this._offConfirm = api.onSessionConfirmClose((payload) => this.confirmClose(payload));
     }
+    // 主窗口的连接入口点到本窗口宿主的那条页签：激活它，断开过就重建视图重连。
+    if (api.onSessionTabFocus) {
+      this._offTabFocus = api.onSessionTabFocus((payload) => {
+        if (payload && payload.tabId) focusSessionTab(payload.tabId);
+      });
+    }
     this.loadGroup();
   },
   beforeDestroy() {
     if (this._offGroup) this._offGroup();
     if (this._offHandover) this._offHandover();
     if (this._offConfirm) this._offConfirm();
+    if (this._offTabFocus) this._offTabFocus();
     setHostedGroup('');
   },
   methods: {

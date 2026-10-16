@@ -1009,6 +1009,14 @@ button {
   margin-bottom: 10px;
 }
 
+/* 图例的量算层：与可见那排同宽同字号，只用来数行高，不能自己撑高卡片 */
+.stat-chips.stat-chips-measure {
+  height: 0;
+  margin-bottom: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -1021,17 +1029,41 @@ button {
   color: var(--text-2);
 }
 
-.chip.os-chip .os-icon {
+.chip .os-icon {
   width: 14px;
   height: 14px;
 }
 
-.chip.os-chip .os-icon svg {
+.chip .os-icon svg {
   width: 12px;
   height: 12px;
 }
 
+.chip .type-dot,
+.chip-more-row .type-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
 .chip b {
+  color: var(--text);
+  font-family: Consolas, monospace;
+}
+
+/* +N 悬停列出的剩余类型：弹层挂在 body 上，字号与底色跟 tooltip 默认样式走 */
+.chip-more-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 0;
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.chip-more-row b {
   color: var(--text);
   font-family: Consolas, monospace;
 }
