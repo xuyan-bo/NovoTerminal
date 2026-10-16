@@ -12,6 +12,7 @@
       <el-checkbox-group v-model="include" class="bk-cats">
         <el-checkbox label="settings">{{ $t('backup.catSettings') }}</el-checkbox>
         <el-checkbox label="assets">{{ $t('backup.catAssets') }}</el-checkbox>
+        <el-checkbox label="credentials">{{ $t('backup.catCredentials') }}</el-checkbox>
         <el-checkbox label="ai">{{ $t('backup.catAi') }}</el-checkbox>
       </el-checkbox-group>
       <div class="bk-label">{{ $t('backup.passwordLabel') }}</div>
@@ -74,7 +75,7 @@ export default {
   name: 'BackupDialog',
   data() {
     return {
-      include: ['settings', 'assets', 'ai'],
+      include: ['settings', 'assets', 'credentials', 'ai'],
       password: '',
       password2: '',
       busy: false,

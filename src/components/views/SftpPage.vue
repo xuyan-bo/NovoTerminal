@@ -184,6 +184,9 @@ import selectionMethods from '../sftp/selectionMethods';
 
 const TAB_DRAG_TYPE = 'application/x-novoterminal-sftp-tab';
 
+/** 主进程认证类失败码：只有这些才值得下一次重连时弹凭证窗（SSH 与 SFTP 共用同一条连接实现） */
+const AUTH_ASK_AGAIN = new Set(['SSH_AUTH_FAILED', 'SSH_KEY_PARSE', 'AUTH_CANCELED', 'AUTH_REQUIRED']);
+
 /** One tab per SFTP session: an asset can be opened several times, like SSH. */
 function createSession(meta, id, seq) {
   const name = meta.name || meta.host || '';
@@ -198,6 +201,8 @@ function createSession(meta, id, seq) {
     connId: null,
     status: 'idle',
     error: '',
+    // 上一次握手属于认证类失败：下次「重试」要当场重问凭证，别拿同一条被拒的口令再撞一次
+    reask: false,
     alive: true,
     remotePath: '/',
     remotePathInput: '/',
@@ -496,7 +501,7 @@ export default {
       s.status = 'connecting';
       s.error = '';
       try {
-        const r = unwrap(await api.sftpOpen({ assetId: s.assetId }));
+        const r = unwrap(await api.sftpOpen({ assetId: s.assetId, reask: s.reask }));
         // 连接返回前页签可能已被关闭
         if (!s.alive) {
           if (r.connId && api.sftpClose) api.sftpClose(r.connId).catch(() => {});
@@ -505,6 +510,7 @@ export default {
         s.connId = r.connId;
         s.remoteHome = r.home || '/';
         s.status = 'ready';
+        s.reask = false;
         const start = s.initialPath || s.remoteHome;
         s.initialPath = '';
         await this.goRemote(s, start, start === s.remoteHome ? null : s.remoteHome);
@@ -514,6 +520,7 @@ export default {
         if (!s.alive) return;
         s.status = 'error';
         s.error = connectionErrorMessage(e);
+        s.reask = AUTH_ASK_AGAIN.has(e && e.code);
         this.$message.error(s.error);
       }
     },

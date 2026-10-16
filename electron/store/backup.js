@@ -29,6 +29,7 @@ const AI_INDEX = 'index.list';
 const MANIFEST = 'manifest.json';
 const SETTINGS_ENTRY = 'settings.json';
 const ASSETS_ENTRY = 'assets.json';
+const CREDENTIALS_ENTRY = 'credentials.json';
 const AI_PREFIX = 'ai-sessions/';
 /** scrypt 参数：N=2^14 时内存约 16MB，单次派生几十毫秒，适合交互式备份 */
 const SCRYPT = { N: 1 << 14, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
@@ -38,7 +39,8 @@ const IV_LEN = 12;
 const TAG_LEN = 16;
 const MIN_PASSWORD = 6;
 const MAX_PASSWORD = 256;
-const CATEGORIES = ['settings', 'assets', 'ai'];
+/** 凭证单独成类：资产里的 credentialId 只有跟凭证库一起搬运才不会在还原后指空 */
+const CATEGORIES = ['settings', 'assets', 'credentials', 'ai'];
 /** 允许从备份包还原的设置项；dataPath 不在其中（由本机决定），其余未知键一并丢弃，避免备份包注入任意设置 */
 const RESTORE_SETTINGS_KEYS = [
   'theme',
@@ -272,6 +274,12 @@ function packBackup({ store, include, password, appVersion }) {
     counts.groups = groups.length;
     counts.assets = groups.reduce((n, g) => n + ((g && g.nodes ? g.nodes.length : 0)), 0);
   }
+  if (cats.includes('credentials')) {
+    // 资产里的 credentialId 必须和凭证库一起搬运，否则还原后每条引用型资产都只能在连接时报「凭证不存在」
+    const credentials = store.exportCredentials();
+    entries.push({ name: CREDENTIALS_ENTRY, data: Buffer.from(JSON.stringify(credentials, null, 2), 'utf8') });
+    counts.credentials = credentials.length;
+  }
   if (cats.includes('ai')) {
     const root = path.join(store.dataDir(), AI_DIR);
     // index.list 是可重建的摘要缓存，不随包搬运（还原后 mtime 全变，带了也得重建），也不计入会话数
@@ -319,10 +327,10 @@ function clampLogTotalMb(v) {
 
 /**
  * 还原：只处理包里实际存在的类别。
- * 设置与资产为覆盖（dataPath 不动），AI 会话按文件叠加（同名覆盖、其余保留）。
+ * 设置、资产与凭证为覆盖（dataPath 不动），AI 会话按文件叠加（同名覆盖、其余保留）。
  */
 function restoreBackup({ store, entries }) {
-  const summary = { settings: false, assets: false, aiSessions: 0 };
+  const summary = { settings: false, assets: false, credentials: false, aiSessions: 0 };
   const byName = new Map(entries.map((e) => [e.name, e]));
 
   const settingsEntry = byName.get(SETTINGS_ENTRY);
@@ -350,6 +358,12 @@ function restoreBackup({ store, entries }) {
   if (assetsEntry) {
     store.importGroups(assetsEntry.data.toString('utf8'));
     summary.assets = true;
+  }
+
+  const credentialsEntry = byName.get(CREDENTIALS_ENTRY);
+  if (credentialsEntry) {
+    store.importCredentials(credentialsEntry.data.toString('utf8'));
+    summary.credentials = true;
   }
 
   const aiRoot = path.join(store.dataDir(), AI_DIR);

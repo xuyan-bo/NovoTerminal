@@ -247,7 +247,7 @@ export default {
           this._reask = true;
           /**
            * 认证失败当场重新要一次凭证（与 SSH 的重问一致），而不是等用户去点重连。
-           * RFB 失败即断链，只能重新建连；上限同 SSH_AUTH_RETRY，防撞 TigerVNC 的失败黑名单。
+           * RFB 失败即断链，只能重新建连；上限比 SSH 的三次更紧，防撞 TigerVNC 的失败黑名单。
            */
           if (this._authTries < VNC_AUTH_RETRY) {
             this._authTries += 1;

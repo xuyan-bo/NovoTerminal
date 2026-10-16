@@ -24,6 +24,13 @@ function sshError(code, message) {
   return Object.assign(new Error(message), { code });
 }
 
+/** 私钥内容能否按给定口令解析成可用私钥（与连接时同一条 parseKey 判定，不留两套口径） */
+function isPrivateKeyUsable(privateKey, passphrase) {
+  if (typeof privateKey !== 'string' || !privateKey) return false;
+  const parsed = utils.parseKey(privateKey, typeof passphrase === 'string' ? passphrase : '');
+  return !(parsed instanceof Error) && !!parsed.isPrivateKey();
+}
+
 function configError(field) {
   return sshError('SSH_CONFIG', `Invalid SSH configuration: ${field}`);
 }
@@ -352,4 +359,4 @@ function createSshConnection({ host, port = 22, username = '', password = '', pr
   return connection;
 }
 
-module.exports = { SSH_DEFAULTS, resolveAdvanced, parseProxyJump, createSshConnection };
+module.exports = { SSH_DEFAULTS, resolveAdvanced, parseProxyJump, createSshConnection, isPrivateKeyUsable };

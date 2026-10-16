@@ -8,6 +8,7 @@ const { execFile } = require('child_process');
 const APP_BUILD = 'rd2-1647';
 const {
   AssetStore,
+  authKindsFor,
   CREDENTIAL_SECRET_MAX,
   RECENT_LIMIT_DEFAULT,
   RECENT_LIMIT_MAX,
@@ -24,7 +25,7 @@ const { AiManager } = require('./ai/aiManager');
 const { AiSessionStore } = require('./ai/sessionStore');
 const { testConnection, listModels } = require('./ai/aiClient');
 const { normalize: normalizeAi } = require('./ai/aiSettings');
-const { SSH_DEFAULTS } = require('./ssh/connection');
+const { SSH_DEFAULTS, isPrivateKeyUsable } = require('./ssh/connection');
 const { createHostKeyVerifier } = require('./ssh/hostKeys');
 const { SshPrompts } = require('./ssh/SshPrompts');
 const { AuthRequests } = require('./session/AuthRequests');
@@ -376,20 +377,6 @@ function sshRequestContext(sender) {
 /** 认证被拒后最多再问几次凭证（每次都是真实发往服务器的认证请求，防撞账号锁定策略） */
 const SSH_AUTH_RETRY = 3;
 
-/** 各访问方式能消费的凭证类型。主进程不 import 渲染端注册表：那份带 .vue 的动态 import */
-const AUTH_KINDS_BY_METHOD = {
-  ssh: ['password', 'key'],
-  sftp: ['password', 'key'],
-  rdp: ['password'],
-  vnc: ['password'],
-};
-
-function protocolAuthKinds(methodId) {
-  return Object.prototype.hasOwnProperty.call(AUTH_KINDS_BY_METHOD, methodId)
-    ? AUTH_KINDS_BY_METHOD[methodId]
-    : ['password'];
-}
-
 function authHint(kind, en) {
   if (kind === 'rejected') {
     return en ? 'Authentication was rejected. Enter the credential again.' : '认证未通过，请重新输入凭证。';
@@ -435,19 +422,27 @@ async function resolveAuthForWindow(sender, asset, methodId, port, reask) {
     const answer = await authRequests.request(sender, {
       title,
       hint: authHint(hintKind, en),
-      kinds: protocolAuthKinds(methodId),
+      kinds: authKindsFor(methodId),
     });
     if (!answer) return null;
     if (answer.remember) {
       store.rememberMethodAuth(asset.id, methodId, answer);
       send('store:changed', { reason: 'asset' });
     }
-    return authFromAnswer(answer);
+    const picked = authFromAnswer(answer);
+    // 类型也要在主进程兜一层：渲染端的下拉过滤不是保证，选了私钥凭证去连只吃口令的方式
+    // 等于拿空口令握手，宁可当场报「需要口令」
+    if (!authKindsFor(methodId).includes(picked.kind)) picked.needsPrompt = true;
+    return picked;
   };
   const auth = store.resolveAssetAuth(asset, methodId);
   if (!reask && !auth.needsPrompt) return { auth, askAgain };
   const asked = await askAgain(reask ? 'rejected' : 'missing');
-  if (!asked || asked.needsPrompt) {
+  // 取消、超时与窗口销毁都是 null，不能跟「填了但口令为空」混成同一句报错
+  if (!asked) {
+    throw Object.assign(new Error(en ? 'Credential entry canceled' : '已取消输入凭证'), { code: 'AUTH_CANCELED' });
+  }
+  if (asked.needsPrompt) {
     throw Object.assign(new Error(en ? 'Password is required' : '需要口令'), { code: 'AUTH_REQUIRED' });
   }
   return { auth: asked, askAgain };
@@ -991,8 +986,28 @@ function registerIpc() {
   handle('store:update-asset', (aid, p) => unwrap(store.updateAsset(aid, p)));
   handle('store:delete-asset', (aid) => unwrap(store.deleteAsset(aid)));
   handle('store:remove-recent', (p) => unwrap(store.removeRecent(p && p.id, p && p.method)));
-  handle('credential:create', (p) => unwrap(store.createCredential(p)));
-  handle('credential:update', (cid, p) => unwrap(store.updateCredential(cid, p)));
+  /**
+   * 凭证入库前的两道边界：长度由 store 报错（不静默截断），私钥必须当场就能按给定口令解析。
+   * 后者是为了别让「加密私钥没填口令」混到连接时才报「无法解析私钥」——那时用户已看不出
+   * 是没存口令还是内容被剪过；解析用的就是连接同一条 parseKey 判定。
+   */
+  function prepareCredentialPayload(payload) {
+    const src = store.assertCredentialSecrets(payload);
+    if (src.kind !== 'key' || !src.privateKey) return src;
+    if (!isPrivateKeyUsable(src.privateKey, src.passphrase)) {
+      throw Object.assign(
+        new Error(store.L(
+          '私钥无法解析：请确认内容完整，加密私钥必须填写口令',
+          'Private key cannot be parsed — check the content, and set the passphrase for an encrypted key'
+        )),
+        { code: 'CREDENTIAL_KEY_UNREADABLE' }
+      );
+    }
+    return src;
+  }
+
+  handle('credential:create', (p) => unwrap(store.createCredential(prepareCredentialPayload(p))));
+  handle('credential:update', (cid, p) => unwrap(store.updateCredential(cid, prepareCredentialPayload(p))));
   handle('credential:delete', (cid) => unwrap(store.deleteCredential(cid)));
   handle('credential:reorder', (p) => unwrap(store.reorderCredential(p)));
   /** 凭证的秘密字段只从这条通道离开主进程：限宿主窗口，且必须先过系统身份验证。 */
@@ -1201,6 +1216,7 @@ function registerIpc() {
       categories: (parsed.manifest && parsed.manifest.categories) || [],
       settings: summary.settings,
       assets: summary.assets,
+      credentials: summary.credentials,
       aiSessions: summary.aiSessions,
     });
     return { ok: true, summary, manifest: parsed.manifest };
@@ -1330,11 +1346,12 @@ function registerIpc() {
         break;
       } catch (error) {
         /**
-         * 只有认证被服务器拒绝才重问口令；网络、主机密钥与超时错误重发没有意义，
-         * 而且连续撞 sshd MaxAuthTries 会封客户端。失败记录已由 SshSessionManager 清掉，
-         * 同一个 requestId 可以直接复用再连一次。
+         * 认证被服务器拒绝，以及私钥解析/解密失败（库里没存口令的加密私钥）都可以当场重问一次
+         * 凭证；网络、主机密钥与超时错误重发没有意义，而且连续撞 sshd MaxAuthTries 会封客户端。
+         * 失败记录已由 SshSessionManager 清掉，同一个 requestId 可以直接复用再连一次。
          */
-        if (error.code !== 'SSH_AUTH_FAILED' || attempt >= SSH_AUTH_RETRY || sender.isDestroyed()) throw error;
+        const reaskable = error.code === 'SSH_AUTH_FAILED' || error.code === 'SSH_KEY_PARSE';
+        if (!reaskable || attempt >= SSH_AUTH_RETRY || sender.isDestroyed()) throw error;
         const again = await askAgain('rejected');
         if (!again || again.needsPrompt) throw error;
         logger.warn('ssh', 'ssh authentication rejected, asking again', { host: hit.asset.host, port, attempt });
@@ -2185,7 +2202,8 @@ function registerIpc() {
     if (!hit) throw Object.assign(new Error('asset not found'), { code: 'SFTP_NO_ASSET' });
     const methods = hit.asset.methods || {};
     const port = methods.sftp?.port || methods.ssh?.port || 22;
-    const { auth } = await resolveAuthForWindow(sender, hit.asset, 'sftp', port);
+    // reask：上一次握手被服务器按认证拒绝（或私钥解析不了），面板的「重试」要能当场重问凭证
+    const { auth } = await resolveAuthForWindow(sender, hit.asset, 'sftp', port, !!(req && req.reask));
     return sftpManager.openSession({ assetId: hit.asset.id, auth, ...sshRequestContext(sender) });
   }, true);
   handle('sftp:list', (sender, connId, remotePath) => sftpManager.list(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);

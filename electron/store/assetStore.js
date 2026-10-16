@@ -88,6 +88,23 @@ const MAIN_AUTH_MODES = ['none', 'inline', 'credential'];
 const METHOD_AUTH_MODES = ['inline', 'credential', 'ask'];
 const ID_MAX = 64;
 
+/**
+ * 各访问方式能消费的凭证类型；与 src/protocols.js 的 authKinds 同义，
+ * 主进程不 import 渲染端注册表（那份带 .vue 的动态 import）。
+ */
+const AUTH_KINDS_BY_METHOD = {
+  ssh: ['password', 'key'],
+  sftp: ['password', 'key'],
+  rdp: ['password'],
+  vnc: ['password'],
+};
+
+function authKindsFor(methodId) {
+  return Object.prototype.hasOwnProperty.call(AUTH_KINDS_BY_METHOD, methodId)
+    ? AUTH_KINDS_BY_METHOD[methodId]
+    : ['password'];
+}
+
 function idText(value) {
   return String(value == null ? '' : value).slice(0, ID_MAX);
 }
@@ -836,7 +853,11 @@ class AssetStore {
       resolved.source = 'none';
     }
     resolved.kind = resolved.privateKey ? 'key' : 'password';
-    resolved.needsPrompt = resolved.kind === 'password' && !resolved.password;
+    // 本方式消费不了这个类型（例如私钥主凭证接到只吃口令的 RDP/VNC）等同没配凭证：
+    // 交给连接入口询问，不能带着空口令去握手（撞服务器失败黑名单，也看不出是没配凭证）。
+    resolved.needsPrompt =
+      !authKindsFor(methodId).includes(resolved.kind) ||
+      (resolved.kind === 'password' && !resolved.password);
     return resolved;
   }
 
@@ -868,7 +889,7 @@ class AssetStore {
   }
 
   createCredential(payload) {
-    const credential = normalizeCredential(payload, null);
+    const credential = normalizeCredential(this.assertCredentialSecrets(payload), null);
     credential.name = credential.name || this.L('未命名凭证', 'Unnamed credential');
     this.data.credentials.push(credential);
     this.persist();
@@ -884,7 +905,7 @@ class AssetStore {
   updateCredential(cid, payload) {
     const current = this.requireCredential(cid);
     const index = this.data.credentials.indexOf(current);
-    const credential = normalizeCredential(payload, current);
+    const credential = normalizeCredential(this.assertCredentialSecrets(payload), current);
     credential.name = credential.name || this.L('未命名凭证', 'Unnamed credential');
     this.data.credentials[index] = credential;
     this.persist();
@@ -896,8 +917,62 @@ class AssetStore {
     return this.snapshot();
   }
 
+  /**
+   * 秘密字段超长一律报错，不像名称那样静默截断：粘贴进来的私钥被剪掉只能等到连接时
+   * 报「无法解析私钥」，用户在界面上完全看不出内容已经被改过。落库读取仍走归一化回落。
+   */
+  assertCredentialSecrets(payload) {
+    const src = payload && typeof payload === 'object' ? payload : {};
+    const labels = {
+      pass: [this.L('口令', 'The password'), CREDENTIAL_SECRET_MAX],
+      privateKey: [this.L('私钥内容', 'The private key'), CREDENTIAL_SECRET_MAX],
+      passphrase: [this.L('私钥口令', 'The private key passphrase'), CREDENTIAL_PASSPHRASE_MAX],
+    };
+    for (const field of Object.keys(labels)) {
+      const value = src[field];
+      const [label, max] = labels[field];
+      if (typeof value === 'string' && value.length > max) {
+        throw Object.assign(
+          new Error(this.L(`${label}过长，最多 ${max} 个字符`, `${label} is too long — ${max} characters at most`)),
+          { code: 'CREDENTIAL_TOO_LONG', field, limit: max }
+        );
+      }
+    }
+    return src;
+  }
+
+  /** 引用这条凭证的资产数：主凭证与方式级自定义都算。 */
+  credentialRefCount(cid) {
+    if (!cid) return 0;
+    let count = 0;
+    (this.data.groups || []).forEach((g) => {
+      ((g && g.nodes) || []).forEach((a) => {
+        if (!a || typeof a !== 'object') return;
+        const methods = a.methods && typeof a.methods === 'object' ? a.methods : {};
+        const usedByMethod = Object.keys(methods).some((id) => {
+          const auth = methods[id] && methods[id].auth;
+          return auth && auth.mode === 'credential' && auth.credentialId === cid;
+        });
+        const usedByMain = a.auth && a.auth.mode === 'credential' && a.auth.credentialId === cid;
+        if (usedByMain || usedByMethod) count += 1;
+      });
+    });
+    return count;
+  }
+
   deleteCredential(cid) {
     const current = this.requireCredential(cid);
+    // 引用不检查就会留下打不开的资产：连接时才炸在「凭证不存在或已被删除」，界面上毫无预兆
+    const refs = this.credentialRefCount(cid);
+    if (refs) {
+      throw Object.assign(
+        new Error(this.L(
+          `还有 ${refs} 个资产在引用这条凭证，请先在资产里改选其它凭证或改为手填`,
+          `${refs} asset(s) still reference this credential; point them at another one or use inline credentials first`
+        )),
+        { code: 'CREDENTIAL_IN_USE', refs }
+      );
+    }
     this.data.credentials = this.data.credentials.filter((c) => c !== current);
     this.persist();
     this.logEvent('info', 'credential deleted', { credentialId: cid, name: current.name });
@@ -985,8 +1060,26 @@ class AssetStore {
       throw new Error(this.L('导入内容不是有效的分组列表', 'Not a valid group list'));
     }
     this.data.groups = groups;
+    // 与读库同一条迁移：旧形状（os / 资产级 pass / methods[].enabled）不能绕过收敛直接进运行时
+    this.data.groups.forEach((g) => migrateAssets(g && g.nodes));
     // 导出的扁平分组可能没有 pid，重新补默认值并修断链/成环
     this.normalizeTree();
+    this.persist();
+    return this.snapshot();
+  }
+
+  /** 备份用的凭证导出：带秘密字段，只在加密包内出现，绝不进快照。 */
+  exportCredentials() {
+    return (this.data.credentials || []).map((c) => normalizeCredential(c, c));
+  }
+
+  importCredentials(jsonText) {
+    const parsed = JSON.parse(jsonText);
+    if (!Array.isArray(parsed) || parsed.some((c) => !c || typeof c !== 'object' || !c.id)) {
+      throw new Error(this.L('导入内容不是有效的凭证列表', 'Not a valid credential list'));
+    }
+    // 保留原 id：资产里的 credentialId 只有在不换主键的情况下才还指得上
+    this.data.credentials = parsed.map((c) => normalizeCredential(c, c));
     this.persist();
     return this.snapshot();
   }
@@ -994,6 +1087,7 @@ class AssetStore {
 
 module.exports = {
   AssetStore,
+  authKindsFor,
   CREDENTIAL_SECRET_MAX,
   RECENT_LIMIT_DEFAULT,
   RECENT_LIMIT_MAX,

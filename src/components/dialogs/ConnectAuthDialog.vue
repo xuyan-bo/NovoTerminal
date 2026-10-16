@@ -118,16 +118,14 @@ export default {
   },
   created() {
     this._offRequest = api.onAuthRequest && api.onAuthRequest((req) => {
+      // 已经有请求在展示时不能清掉正在输入的表单，队列靠 finish/cancel 逐条交接
+      if (!this.requests.length) this.resetForm();
       this.requests.push(req);
-      this.form = emptyForm();
-      this.$nextTick(() => {
-        if (this.$refs.form) this.$refs.form.clearValidate();
-      });
     });
     this._offCancel = api.onAuthCancel && api.onAuthCancel(({ requestId }) => {
       const wasActive = this.active && this.active.requestId === requestId;
       this.requests = this.requests.filter((r) => r.requestId !== requestId);
-      if (wasActive) this.form = emptyForm();
+      if (wasActive) this.resetForm();
     });
   },
   beforeDestroy() {
@@ -137,6 +135,12 @@ export default {
     this.requests = [];
   },
   methods: {
+    resetForm() {
+      this.form = emptyForm();
+      this.$nextTick(() => {
+        if (this.$refs.form) this.$refs.form.clearValidate();
+      });
+    },
     onModeChange(mode) {
       this.form.credentialId = mode === 'credential' ? this.form.credentialId : '';
       this.form.user = mode === 'inline' ? this.form.user : '';
@@ -147,7 +151,7 @@ export default {
       const req = this.active;
       if (!req) return;
       this.requests.shift();
-      this.form = emptyForm();
+      this.resetForm();
       api.sessionAuthReply(req.requestId, answer);
     },
     cancel() {

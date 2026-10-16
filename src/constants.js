@@ -58,11 +58,6 @@ export function assetIconGlyph(id) {
   return id === 'generic' ? 'el-icon-s-platform' : '';
 }
 
-/** 脏值与旧库缺字段一律落到「通用」，不再冒充某个操作系统。 */
-export function normalizeAssetIcon(id) {
-  return ASSET_ICONS.some((item) => item.id === id) ? id : 'generic';
-}
-
 /**
  * 方式行的凭证来源，界面上就是那颗胶囊：方式自定义优先，否则跟随主凭证；
  * 两边都拿不到口令时按「连接时询问」显示，与主进程解析的回落一致。

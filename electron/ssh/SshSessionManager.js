@@ -76,7 +76,7 @@ class SshSessionManager {
       if (this.sessions.get(sessionId) !== rec) throw canceled();
       rec.connection = createSshConnection({
         host: rec.host, port: rec.port, username: auth.username || '',
-        password: req.password != null ? req.password : auth.password,
+        password: auth.password,
         privateKey: auth.privateKey || '', passphrase: auth.passphrase || '',
         advanced: adv, verifyHostKey: req.verifyHostKey, promptKeyboard: req.promptKeyboard, log: this.log,
       });

@@ -80,6 +80,8 @@
 import { store, api, unwrap } from '../../store';
 import { t } from '../../i18n';
 
+const MODES = ['inline', 'credential', 'ask'];
+
 export default {
   name: 'MethodAuthDialog',
   data() {
@@ -158,16 +160,18 @@ export default {
       return kind === 'key' ? 'Key' : 'Password';
     },
     load() {
-      const auth = this.dlg.auth;
+      // 该方式没配自定义凭证时 auth 为 null（默认状态），此时表单必须是空的草稿
+      const custom = this.dlg.auth && this.dlg.auth.use === 'custom' ? this.dlg.auth : null;
       this.passVisible = false;
-      this.use = auth && auth.use === 'custom' ? 'custom' : 'main';
+      this.use = custom ? 'custom' : 'main';
       if (!this.mainUsable) this.use = 'custom';
-      const mode = auth && auth.use === 'custom' && auth.mode ? auth.mode : 'inline';
+      const mode = custom && MODES.includes(custom.mode) ? custom.mode : 'inline';
+      const src = custom || {};
       this.form = {
         mode,
-        user: mode === 'inline' ? auth.user || '' : '',
-        pass: mode === 'inline' ? auth.pass || '' : '',
-        credentialId: mode === 'credential' ? auth.credentialId || '' : '',
+        user: mode === 'inline' ? src.user || '' : '',
+        pass: mode === 'inline' ? src.pass || '' : '',
+        credentialId: mode === 'credential' ? src.credentialId || '' : '',
       };
       this.$nextTick(() => {
         if (this.$refs.form) this.$refs.form.clearValidate();

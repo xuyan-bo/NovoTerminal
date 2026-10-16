@@ -133,11 +133,11 @@
         </el-form-item>
         <el-form-item v-if="form.kind === 'password'" :label="$t('cred.pass')" prop="pass">
           <!-- 密码框不能禁用：Element 的眼睛在 disabled/readonly 下不渲染（element-ui.common.js 的 showPwdVisible） -->
+          <!-- 秘密字段不写 maxlength：被浏览器静默剪短的内容只会在连接时报解析失败，长度上限由主进程报错 -->
           <el-input
             v-model="form.pass"
             type="password"
             :placeholder="$t('cred.passPh')"
-            maxlength="8192"
             show-password
             autocomplete="off"
           />
@@ -158,7 +158,6 @@
               type="textarea"
               :rows="6"
               :placeholder="$t('cred.privateKeyPh')"
-              maxlength="8192"
               :disabled="readonly"
             />
           </el-form-item>
@@ -167,7 +166,6 @@
               v-model="form.passphrase"
               type="password"
               :placeholder="$t('cred.passphrasePh')"
-              maxlength="512"
               show-password
               autocomplete="off"
             />

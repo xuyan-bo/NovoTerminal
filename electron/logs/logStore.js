@@ -24,13 +24,27 @@ const SENSITIVE_KEYS = new Set([
   '_password',
   '_pass',
   'credential',
+  // Node 的 child_process 失败会把整条命令行挂到错误对象上（err.cmd / err.args），
+  // 外置 RDP 的 /p: 明文就在里面，一旦有人把错误对象当 meta 传进来也不能落盘
+  'args',
+  'cmd',
+  'command',
+  'spawnargs',
 ]);
+
+/** 命令行形态的口令参数：xfreerdp/wfreerdp 的 /p:、cmdkey 的 /pass:，出现在任何字符串值里都先遮掉 */
+const CLI_SECRET_RE = /(\/(?:p|pass|password|predipwd):)[^\s"']+/gi;
+
+function scrubCliSecrets(text) {
+  return String(text).replace(CLI_SECRET_RE, '$1[redacted]');
+}
 
 /** Log entries are technical facts (host/port/code/duration) — never credentials. */
 function sanitizeMeta(meta) {
   if (meta == null) return undefined;
   const t = typeof meta;
-  if (t === 'string' || t === 'number' || t === 'boolean') return meta;
+  if (t === 'string') return scrubCliSecrets(meta);
+  if (t === 'number' || t === 'boolean') return meta;
   if (Array.isArray(meta)) return meta.map(sanitizeMeta);
   if (t === 'object') {
     const out = {};
@@ -277,7 +291,7 @@ class LogStore {
       time: Date.now(),
       level: LEVEL_ORDER[level] !== undefined ? level : 'info',
       source: source || 'sys',
-      message: message == null ? '' : String(message),
+      message: scrubCliSecrets(message == null ? '' : String(message)),
       meta: sanitizeMeta(meta),
     };
     this.append(entry);

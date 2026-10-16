@@ -80,7 +80,7 @@
       </el-form-item>
       <el-form-item v-if="form.auth.mode === 'credential'" prop="auth.credentialId">
         <el-select v-model="form.auth.credentialId" :placeholder="$t('asset.credentialPh')">
-          <el-option v-for="c in credentials" :key="c.id" :label="c.name" :value="c.id">
+          <el-option v-for="c in mainCredentialOptions" :key="c.id" :label="c.name" :value="c.id">
             <span class="opt-name">{{ c.name }}</span>
             <span class="pill" :class="c.kind === 'key' ? 'cred-kind-key' : 'cred-kind-pass'">
               {{ c.kind === 'key' ? $t('cred.kindKey') : $t('cred.kindPassword') }}
@@ -328,6 +328,19 @@ export default {
     credentials() {
       return store.snapshot.credentials || [];
     },
+    /** 主凭证只能选当前已配方式吃得下的类型；已选中的那条始终留在列表里，否则下拉会显示成裸 id */
+    mainCredentialOptions() {
+      const ids = Object.keys(this.draft);
+      if (!ids.length) return this.credentials;
+      const kinds = new Set();
+      ids.forEach((id) => {
+        const protocol = getProtocol(id);
+        (protocol && protocol.authKinds ? protocol.authKinds : []).forEach((kind) => kinds.add(kind));
+      });
+      return this.credentials.filter(
+        (c) => kinds.has(c.kind) || c.id === this.form.auth.credentialId
+      );
+    },
     /** 主凭证的真实类型：引用凭证时取库里的 kind，手填口令恒为 password */
     mainKind() {
       if (this.form.auth.mode !== 'credential') {
@@ -530,15 +543,23 @@ export default {
     },
     async testMethod(row) {
       if (this.testing) return;
-      const results = await Promise.all(
-        ["name", "host", "auth.user", "auth.pass"].map(
-          (prop) =>
-            new Promise((resolve) => {
-              this.$refs.form.validateField(prop, (err) => resolve(!err));
-            })
-        )
-      );
-      if (!results.every(Boolean)) return;
+      // 只校验真正渲染出来的字段：el-form-item 在 v-if 下不注册，validateField 对未注册的 prop
+      // 只打一句 warning 就返回，回调永远不触发，等待它的 Promise 会把整个探测挂死
+      const props = ['name', 'host'];
+      if (this.form.auth.mode === 'inline') props.push('auth.user', 'auth.pass');
+      else if (this.form.auth.mode === 'credential') props.push('auth.credentialId');
+      let failed = 0;
+      let done = 0;
+      const valid = await new Promise((resolve) => {
+        props.forEach((prop) => {
+          this.$refs.form.validateField(prop, (err) => {
+            if (err) failed += 1;
+            done += 1;
+            if (done === props.length) resolve(!failed);
+          });
+        });
+      });
+      if (!valid) return;
       this.testing = true;
       this.testingId = row.id;
       const method = { protocol: row.id, port: row.conf.port, advanced: row.conf.advanced || {} };
