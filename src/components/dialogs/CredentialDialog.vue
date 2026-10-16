@@ -132,15 +132,26 @@
           />
         </el-form-item>
         <el-form-item v-if="form.kind === 'password'" :label="$t('cred.pass')" prop="pass">
-          <!-- 密码框不能禁用：Element 的眼睛在 disabled/readonly 下不渲染（element-ui.common.js 的 showPwdVisible） -->
           <!-- 秘密字段不写 maxlength：被浏览器静默剪短的内容只会在连接时报解析失败，长度上限由主进程报错 -->
+          <!-- 眼睛自绘：Element 的 show-password 在 readonly 下不渲染，查看模式既要锁输入又要能切明文 -->
           <el-input
             v-model="form.pass"
-            type="password"
+            :type="passVisible ? 'text' : 'password'"
             :placeholder="$t('cred.passPh')"
-            show-password
+            :readonly="readonly"
             autocomplete="off"
-          />
+          >
+            <button
+              slot="append"
+              type="button"
+              class="pass-reveal-btn"
+              :title="passVisible ? $t('auth.hidePass') : $t('auth.revealPass')"
+              @click="passVisible = !passVisible"
+            >
+              <svg-icon v-if="!passVisible" name="eye-open" :size="20" />
+              <svg-icon v-else name="eye-closed" :size="20" />
+            </button>
+          </el-input>
         </el-form-item>
         <template v-else>
           <el-form-item :label="$t('cred.privateKey')" prop="privateKey">
@@ -164,11 +175,22 @@
           <el-form-item :label="$t('cred.passphrase')" prop="passphrase">
             <el-input
               v-model="form.passphrase"
-              type="password"
+              :type="passphraseVisible ? 'text' : 'password'"
               :placeholder="$t('cred.passphrasePh')"
-              show-password
+              :readonly="readonly"
               autocomplete="off"
-            />
+            >
+              <button
+                slot="append"
+                type="button"
+                class="pass-reveal-btn"
+                :title="passphraseVisible ? $t('auth.hidePass') : $t('auth.revealPass')"
+                @click="passphraseVisible = !passphraseVisible"
+              >
+                <svg-icon v-if="!passphraseVisible" name="eye-open" :size="20" />
+                <svg-icon v-else name="eye-closed" :size="20" />
+              </button>
+            </el-input>
           </el-form-item>
         </template>
         <el-form-item :label="$t('cred.note')" prop="note">
@@ -245,6 +267,8 @@ export default {
       editId: null,
       revealing: false,
       saving: false,
+      passVisible: false,
+      passphraseVisible: false,
       dropAt: -1,
       form: blankForm(),
       rules: {
@@ -381,6 +405,8 @@ export default {
       this.dropAt = -1;
       this._dragRow = null;
       this.form = blankForm();
+      this.passVisible = false;
+      this.passphraseVisible = false;
       // el-input 的 value 监听会补发一次 change 校验，清报错必须等这轮渲染完
       this.$nextTick(() => {
         if (this.$refs.form) this.$refs.form.clearValidate();
@@ -512,6 +538,21 @@ export default {
 }
 .cred-pick + .el-textarea {
   margin-top: 8px;
+}
+.pass-reveal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 100%;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.pass-reveal-btn:hover {
+  color: var(--accent);
 }
 /* plain 的浅蓝底是 Element 写死的，暗色主题下是一块亮斑，用 token 压住（.el-button 前缀抬权重压过 is-plain） */
 .el-button.cred-add {

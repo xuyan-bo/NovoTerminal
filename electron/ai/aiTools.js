@@ -728,6 +728,12 @@ function isReadOnly(command, family = 'posix') {
 }
 
 const TOOL_OUTPUT_LIMIT = 6000;
+/** 文件工具的行窗口与整文件上限：读窗口对齐 clip() 的体量；写上限要给 base64 留出 Linux 单参数 128KB（MAX_ARG_STRLEN）的空间。 */
+const FILE_LINE_CAP = 500;
+const FILE_MAX_LINES = 20000;
+const FILE_MAX_BYTES = 80 * 1024;
+/** 路径只收安全字符集：带空格、引号、$ 或反引号的路径拒绝执行，宁可不读也不能跳出单引号。 */
+const FILE_PATH_RE = /^[\w./~+:@-]+$/;
 
 function aiToolError(code, message) {
   return Object.assign(new Error(message), { code });
@@ -763,6 +769,39 @@ const DEFINITIONS = [
       name: 'read_terminal_screen',
       description: '读取用户终端当前可见的内容（含回滚缓冲），用于了解用户自己刚跑了什么。',
       parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: '读取这台主机上文本文件的指定行窗口（POSIX 主机）。比 cat 更合适：按行窗口取，不会被输出上限从中间截断。start_line 从 1 开始，返回尾部会带上总行数与下一段的起始行号。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '文件绝对路径' },
+          start_line: { type: 'integer', description: '起始行号，默认 1' },
+          lines: { type: 'integer', description: '读取行数，默认 200，最多 ' + FILE_LINE_CAP },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description: '把整份内容写入这台主机上的文本文件（POSIX 主机），覆盖已有内容，执行前用户会在确认卡片里看到改前与改后的内容。写前必须先 read_file 拿全当前内容再改，绝不能只凭记忆重写。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '文件绝对路径' },
+          content: { type: 'string', description: '要写入的完整文件内容' },
+          rationale: { type: 'string', description: '一句话说明这次写入要达成什么，会展示给用户确认' },
+          mkdir_parent: { type: 'boolean', description: '父目录不存在时是否创建，默认不创建' },
+        },
+        required: ['path', 'content'],
+      },
     },
   },
   {
@@ -848,6 +887,132 @@ function createTools(ctx) {
     return { channel: 'exec', exitCode: code, text: code && code !== 0 ? body + (body ? '\n' : '') + '[exit ' + code + ']' : body };
   }
 
+  function runExec(line) {
+    return exec(target.client, line, target.charset, settings.commandTimeoutSec * 1000, 'AI_EXEC_TIMEOUT', signal);
+  }
+
+  /** 文件工具的公共前置：探测平台，非纯 POSIX shell 直接给出如实的不可用说明。 */
+  async function fileGuard(path) {
+    if (typeof path !== 'string' || !path.trim()) throw aiToolError('AI_ARGS', 'path required');
+    if (!FILE_PATH_RE.test(path)) {
+      return { channel: 'file', failed: true, text: '路径包含空格或特殊字符，文件工具不支持，请改用 run_command。' };
+    }
+    await resolveShell();
+    if (shell !== 'posix' || family === 'unknown') {
+      return { channel: 'file', failed: true, text: '文件工具只支持 POSIX 主机（当前目标不是），请改用 run_command。' };
+    }
+    return null;
+  }
+
+  async function readFile(rawPath, opts = {}) {
+    const blocked = await fileGuard(rawPath);
+    if (blocked) return blocked;
+    const path = rawPath.trim();
+    const from = Math.max(1, Math.floor(Number(opts.startLine) || 1));
+    const count = Math.min(FILE_LINE_CAP, Math.max(1, Math.floor(Number(opts.lines) || 200)));
+    // ask 档连读取也要过目：文件里可能有密钥，口径与 run_command 的只读命令一致；守卫先行，不支持的主机不该先弹确认
+    if (settings.permission === 'ask') {
+      const decision = await requestApproval({ name: 'read_file', command: path, readOnly: true, reason: '' });
+      if (decision !== 'allow') {
+        return decision === 'deny'
+          ? { channel: 'file', denied: 'deny', text: '用户拒绝读取这个文件。不要重试同一次读取，直接说明无法完成。' }
+          : { channel: 'file', denied: decision, text: '这一轮已经结束，文件没有读取。' };
+      }
+    }
+    const started = Date.now();
+    let out;
+    try {
+      // awk 一次遍历同时交出窗口与总行数：sed+wc 在文件不存在时会把两条命令的失败搅在一起
+      out = await runExec("awk 'NR>=" + from + " && NR<" + (from + count) + "{print} END{printf \"@@LINES:%d\\n\", NR}' '" + path + "'");
+    } catch (error) {
+      if (error.code === 'SSH_EXEC_CANCELED') return { channel: 'file', canceled: true, text: '用户已停止这一轮，读取没有完成。' };
+      log && log.warn('ai', 'ai read_file failed', { sessionId, host: target.host, path, message: error.message, code: error.code });
+      return { channel: 'file', failed: true, text: '读取失败：' + error.message };
+    }
+    const code = Number.isInteger(out.code) ? out.code : null;
+    const mark = String(out.stdout || '').lastIndexOf('@@LINES:');
+    if (mark < 0) {
+      log && log.warn('ai', 'ai read_file unexpected output', { sessionId, host: target.host, path, exitCode: code });
+      return { channel: 'file', failed: true, text: '读取失败：文件不存在、不可读，或主机上没有 awk' + (out.stderr ? '\n[stderr]\n' + clip(out.stderr, 1000) : '') };
+    }
+    const body = clip(out.stdout.slice(0, mark).replace(/\n$/, ''));
+    const total = Number((out.stdout.slice(mark) || '').replace(/\D/g, '')) || 0;
+    log && log.info('ai', 'ai read_file finished', { sessionId, host: target.host, path, ms: Date.now() - started, exitCode: code, total });
+    if (code && code !== 0) {
+      return { channel: 'file', exitCode: code, text: '读取失败：' + (clip(out.stderr, 1000) || '文件不存在或没有读权限') };
+    }
+    const readTo = from + count - 1;
+    const more = total > readTo ? '；还有内容没读完，用 start_line=' + (readTo + 1) + ' 继续' : '';
+    return {
+      channel: 'file',
+      exitCode: code,
+      text: body + (body ? '\n' : '') + '[共 ' + total + ' 行，本次读了第 ' + from + ' 到 ' + Math.min(readTo, total) + ' 行' + more + ']',
+    };
+  }
+
+  async function writeFile(rawPath, opts = {}) {
+    const blocked = await fileGuard(rawPath);
+    if (blocked) return blocked;
+    const path = rawPath.trim();
+    const content = typeof opts.content === 'string' ? opts.content : '';
+    if (!content.length) throw aiToolError('AI_ARGS', 'content required');
+    const bytes = Buffer.byteLength(content, 'utf8');
+    if (bytes > FILE_MAX_BYTES) {
+      return { channel: 'file', failed: true, text: '内容超过 ' + FILE_MAX_BYTES + ' 字节上限，文件工具写不了这么大的整文件，请改用 run_command 分段处理。' };
+    }
+    const b64 = Buffer.from(content, 'utf8').toString('base64');
+    const started = Date.now();
+    // 写之前先读当前内容进审批卡片：用户点允许/拒绝靠的就是这份改前对照
+    let oldText = '';
+    let oldMissing = false;
+    try {
+      const probe = await runExec("sed -n '1," + FILE_MAX_LINES + "p' '" + path + "'");
+      oldText = probe.stdout;
+      oldMissing = Number.isInteger(probe.code) && probe.code !== 0;
+    } catch (error) {
+      if (error.code === 'SSH_EXEC_CANCELED') return { channel: 'file', canceled: true, text: '用户已停止这一轮，文件没有写入。' };
+      log && log.warn('ai', 'ai write_file read current content failed', { sessionId, host: target.host, path, message: error.message });
+      oldText = '(读取当前内容失败：' + error.message + ')';
+    }
+    if (settings.permission !== 'full') {
+      const decision = await requestApproval({
+        name: 'write_file',
+        command: path,
+        subject: 'file',
+        old: clip(oldText, 4000),
+        new: clip(content, 4000),
+        reason: opts.rationale || '',
+      });
+      if (decision !== 'allow') {
+        return decision === 'deny'
+          ? { channel: 'file', denied: 'deny', text: '用户拒绝写入这个文件。不要重试同一次写入，先说明无法完成的原因。' }
+          : { channel: 'file', denied: decision, text: '这一轮已经结束，文件没有写入。' };
+      }
+    }
+    if (opts.onStart) opts.onStart();
+    const parent = path.lastIndexOf('/') > 0 ? path.slice(0, path.lastIndexOf('/')) : '';
+    const ensure = opts.mkdirParent && parent ? "mkdir -p '" + parent + "' && " : '';
+    // base64 字母表不含引号、反斜杠与 %，printf 单引号包裹后原样吐出，再解码落盘；
+    // 先写临时文件再 mv：整文件重定向会在解码失败时把原配置截成空文件
+    const tmp = path + '.novo-tmp';
+    const line = ensure + "printf '" + b64 + "' | base64 -d > '" + tmp + "' && mv '" + tmp + "' '" + path + "' && echo OK";
+    let out;
+    try {
+      out = await runExec(line);
+    } catch (error) {
+      if (error.code === 'SSH_EXEC_CANCELED') return { channel: 'file', canceled: true, text: '用户已停止这一轮，文件写入被中断；原文件要么没动，要么已是完整的新内容。' };
+      log && log.error('ai', 'ai write_file failed', { sessionId, host: target.host, path, message: error.message, code: error.code });
+      return { channel: 'file', failed: true, text: '写入失败：' + error.message };
+    }
+    const code = Number.isInteger(out.code) ? out.code : null;
+    const ok = code === 0 && String(out.stdout || '').includes('OK');
+    log && log.info('ai', 'ai write_file finished', { sessionId, host: target.host, path, ms: Date.now() - started, exitCode: code, bytes, ok });
+    if (!ok) {
+      return { channel: 'file', exitCode: code, failed: true, text: '写入失败：' + (clip(out.stderr, 1000) || '主机上没有 base64 或目录不可写') };
+    }
+    return { channel: 'file', exitCode: 0, text: '已写入 ' + path + '（' + bytes + ' 字节，' + (oldMissing ? '新建文件' : '覆盖原文件') + '）。' };
+  }
+
   async function invoke(call, onStart) {
     const args = call.args || {};
     if (call.name === 'run_command') {
@@ -855,6 +1020,18 @@ function createTools(ctx) {
       return runCommand(args.command.trim(), {
         cwd: args.cwd,
         rationale: typeof args.rationale === 'string' ? args.rationale.slice(0, 200) : '',
+        onStart,
+      });
+    }
+    if (call.name === 'read_file') {
+      return readFile(args.path, { startLine: args.start_line, lines: args.lines });
+    }
+    if (call.name === 'write_file') {
+      if (typeof args.content !== 'string') throw aiToolError('AI_ARGS', 'content required');
+      return writeFile(args.path.trim(), {
+        content: args.content,
+        rationale: typeof args.rationale === 'string' ? args.rationale.slice(0, 200) : '',
+        mkdirParent: args.mkdir_parent === true,
         onStart,
       });
     }

@@ -19,12 +19,12 @@
         />
       </div>
       <div class="method-icon-actions">
+        <!-- 凭证/高级/测试在只读态照样可点：打开的是子弹窗与探测，屏蔽由子弹窗自己的 isView 与保存按钮负责 -->
         <el-tooltip :content="$t('asset.authSettings')" placement="top">
           <button
             type="button"
             class="gear-icon-btn"
             :class="{ customized: row.source !== 'main' }"
-            :disabled="disabled"
             @click="$emit('auth', row)"
           >
             <i class="el-icon-key" aria-hidden="true"></i>
@@ -34,7 +34,6 @@
           <button
             type="button"
             class="gear-icon-btn"
-            :disabled="disabled"
             :class="{ customized: hasCustomAdv(row) }"
             @click="$emit('advanced', row)"
           >
@@ -45,7 +44,7 @@
           <button
             type="button"
             class="gear-icon-btn"
-            :disabled="disabled || !!testing"
+            :disabled="!!testing"
             :class="{ spinning: testingId === row.id }"
             @click="$emit('test', row)"
           >

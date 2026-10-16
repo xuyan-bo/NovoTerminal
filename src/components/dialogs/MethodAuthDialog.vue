@@ -13,6 +13,7 @@
       :rules="rules"
       label-width="92px"
       size="small"
+      :disabled="isView"
       @submit.native.prevent
     >
       <el-form-item :label="$t('asset.authSource')">
@@ -69,8 +70,10 @@
     </el-form>
 
     <template #footer>
-      <el-button size="mini" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
-      <el-button size="mini" type="primary" @click="confirm">{{ $t('msg.confirm') }}</el-button>
+      <el-button size="mini" @click="visible = false">
+        {{ isView ? $t('settings.close') : $t('settings.cancel') }}
+      </el-button>
+      <el-button v-if="!isView" size="mini" type="primary" @click="confirm">{{ $t('msg.confirm') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -138,6 +141,10 @@ export default {
         store.methodAuthDialog = { ...this.dlg, visible: v };
         if (!v && this.$refs.form) this.$nextTick(() => this.$refs.form.clearValidate());
       },
+    },
+    /** 与高级设置同一套 context 约定：资产详情（只读）打开时锁输入、只留关闭 */
+    isView() {
+      return !!(this.dlg && this.dlg.context && this.dlg.context.isView);
     },
     /** 主凭证不可用时（未设置，或是私钥而本方式只吃口令）整条分支锁死在自定义 */
     mainUsable() {

@@ -286,7 +286,10 @@ class AiManager {
       } else if (item.role === 'step') {
         seq += 1;
         const callId = 'restored-' + seq;
-        const args = item.name === 'read_terminal_screen' ? {} : { command: item.command };
+        // 老记录没存工具参数，只能按展示行重建：文件工具回填路径，正文确实拿不回来
+        const args = item.name === 'read_terminal_screen' ? {}
+          : item.name === 'read_file' || item.name === 'write_file' ? { path: item.command || '' }
+            : { command: item.command };
         out.push({
           role: 'assistant',
           content: null,
@@ -783,7 +786,11 @@ class AiManager {
         const answered = new Set();
         let halted = false;
         for (const call of result.toolCalls) {
-          const command = call.args && typeof call.args.command === 'string' ? call.args.command : '';
+          // 过程行的展示文本：命令用 command，文件工具用路径（回放与老记录重建都靠它）
+          const isFileTool = call.name === 'read_file' || call.name === 'write_file';
+          const command = isFileTool && typeof call.args?.path === 'string'
+            ? call.args.path.trim().slice(0, 400)
+            : (call.args && typeof call.args.command === 'string' ? call.args.command : '');
           // ask_user 自己发 ask / 落 choice，不能再套一层命令卡片
           const isAsk = call.name === 'ask_user';
           // OpenAI 要求每个 tool_call 都有对应回包，缺一条下一轮请求就会被拒

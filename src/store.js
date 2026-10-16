@@ -36,6 +36,7 @@ export const store = Vue.observable({
     auth: null,
     main: { mode: 'none', kind: '' },
     authKinds: [],
+    context: null,
   },
   methodAuthResult: null,
   localeTick: 0,
@@ -499,7 +500,7 @@ export function openMethodAdvanced({ methodId, methodName, advanced, context }) 
 }
 
 /** main 带 mode 与 kind：私钥型主凭证对只吃口令的方式不可用，子弹窗据此置灰选项 */
-export function openMethodAuth({ methodId, methodName, auth, main, authKinds }) {
+export function openMethodAuth({ methodId, methodName, auth, main, authKinds, context }) {
   store.methodAuthResult = null;
   store.methodAuthDialog = {
     visible: true,
@@ -508,6 +509,7 @@ export function openMethodAuth({ methodId, methodName, auth, main, authKinds }) 
     auth: auth || null,
     main: main || { mode: 'none', kind: '' },
     authKinds: authKinds || ['password'],
+    context: context || null,
   };
 }
 

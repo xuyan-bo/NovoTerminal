@@ -437,6 +437,7 @@ export default {
         auth: row.conf.auth || null,
         main: { mode: this.form.auth.mode, kind: this.mainKind },
         authKinds: row.meta.authKinds || ['password'],
+        context: { type: 'asset-dialog', isView: this.isView },
       });
     },
     validateMethods() {

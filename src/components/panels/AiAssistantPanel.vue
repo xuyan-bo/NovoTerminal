@@ -63,7 +63,7 @@
                   <span class="h-count">{{ blkCount(seg) }}</span>
                   <i class="h-caret" :class="blkOpen(row, seg) ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i>
                 </button>
-                <div v-show="blkOpen(row, seg)" class="turn-body">
+                <div v-show="blkOpen(row, seg)" class="turn-body" :data-live="blkLive(row, seg) ? '1' : ''" :style="capStyle">
                   <div v-for="n in seg.nodes" :key="n.key" class="act" :class="actClass(n)">
                     <button type="button" class="act-head" @click="toggleNode(n)">
                       <i class="a-ico" :class="nodeIcon(n)"></i>
@@ -78,6 +78,12 @@
                         <div v-if="n.nk === 'cmd' && n.auto" class="step-note">{{ $t('ai.autoRanNote') }}</div>
                         <div v-if="n.reason" class="step-note">{{ n.reason }}</div>
                         <div v-if="n.nk === 'cmd' && n.output" class="cmd-out mono" :style="capStyle">{{ n.output }}</div>
+                        <template v-if="n.nk === 'ask' && n.subject === 'file'">
+                          <div class="file-label">{{ $t('ai.fileOld') }}</div>
+                          <div class="cmd-out mono" :style="capStyle">{{ n.old || $t('ai.fileEmpty') }}</div>
+                          <div class="file-label">{{ $t('ai.fileNew') }}</div>
+                          <div class="cmd-out mono" :style="capStyle">{{ n.new }}</div>
+                        </template>
                         <div v-if="n.nk === 'choice'" class="choice-list">
                           <div class="choice-q">{{ n.question }}</div>
                           <div
@@ -206,11 +212,17 @@
     <div v-if="pending" class="ai-pin">
       <div class="pin-head">
         <i :class="pending.nk === 'ask' ? 'el-icon-warning' : 'el-icon-question'"></i>
-        <span class="pin-title">{{ $t(pending.nk === 'ask' ? 'ai.needApproval' : 'ai.needChoice') }}</span>
+        <span class="pin-title">{{ pinTitle(pending) }}</span>
         <span class="pin-wait mono">{{ elapsed(pending.askedAt) }}</span>
       </div>
       <div v-if="pending.nk === 'ask'" class="cmd-line mono">{{ pending.command }}</div>
       <div v-if="pending.reason" class="step-note">{{ pending.reason }}</div>
+      <template v-if="pending.nk === 'ask' && pending.subject === 'file'">
+        <div class="file-label">{{ $t('ai.fileOld') }}</div>
+        <div class="cmd-out mono" :style="capStyle">{{ pending.old || $t('ai.fileEmpty') }}</div>
+        <div class="file-label">{{ $t('ai.fileNew') }}</div>
+        <div class="cmd-out mono" :style="capStyle">{{ pending.new }}</div>
+      </template>
       <div v-if="pending.nk === 'ask'" class="ask-btns">
         <el-button size="mini" type="primary" @click="decide(pending, 'allow')">
           {{ $t('ai.approveAllow') }}
@@ -345,6 +357,12 @@ const DAY_MS = 86400000;
 const CAP_RATIO = 0.42;
 const CAP_MIN = 140;
 const TICK_MS = 200;
+/** 没有命令行可显示的工具，过程行头部用本地化工具名。 */
+const TOOL_LABELS = {
+  read_terminal_screen: 'ai.toolReadScreen',
+  read_file: 'ai.toolReadFile',
+  write_file: 'ai.toolWriteFile',
+};
 
 const pad2 = (n) => (n < 10 ? '0' + n : String(n));
 const clip = (text, n) => (text.length > n ? text.slice(0, n) + '…' : text);
@@ -432,6 +450,7 @@ function rowsFromRecord(record) {
     } else if (e.role === 'approval') {
       useTurn().nodes.push({
         key: nextKey(), nk: 'ask', requestId: '', name: e.name, command: e.command || '', reason: e.reason || '',
+        subject: e.subject || '', old: e.old || '', new: e.new || '',
         readOnly: !!e.readOnly, decided: e.decision || 'deny', askedAt: 0, open: false,
       });
     } else if (e.role === 'choice') {
@@ -648,6 +667,7 @@ export default {
     this._tick = null;
     this._ro = null;
     this._thinkPending = false;
+    this._bodyPending = false;
     this.subscribe();
     this.clearConversation();
   },
@@ -747,6 +767,7 @@ export default {
         } else {
           turn.nodes.push({
             key: nextKey(), nk: 'ask', requestId: p.requestId, name: p.name || '', command: p.command || '',
+            subject: p.subject || '', old: p.old || '', new: p.new || '',
             reason: p.reason || '', readOnly: !!p.readOnly, decided: '', askedAt, open: false,
           });
         }
@@ -889,11 +910,13 @@ export default {
         this.endThink(turn);
         this.closeSay(turn);
         turn.live = '';
-        turn.nodes.push({
+        const node = {
           key: nextKey(), nk: 'ask', requestId: ev.requestId, name: ev.name, command: ev.command || '',
+          subject: ev.subject || '', old: ev.old || '', new: ev.new || '',
           reason: ev.reason || '', readOnly: !!ev.readOnly, decided: '', askedAt: Number(ev.askedAt) || Date.now(), open: false,
-        });
-        this.needInput(this.$t('ai.needApproval'));
+        };
+        turn.nodes.push(node);
+        this.needInput(this.pinTitle(node));
         this.stick();
         return;
       }
@@ -1031,7 +1054,8 @@ export default {
 
     /** 工具名是模型侧的稳定标识，界面要显示本地化的说法。 */
     toolName(name) {
-      return name === 'read_terminal_screen' ? this.$t('ai.toolReadScreen') : name;
+      const key = TOOL_LABELS[name];
+      return key ? this.$t(key) : name;
     },
 
     actClass(node) {
@@ -1063,6 +1087,13 @@ export default {
       }
       if (node.state === 'waiting') return 'el-icon-question';
       return node.picked ? 'el-icon-circle-check' : 'el-icon-circle-close';
+    },
+    /** 审批卡标题按工具分型：读取、写入、命令各说各的，不再共用一条「有命令待确认」 */
+    pinTitle(node) {
+      if (node.nk !== 'ask') return this.$t('ai.needChoice');
+      if (node.name === 'read_file') return this.$t('ai.needRead');
+      if (node.name === 'write_file') return this.$t('ai.needFile');
+      return this.$t('ai.needApproval');
     },
     nodeTitle(node) {
       if (node.nk === 'think') return this.$t(node.running ? 'ai.thinkRunning' : 'ai.thinkDone');
@@ -1419,7 +1450,21 @@ export default {
     },
     /** 流式增量只在用户没有往上翻时才把会话区拽到底部。 */
     stick() {
+      this.scrollBodies();
       if (this.follow) this.scrollToEnd();
+    },
+    /** 过程段有最大高度，新步骤到达后把展开中的段滚到最末尾，否则最新一条会顶出可视区。 */
+    scrollBodies() {
+      if (this._bodyPending) return;
+      this._bodyPending = true;
+      this.$nextTick(() => {
+        this._bodyPending = false;
+        const root = this.$el;
+        if (!root || !root.querySelectorAll) return;
+        root.querySelectorAll('.turn-body[data-live="1"]').forEach((el) => {
+          el.scrollTop = el.scrollHeight;
+        });
+      });
     },
 
     scrollToEnd() {
@@ -1595,7 +1640,7 @@ export default {
 .h-caret { font-size: 11px; color: var(--text-3); flex: none; }
 .turn-body {
   margin: 4px 0 0 6px; padding-left: 10px; border-left: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 3px;
+  display: flex; flex-direction: column; gap: 3px; overflow-y: auto;
 }
 .turn-body > * { flex: none; }
 .act-head {
@@ -1628,6 +1673,9 @@ export default {
   padding: 6px 8px; background: var(--bg-elevated);
   border: 1px solid var(--border); border-radius: 5px;
   font-size: 11px; color: var(--text-2); white-space: pre-wrap; overflow-y: auto;
+}
+.file-label {
+  margin: 2px 0 3px; font-size: 10.5px; color: var(--text-3);
 }
 .typing::after {
   content: ''; display: inline-block; width: 5px; height: 11px; margin-left: 2px;
