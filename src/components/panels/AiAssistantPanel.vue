@@ -78,12 +78,6 @@
                         <div v-if="n.nk === 'cmd' && n.auto" class="step-note">{{ $t('ai.autoRanNote') }}</div>
                         <div v-if="n.reason" class="step-note">{{ n.reason }}</div>
                         <div v-if="n.nk === 'cmd' && n.output" class="cmd-out mono" :style="capStyle">{{ n.output }}</div>
-                        <template v-if="n.nk === 'ask' && n.subject === 'file'">
-                          <div class="file-label">{{ $t('ai.fileOld') }}</div>
-                          <div class="cmd-out mono" :style="capStyle">{{ n.old || $t('ai.fileEmpty') }}</div>
-                          <div class="file-label">{{ $t('ai.fileNew') }}</div>
-                          <div class="cmd-out mono" :style="capStyle">{{ n.new }}</div>
-                        </template>
                         <div v-if="n.nk === 'choice'" class="choice-list">
                           <div class="choice-q">{{ n.question }}</div>
                           <div
@@ -215,14 +209,8 @@
         <span class="pin-title">{{ pinTitle(pending) }}</span>
         <span class="pin-wait mono">{{ elapsed(pending.askedAt) }}</span>
       </div>
-      <div v-if="pending.nk === 'ask'" class="cmd-line mono">{{ pending.command }}</div>
+      <div v-if="pending.nk === 'ask' && pending.command" class="cmd-line mono">{{ pending.command }}</div>
       <div v-if="pending.reason" class="step-note">{{ pending.reason }}</div>
-      <template v-if="pending.nk === 'ask' && pending.subject === 'file'">
-        <div class="file-label">{{ $t('ai.fileOld') }}</div>
-        <div class="cmd-out mono" :style="capStyle">{{ pending.old || $t('ai.fileEmpty') }}</div>
-        <div class="file-label">{{ $t('ai.fileNew') }}</div>
-        <div class="cmd-out mono" :style="capStyle">{{ pending.new }}</div>
-      </template>
       <div v-if="pending.nk === 'ask'" class="ask-btns">
         <el-button size="mini" type="primary" @click="decide(pending, 'allow')">
           {{ $t('ai.approveAllow') }}
@@ -362,6 +350,7 @@ const TOOL_LABELS = {
   read_terminal_screen: 'ai.toolReadScreen',
   read_file: 'ai.toolReadFile',
   write_file: 'ai.toolWriteFile',
+  edit_file: 'ai.toolEditFile',
 };
 
 const pad2 = (n) => (n < 10 ? '0' + n : String(n));
@@ -1093,6 +1082,7 @@ export default {
       if (node.nk !== 'ask') return this.$t('ai.needChoice');
       if (node.name === 'read_file') return this.$t('ai.needRead');
       if (node.name === 'write_file') return this.$t('ai.needFile');
+      if (node.name === 'edit_file') return this.$t('ai.needEdit');
       return this.$t('ai.needApproval');
     },
     nodeTitle(node) {
@@ -1674,9 +1664,6 @@ export default {
   border: 1px solid var(--border); border-radius: 5px;
   font-size: 11px; color: var(--text-2); white-space: pre-wrap; overflow-y: auto;
 }
-.file-label {
-  margin: 2px 0 3px; font-size: 10.5px; color: var(--text-3);
-}
 .typing::after {
   content: ''; display: inline-block; width: 5px; height: 11px; margin-left: 2px;
   background: var(--think); vertical-align: -1px; animation: ai-blink 1s steps(1) infinite;
@@ -1735,8 +1722,6 @@ export default {
 .back-tail:hover { background: var(--accent-soft); }
 .ai-pin {
   flex: 0 0 auto;
-  max-height: 42%;
-  overflow-y: auto;
   padding: 8px 9px 9px;
   background: var(--bg-panel);
   border-top: 1px solid var(--accent);

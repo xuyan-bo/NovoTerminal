@@ -288,7 +288,7 @@ class AiManager {
         const callId = 'restored-' + seq;
         // 老记录没存工具参数，只能按展示行重建：文件工具回填路径，正文确实拿不回来
         const args = item.name === 'read_terminal_screen' ? {}
-          : item.name === 'read_file' || item.name === 'write_file' ? { path: item.command || '' }
+          : item.name === 'read_file' || item.name === 'write_file' || item.name === 'edit_file' ? { path: item.command || '' }
             : { command: item.command };
         out.push({
           role: 'assistant',
@@ -483,6 +483,9 @@ class AiManager {
       en
         ? 'If a destructive step has an ambiguous scope (which directories, which service), call ask_user with concrete options instead of guessing - the user can also answer freely.'
         : '破坏性操作的范围不明确时（清哪些目录、重启哪个服务），用 ask_user 给出具体候选项征求确认，不要凭猜测扩大范围；用户也可以不选，直接自由回答。',
+      en
+        ? 'To change a file use the file tools, not the shell: edit_file with mode=append adds lines at the end without reading the file first; edit_file with mode=replace changes part of it, so read_file first and quote old_string verbatim; write_file is only for creating or rewriting the whole file. Never edit a file with echo >>, sed -i or tee.'
+        : '改文件用文件工具，不要用 shell：往末尾追加几行直接 edit_file 的 mode=append（不必先读全文）；改其中几行先 read_file，再用 edit_file 的 mode=replace，old_string 要逐字取自读到的内容。write_file 只用于新建或整份重写。不要用 echo >>、sed -i、tee 这类命令直接改文件。',
       en ? 'Answer in English.' : '用中文回答。',
     ];
     if (screen) {
@@ -787,7 +790,7 @@ class AiManager {
         let halted = false;
         for (const call of result.toolCalls) {
           // 过程行的展示文本：命令用 command，文件工具用路径（回放与老记录重建都靠它）
-          const isFileTool = call.name === 'read_file' || call.name === 'write_file';
+          const isFileTool = call.name === 'read_file' || call.name === 'write_file' || call.name === 'edit_file';
           const command = isFileTool && typeof call.args?.path === 'string'
             ? call.args.path.trim().slice(0, 400)
             : (call.args && typeof call.args.command === 'string' ? call.args.command : '');

@@ -25,6 +25,7 @@
  * Windows 自带 curl.exe，PowerShell 里 `curl`/`wget` 还是 Invoke-WebRequest 的别名，同样不在表里。
  */
 
+const iconv = require('iconv-lite');
 const { exec, platformOf } = require('../ssh/exec');
 
 /** 日志只记命令名与长度：整条命令行常带明文口令（mysql -p…、curl -u…），不能进持久化日志。 */
@@ -732,8 +733,15 @@ const TOOL_OUTPUT_LIMIT = 6000;
 const FILE_LINE_CAP = 500;
 const FILE_MAX_LINES = 20000;
 const FILE_MAX_BYTES = 80 * 1024;
-/** 路径只收安全字符集：带空格、引号、$ 或反引号的路径拒绝执行，宁可不读也不能跳出单引号。 */
-const FILE_PATH_RE = /^[\w./~+:@-]+$/;
+/** 审批卡片里「改前」只给命中处前后各这么多行：整文件贴上来用户看不清，改动本身才是要确认的东西。 */
+const FILE_DIFF_PAD = 5;
+/** 卡片改前/改后的字数上限：会话记录按 4000 字存，clip 还要留出截断标记的位置，所以取更小的预算。 */
+const FILE_CARD_CHARS = 3900;
+/** 探针标记：存在与非空各带一个回来，不靠退出码猜——sed/tail 读不到（没权限）和文件不存在都是非零。 */
+const FILE_MARK_EXIST = '@@NOVO-E';
+const FILE_MARK_SIZE = '@@NOVO-S';
+/** 路径只收安全字符集：引号、反斜杠、`$` 与反引号一律排除，跳不出单引号；空格是安全的。 */
+const FILE_PATH_RE = /^[\w./~+:@\- ]+$/;
 
 function aiToolError(code, message) {
   return Object.assign(new Error(message), { code });
@@ -791,7 +799,7 @@ const DEFINITIONS = [
     type: 'function',
     function: {
       name: 'write_file',
-      description: '把整份内容写入这台主机上的文本文件（POSIX 主机），覆盖已有内容，执行前用户会在确认卡片里看到改前与改后的内容。写前必须先 read_file 拿全当前内容再改，绝不能只凭记忆重写。',
+      description: '把整份内容写入这台主机上的文本文件（POSIX 主机），覆盖已有内容；只用来新建文件或整份重写。改其中几行请用 edit_file，不要用这里。写前必须先 read_file 拿全当前内容再改，绝不能只凭记忆重写。执行前用户会在确认卡片里看到改前与改后的内容。',
       parameters: {
         type: 'object',
         properties: {
@@ -801,6 +809,27 @@ const DEFINITIONS = [
           mkdir_parent: { type: 'boolean', description: '父目录不存在时是否创建，默认不创建' },
         },
         required: ['path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'edit_file',
+      description: '改这台主机上文本文件的局部内容（POSIX 主机），改几行就用它，不必重写整个文件。mode=append 把 content 追加到文件末尾，不需要先读全文（文件末尾缺换行会自动补一个，避免末行和新内容粘成一行）；mode=replace 用 old_string 逐字匹配文件里的一段原文并换成 new_string，old_string 必须原样来自 read_file 的输出，含缩进和空格，出现多次时会要求你扩大上下文或改用 replace_all。replace 会先把整个文件读到本地改好再写回，所以超过大小上限的文件改不了。执行前用户会在确认卡片里看到改前与改后的内容。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '文件绝对路径' },
+          mode: { type: 'string', enum: ['append', 'replace'], description: 'append 追加到文件末尾；replace 精确替换一段原文' },
+          content: { type: 'string', description: 'append 模式要追加的文本' },
+          old_string: { type: 'string', description: 'replace 模式要替换的原文，逐字来自当前文件' },
+          new_string: { type: 'string', description: 'replace 模式换上的新文本，留空表示删掉这段原文' },
+          replace_all: { type: 'boolean', description: 'replace 模式下 old_string 出现多次时是否全部替换，默认否' },
+          rationale: { type: 'string', description: '一句话说明这次修改要达成什么，会展示给用户确认' },
+          mkdir_parent: { type: 'boolean', description: 'append 到尚不存在的文件时是否创建父目录，默认不创建' },
+        },
+        required: ['path', 'mode'],
       },
     },
   },
@@ -891,11 +920,15 @@ function createTools(ctx) {
     return exec(target.client, line, target.charset, settings.commandTimeoutSec * 1000, 'AI_EXEC_TIMEOUT', signal);
   }
 
-  /** 文件工具的公共前置：探测平台，非纯 POSIX shell 直接给出如实的不可用说明。 */
+  /** 文件工具的公共前置：校验路径、探测平台，非纯 POSIX shell 直接给出如实的不可用说明。 */
   async function fileGuard(path) {
     if (typeof path !== 'string' || !path.trim()) throw aiToolError('AI_ARGS', 'path required');
     if (!FILE_PATH_RE.test(path)) {
-      return { channel: 'file', failed: true, text: '路径包含空格或特殊字符，文件工具不支持，请改用 run_command。' };
+      return { channel: 'file', failed: true, text: '路径包含引号或特殊字符，文件工具不支持，请改用 run_command。' };
+    }
+    // exec 通道不继承终端当前目录，相对路径会落在 SSH 用户主目录下，读到的根本不是同一个文件
+    if (path[0] !== '/') {
+      return { channel: 'file', failed: true, text: '文件工具只接受绝对路径（以 / 开头），先确认目标文件的完整路径。' };
     }
     await resolveShell();
     if (shell !== 'posix' || family === 'unknown') {
@@ -905,9 +938,9 @@ function createTools(ctx) {
   }
 
   async function readFile(rawPath, opts = {}) {
-    const blocked = await fileGuard(rawPath);
+    const path = typeof rawPath === 'string' ? rawPath.trim() : rawPath;
+    const blocked = await fileGuard(path);
     if (blocked) return blocked;
-    const path = rawPath.trim();
     const from = Math.max(1, Math.floor(Number(opts.startLine) || 1));
     const count = Math.min(FILE_LINE_CAP, Math.max(1, Math.floor(Number(opts.lines) || 200)));
     // ask 档连读取也要过目：文件里可能有密钥，口径与 run_command 的只读命令一致；守卫先行，不支持的主机不该先弹确认
@@ -923,7 +956,7 @@ function createTools(ctx) {
     let out;
     try {
       // awk 一次遍历同时交出窗口与总行数：sed+wc 在文件不存在时会把两条命令的失败搅在一起
-      out = await runExec("awk 'NR>=" + from + " && NR<" + (from + count) + "{print} END{printf \"@@LINES:%d\\n\", NR}' '" + path + "'");
+      out = await runExec("awk 'NR>=" + from + " && NR<" + (from + count) + "{print} END{printf \"@@LINES:%d\\n\", NR}' " + sq(path));
     } catch (error) {
       if (error.code === 'SSH_EXEC_CANCELED') return { channel: 'file', canceled: true, text: '用户已停止这一轮，读取没有完成。' };
       log && log.warn('ai', 'ai read_file failed', { sessionId, host: target.host, path, message: error.message, code: error.code });
@@ -950,37 +983,182 @@ function createTools(ctx) {
     };
   }
 
+  /** exec 通道按 target.charset 解码读回的字节，写入必须用同一套编码，否则 GBK 主机上的中文读回来再写回去就成乱码。 */
+  function charsetOf() {
+    return target.charset || 'UTF-8';
+  }
+  function encodeText(text) {
+    try {
+      return iconv.encode(text, charsetOf());
+    } catch (_) {
+      return Buffer.from(text, 'utf8');
+    }
+  }
+  function decodeBytes(buf) {
+    try {
+      return iconv.decode(buf, charsetOf());
+    } catch (_) {
+      return buf.toString('utf8');
+    }
+  }
+  /** 路径已过 FILE_PATH_RE（不含单引号与反斜杠），包进单引号就是安全的。 */
+  function sq(path) {
+    return "'" + path + "'";
+  }
+
+  /** 存在性探针：先带回两个标记，再接调用方给的正文命令；标记都排在正文前面。 */
+  function markProbe(path, body) {
+    return 'test -e ' + sq(path) + ' && echo ' + FILE_MARK_EXIST
+      + '; test -s ' + sq(path) + ' && echo ' + FILE_MARK_SIZE + '; ' + body;
+  }
+
+  /** 拆探针回包：标记之后的才是文件正文，前面的登录横幅之类一并丢掉。 */
+  function probeMarks(stdout) {
+    const body = String(stdout || '');
+    const e = body.indexOf(FILE_MARK_EXIST);
+    const s = body.indexOf(FILE_MARK_SIZE);
+    const at = Math.max(e, s);
+    return {
+      exists: e >= 0,
+      nonEmpty: s >= 0,
+      rest: at < 0 ? body : body.slice(at + (at === e ? FILE_MARK_EXIST : FILE_MARK_SIZE).length).replace(/^\n/, ''),
+    };
+  }
+
+  /** 写完的口径：命令返回 0 不等于主机上的文件真是这份内容，回读对得上才报具体数字。 */
+  function writtenNote(buf, now) {
+    return now ? buf.length + ' 字节，主机上确认为 ' + now.bytes + ' 字节 / ' + now.lines + ' 行'
+      : buf.length + ' 字节（未能回读校验）';
+  }
+
+  /** 写入被中途停止时如实说明残留：mv 是原子的，就地覆写与追加都可能只落了一半。 */
+  function interruptedNote(action) {
+    if (action === 'create') return '目标要么还没建出来，要么已是完整的新内容。';
+    if (action === 'append') return '文件末尾要么没变，要么已多出这段内容，请用 read_file 核对末尾。';
+    return '就地覆写可能只写了一半，请用 read_file 核对当前内容再决定怎么修。';
+  }
+
+  async function verifyFile(path) {
+    try {
+      const out = await runExec('wc -l -c < ' + sq(path));
+      if (Number.isInteger(out.code) && out.code !== 0) return null;
+      // wc 固定按「行数 字节数」吐出，与 -l -c 的书写顺序无关；取最后两个数字，前面的杂项不算长度
+      const nums = String(out.stdout || '').trim().split(/\s+/).map(Number).filter(Number.isFinite);
+      return nums.length >= 2 ? { lines: nums[nums.length - 2], bytes: nums[nums.length - 1] } : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** 整文件取回（base64 原样回传、本地按目标编码解码）：超上限或含 NUL 就不再往下走。 */
+  async function pullFile(path) {
+    let size = 0;
+    try {
+      // 存在与大小分开判：只靠 wc 的退出码，「没有读权限」会被说成「文件不存在」
+      const probe = await runExec(markProbe(path, 'wc -c < ' + sq(path)));
+      const marks = probeMarks(probe.stdout);
+      if (!marks.exists) return { missing: true };
+      // 只取第一个数字：登录横幅之类的杂项不该被并进长度
+      const num = Number(String(marks.rest).trim().split(/\s+/)[0]);
+      if (Number.isInteger(num) && num >= 0) size = num;
+      else if (marks.nonEmpty) return { failed: '文件存在但读不到内容（多半是没有读权限），编辑工具不能凭猜测重写整份文件，请改用 run_command。' };
+    } catch (error) {
+      if (error.code === 'SSH_EXEC_CANCELED') return { canceled: true };
+      return { failed: '读取失败：' + error.message };
+    }
+    if (size > FILE_MAX_BYTES) {
+      return { failed: '文件有 ' + size + ' 字节，超过编辑工具 ' + FILE_MAX_BYTES + ' 字节的整文件上限：往末尾加内容改用 mode=append，就地改几行只能走 run_command。' };
+    }
+    if (size === 0) return { text: '', buf: Buffer.alloc(0) };
+    let out;
+    try {
+      out = await runExec('base64 ' + sq(path));
+    } catch (error) {
+      if (error.code === 'SSH_EXEC_CANCELED') return { canceled: true };
+      return { failed: '读取失败：' + error.message };
+    }
+    if (Number.isInteger(out.code) && out.code !== 0) {
+      return { failed: '读取失败：' + (clip(out.stderr, 500) || '文件不可读，或主机上没有 base64') };
+    }
+    const buf = Buffer.from(String(out.stdout || '').replace(/\s+/g, ''), 'base64');
+    if (buf.indexOf(0) >= 0) return { binary: true };
+    return { buf, text: decodeBytes(buf) };
+  }
+
+  /**
+   * 落盘：base64 先解到同目录的临时文件，确认解码成功才碰目标。
+   * 覆盖已有文件走 `cat tmp > path` 就地覆写，保住 inode、权限与属主——`mv` 换 inode，
+   * 会把 root 644 的配置变成临时文件的属主和 umask 权限；新建才用 mv，追加走 `>>`。
+   * 末尾的 `|| rm -f` 只在链路失败时清临时文件，`echo OK` 成功就走不到它。
+   */
+  async function pushFile(path, buf, action, mkdirParent) {
+    const parent = path.lastIndexOf('/') > 0 ? path.slice(0, path.lastIndexOf('/')) : '';
+    const ensure = mkdirParent && parent ? 'mkdir -p ' + sq(parent) + ' && ' : '';
+    const tmp = sq(path + '.novo-tmp');
+    const dst = sq(path);
+    const land = action === 'append' ? 'cat ' + tmp + ' >> ' + dst + ' && rm -f ' + tmp
+      : action === 'create' ? 'mv ' + tmp + ' ' + dst
+        : 'cat ' + tmp + ' > ' + dst + ' && rm -f ' + tmp;
+    const line = ensure + "printf '" + buf.toString('base64') + "' | base64 -d > " + tmp + ' && ' + land + ' && echo OK || rm -f ' + tmp;
+    const started = Date.now();
+    let out;
+    try {
+      out = await runExec(line);
+    } catch (error) {
+      if (error.code === 'SSH_EXEC_CANCELED') return { canceled: true };
+      log && log.error('ai', 'ai file write failed', { sessionId, host: target.host, path, action, message: error.message, code: error.code });
+      return { failed: '写入失败：' + error.message };
+    }
+    const code = Number.isInteger(out.code) ? out.code : null;
+    const ok = code === 0 && String(out.stdout || '').includes('OK');
+    log && log.info('ai', 'ai file write finished', { sessionId, host: target.host, path, action, ms: Date.now() - started, exitCode: code, bytes: buf.length, ok });
+    if (!ok) return { failed: '写入失败：' + (clip(out.stderr, 1000) || '主机上没有 base64，或目录与文件不可写') };
+    return { ok: true };
+  }
+
+  /** 审批卡片只给命中处前后各若干行：整文件贴上来反而看不出这次改了什么。 */
+  function excerpt(text, at, length) {
+    const lines = text.split('\n');
+    const startLine = text.slice(0, at).split('\n').length - 1;
+    const endLine = startLine + text.slice(at, at + length).split('\n').length - 1;
+    const from = Math.max(0, startLine - FILE_DIFF_PAD);
+    const to = Math.min(lines.length, endLine + FILE_DIFF_PAD + 1);
+    return (from > 0 ? '…\n' : '') + lines.slice(from, to).join('\n') + (to < lines.length ? '\n…' : '');
+  }
+
   async function writeFile(rawPath, opts = {}) {
-    const blocked = await fileGuard(rawPath);
+    const path = typeof rawPath === 'string' ? rawPath.trim() : rawPath;
+    const blocked = await fileGuard(path);
     if (blocked) return blocked;
-    const path = rawPath.trim();
     const content = typeof opts.content === 'string' ? opts.content : '';
     if (!content.length) throw aiToolError('AI_ARGS', 'content required');
-    const bytes = Buffer.byteLength(content, 'utf8');
-    if (bytes > FILE_MAX_BYTES) {
+    const buf = encodeText(content);
+    if (buf.length > FILE_MAX_BYTES) {
       return { channel: 'file', failed: true, text: '内容超过 ' + FILE_MAX_BYTES + ' 字节上限，文件工具写不了这么大的整文件，请改用 run_command 分段处理。' };
     }
-    const b64 = Buffer.from(content, 'utf8').toString('base64');
     const started = Date.now();
-    // 写之前先读当前内容进审批卡片：用户点允许/拒绝靠的就是这份改前对照
-    let oldText = '';
+    // 写之前先读当前内容进审批卡片：用户点允许/拒绝靠的就是这份改前对照。
+    // 存在与否用标记判断而不是退出码：文件读不到（没权限）时 sed 也给非零码，按不存在处理会走 mv，
+    // 把已有文件的 inode、权限和属主一起换掉。
+    let oldCard = '';
     let oldMissing = false;
     try {
-      const probe = await runExec("sed -n '1," + FILE_MAX_LINES + "p' '" + path + "'");
-      oldText = probe.stdout;
-      oldMissing = Number.isInteger(probe.code) && probe.code !== 0;
+      const probe = await runExec(markProbe(path, "sed -n '1," + FILE_MAX_LINES + "p' " + sq(path) + " 2>/dev/null"));
+      const marks = probeMarks(probe.stdout);
+      oldMissing = !marks.exists;
+      if (marks.exists) oldCard = marks.nonEmpty ? clip(marks.rest, FILE_CARD_CHARS) || '（文件当前内容读不到）' : '';
     } catch (error) {
       if (error.code === 'SSH_EXEC_CANCELED') return { channel: 'file', canceled: true, text: '用户已停止这一轮，文件没有写入。' };
       log && log.warn('ai', 'ai write_file read current content failed', { sessionId, host: target.host, path, message: error.message });
-      oldText = '(读取当前内容失败：' + error.message + ')';
+      oldCard = '(读取当前内容失败：' + error.message + ')';
     }
     if (settings.permission !== 'full') {
       const decision = await requestApproval({
         name: 'write_file',
         command: path,
         subject: 'file',
-        old: clip(oldText, 4000),
-        new: clip(content, 4000),
+        old: oldCard,
+        new: clip(content, FILE_CARD_CHARS),
         reason: opts.rationale || '',
       });
       if (decision !== 'allow') {
@@ -990,27 +1168,130 @@ function createTools(ctx) {
       }
     }
     if (opts.onStart) opts.onStart();
-    const parent = path.lastIndexOf('/') > 0 ? path.slice(0, path.lastIndexOf('/')) : '';
-    const ensure = opts.mkdirParent && parent ? "mkdir -p '" + parent + "' && " : '';
-    // base64 字母表不含引号、反斜杠与 %，printf 单引号包裹后原样吐出，再解码落盘；
-    // 先写临时文件再 mv：整文件重定向会在解码失败时把原配置截成空文件
-    const tmp = path + '.novo-tmp';
-    const line = ensure + "printf '" + b64 + "' | base64 -d > '" + tmp + "' && mv '" + tmp + "' '" + path + "' && echo OK";
-    let out;
-    try {
-      out = await runExec(line);
-    } catch (error) {
-      if (error.code === 'SSH_EXEC_CANCELED') return { channel: 'file', canceled: true, text: '用户已停止这一轮，文件写入被中断；原文件要么没动，要么已是完整的新内容。' };
-      log && log.error('ai', 'ai write_file failed', { sessionId, host: target.host, path, message: error.message, code: error.code });
-      return { channel: 'file', failed: true, text: '写入失败：' + error.message };
+    const wrote = await pushFile(path, buf, oldMissing ? 'create' : 'overwrite', opts.mkdirParent);
+    if (wrote.canceled) return { channel: 'file', canceled: true, text: '用户已停止这一轮，写入可能被中断；' + interruptedNote(oldMissing ? 'create' : 'overwrite') };
+    if (wrote.failed) return { channel: 'file', failed: true, text: wrote.failed };
+    const now = await verifyFile(path);
+    log && log.info('ai', 'ai write_file checked', { sessionId, host: target.host, path, ms: Date.now() - started, bytes: buf.length, onHost: now ? now.bytes : null });
+    if (now && now.bytes !== buf.length) {
+      return { channel: 'file', failed: true, text: '写入结果与预期不符：本端 ' + buf.length + ' 字节，主机上是 ' + now.bytes + ' 字节，先别继续改这个文件。' };
     }
-    const code = Number.isInteger(out.code) ? out.code : null;
-    const ok = code === 0 && String(out.stdout || '').includes('OK');
-    log && log.info('ai', 'ai write_file finished', { sessionId, host: target.host, path, ms: Date.now() - started, exitCode: code, bytes, ok });
-    if (!ok) {
-      return { channel: 'file', exitCode: code, failed: true, text: '写入失败：' + (clip(out.stderr, 1000) || '主机上没有 base64 或目录不可写') };
+    return { channel: 'file', exitCode: 0, text: '已写入 ' + path + '（' + writtenNote(buf, now) + '，' + (oldMissing ? '新建文件' : '覆盖原文件') + '）。' };
+  }
+
+  async function editFile(rawPath, opts = {}) {
+    const path = typeof rawPath === 'string' ? rawPath.trim() : rawPath;
+    const blocked = await fileGuard(path);
+    if (blocked) return blocked;
+    const mode = opts.mode === 'replace' ? 'replace' : opts.mode === 'append' ? 'append' : '';
+    if (!mode) throw aiToolError('AI_ARGS', "mode must be 'append' or 'replace'");
+    const started = Date.now();
+
+    if (mode === 'append') {
+      const added = typeof opts.content === 'string' ? opts.content : '';
+      if (!added.length) throw aiToolError('AI_ARGS', 'content required for append');
+      const payload = encodeText(added);
+      if (payload.length > FILE_MAX_BYTES) {
+        return { channel: 'file', failed: true, text: '一次追加不能超过 ' + FILE_MAX_BYTES + ' 字节，请分成几次。' };
+      }
+      // 卡片给出落点，同时判断要不要补换行：追加不能把原末行和新内容粘成一行。
+      // 读不到（没权限）与空文件都只给非零码，所以用 markProbe 的两个标记区分。
+      let exists = false;
+      let nonEmpty = false;
+      let tail = '';
+      try {
+        const probe = await runExec(markProbe(path, 'tail -n 20 ' + sq(path) + ' 2>/dev/null'));
+        const marks = probeMarks(probe.stdout);
+        exists = marks.exists;
+        nonEmpty = marks.nonEmpty;
+        tail = marks.rest;
+      } catch (error) {
+        if (error.code === 'SSH_EXEC_CANCELED') return { channel: 'file', canceled: true, text: '用户已停止这一轮，文件没有写入。' };
+        log && log.warn('ai', 'ai edit_file read tail failed', { sessionId, host: target.host, path, message: error.message });
+      }
+      const sep = exists && tail.length && !tail.endsWith('\n') ? '\n' : '';
+      let oldCard = '';
+      if (exists) oldCard = tail ? '…（文件末尾）\n' + tail : (nonEmpty ? '（文件当前内容读不到）' : '');
+      if (settings.permission !== 'full') {
+        const decision = await requestApproval({
+          name: 'edit_file',
+          command: path,
+          subject: 'file',
+          old: clip(oldCard, FILE_CARD_CHARS),
+          new: clip(added, FILE_CARD_CHARS),
+          reason: (opts.rationale ? opts.rationale + ' · ' : '') + '追加到文件末尾',
+        });
+        if (decision !== 'allow') {
+          return decision === 'deny'
+            ? { channel: 'file', denied: 'deny', text: '用户拒绝写入这个文件。不要重试同一次写入，先说明无法完成的原因。' }
+            : { channel: 'file', denied: decision, text: '这一轮已经结束，文件没有写入。' };
+        }
+      }
+      if (opts.onStart) opts.onStart();
+      const buf = sep ? Buffer.concat([Buffer.from(sep, 'utf8'), payload]) : payload;
+      const wrote = await pushFile(path, buf, 'append', opts.mkdirParent);
+      if (wrote.canceled) return { channel: 'file', canceled: true, text: '用户已停止这一轮，追加可能被中断；' + interruptedNote('append') };
+      if (wrote.failed) return { channel: 'file', failed: true, text: wrote.failed };
+      const now = await verifyFile(path);
+      log && log.info('ai', 'ai edit_file append checked', { sessionId, host: target.host, path, ms: Date.now() - started, bytes: buf.length, onHost: now ? now.bytes : null });
+      return { channel: 'file', exitCode: 0, text: '已追加到 ' + path + '（新增 ' + buf.length + ' 字节' + (now ? '，主机上现在 ' + now.bytes + ' 字节 / ' + now.lines + ' 行' : '') + '）。' };
     }
-    return { channel: 'file', exitCode: 0, text: '已写入 ' + path + '（' + bytes + ' 字节，' + (oldMissing ? '新建文件' : '覆盖原文件') + '）。' };
+
+    const needle = typeof opts.oldString === 'string' ? opts.oldString : '';
+    if (!needle) throw aiToolError('AI_ARGS', 'old_string required for replace');
+    const replacement = typeof opts.newString === 'string' ? opts.newString : '';
+    const pull = await pullFile(path);
+    if (pull.canceled) return { channel: 'file', canceled: true, text: '用户已停止这一轮，文件没有写入。' };
+    if (pull.binary) return { channel: 'file', failed: true, text: '这个文件读起来是二进制（含 NUL 字节），编辑工具不碰，请改用 run_command。' };
+    if (pull.failed) return { channel: 'file', failed: true, text: pull.failed };
+    if (pull.missing) return { channel: 'file', failed: true, text: '文件不存在：追加请用 mode=append（必要时配 mkdir_parent），整份新建用 write_file。' };
+    const text = pull.text;
+    // 整文件重写会把解码后的字符再编码回去：主机 charset 与文件真实编码不一致时，解码已经吃掉了原始字节
+    // （非法序列变成 U+FFFD），再写回去就是一份坏文件。对不上就拒改，宁可让模型走 run_command。
+    if (Buffer.compare(encodeText(text), pull.buf) !== 0) {
+      return { channel: 'file', failed: true, text: '这个文件的字节和主机字符集 ' + charsetOf() + ' 对不上（多半不是这个编码），整份重写会损坏内容，请改用 run_command 处理。' };
+    }
+    const hits = text.split(needle).length - 1;
+    if (!hits) {
+      return { channel: 'file', failed: true, text: 'old_string 在当前文件里找不到：文件可能已被改动，或这段原文不是逐字取自 read_file。请重新 read_file 再给出要替换的那段。' };
+    }
+    if (hits > 1 && opts.replaceAll !== true) {
+      return { channel: 'file', failed: true, text: 'old_string 在文件里出现 ' + hits + ' 处，无法确定改哪一处：请扩大上下文直到唯一，或用 replace_all=true 全部替换。' };
+    }
+    const at = text.indexOf(needle);
+    const nextText = opts.replaceAll === true
+      ? text.split(needle).join(replacement)
+      : text.slice(0, at) + replacement + text.slice(at + needle.length);
+    if (nextText === text) return { channel: 'file', exitCode: 0, text: '新内容与当前文件一致，没有写入。' };
+    const buf = encodeText(nextText);
+    if (buf.length > FILE_MAX_BYTES) {
+      return { channel: 'file', failed: true, text: '改完有 ' + buf.length + ' 字节，超过 ' + FILE_MAX_BYTES + ' 字节的整文件上限，写不回去。' };
+    }
+    if (settings.permission !== 'full') {
+      const decision = await requestApproval({
+        name: 'edit_file',
+        command: path,
+        subject: 'file',
+        old: clip(excerpt(text, at, needle.length), FILE_CARD_CHARS),
+        new: clip(excerpt(nextText, at, replacement.length), FILE_CARD_CHARS),
+        reason: (opts.rationale ? opts.rationale + ' · ' : '') + '替换 ' + (opts.replaceAll === true ? hits : 1) + ' 处',
+      });
+      if (decision !== 'allow') {
+        return decision === 'deny'
+          ? { channel: 'file', denied: 'deny', text: '用户拒绝写入这个文件。不要重试同一次写入，先说明无法完成的原因。' }
+          : { channel: 'file', denied: decision, text: '这一轮已经结束，文件没有写入。' };
+      }
+    }
+    if (opts.onStart) opts.onStart();
+    const wrote = await pushFile(path, buf, 'overwrite', false);
+    if (wrote.canceled) return { channel: 'file', canceled: true, text: '用户已停止这一轮，写入可能被中断；' + interruptedNote('overwrite') };
+    if (wrote.failed) return { channel: 'file', failed: true, text: wrote.failed };
+    const now = await verifyFile(path);
+    log && log.info('ai', 'ai edit_file replace checked', { sessionId, host: target.host, path, ms: Date.now() - started, bytes: buf.length, onHost: now ? now.bytes : null });
+    if (now && now.bytes !== buf.length) {
+      return { channel: 'file', failed: true, text: '写入结果与预期不符：本端 ' + buf.length + ' 字节，主机上是 ' + now.bytes + ' 字节，先别继续改这个文件。' };
+    }
+    return { channel: 'file', exitCode: 0, text: '已修改 ' + path + '：替换 ' + (opts.replaceAll === true ? hits : 1) + ' 处，' + writtenNote(buf, now) + '。' };
   }
 
   async function invoke(call, onStart) {
@@ -1028,8 +1309,20 @@ function createTools(ctx) {
     }
     if (call.name === 'write_file') {
       if (typeof args.content !== 'string') throw aiToolError('AI_ARGS', 'content required');
-      return writeFile(args.path.trim(), {
+      return writeFile(args.path, {
         content: args.content,
+        rationale: typeof args.rationale === 'string' ? args.rationale.slice(0, 200) : '',
+        mkdirParent: args.mkdir_parent === true,
+        onStart,
+      });
+    }
+    if (call.name === 'edit_file') {
+      return editFile(args.path, {
+        mode: typeof args.mode === 'string' ? args.mode.trim().toLowerCase() : '',
+        content: args.content,
+        oldString: args.old_string,
+        newString: args.new_string,
+        replaceAll: args.replace_all === true,
         rationale: typeof args.rationale === 'string' ? args.rationale.slice(0, 200) : '',
         mkdirParent: args.mkdir_parent === true,
         onStart,

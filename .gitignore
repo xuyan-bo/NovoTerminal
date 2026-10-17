@@ -18,4 +18,6 @@ generated-*.png
 !/scripts/afterPack.cjs
 !/scripts/gen-os-icons.js
 !/scripts/test-ssh-*.cjs
+# local agent memory / project-local tool data, keep out of the repo
+.workbuddy/
 
