@@ -22,13 +22,31 @@ const HANDSHAKE_TIMEOUT_MS = 15000;
  * electerm/ironrdp-wasm example, trimmed to the proxy-only portion.
  */
 class RdpProxy {
-  constructor({ onState, onEnd }) {
+  constructor({ host, port, onState, onEnd }) {
     this.onState = onState || (() => {});
     this.onEnd = onEnd || (() => {});
+    // 本地端口是这条页签专属的：握手目的地必须与资产一致
+    this.expectedHost = String(host || '');
+    this.expectedPort = Number(port) || 0;
     this._server = null;
     this._httpServer = null;
     this._wsPort = 0;
     this._closed = false;
+    // RDCleanPath 握手期间的 tcp/tls 两个 socket：还没进 _setupRelay 前也要能被 stop() 取消
+    this._pending = new Set();
+  }
+
+  /** 握手途中建立的 socket 当场登记；已经关闭就直接销毁，不留悬空连接。 */
+  _track(sock) {
+    if (!sock) return;
+    if (this._closed) {
+      try { sock.destroy(); } catch (_) {}
+      return;
+    }
+    this._pending.add(sock);
+    const drop = () => this._pending.delete(sock);
+    sock.once('close', drop);
+    sock.once('error', drop);
   }
 
   start() {
@@ -71,10 +89,26 @@ class RdpProxy {
         const incoming = Buffer.isBuffer(data) ? data : Buffer.from(data);
         const request = parseRDCleanPathRequest(incoming);
         const { host, port } = parseDestination(request.destination);
+        if (this.expectedHost) {
+          const got = String(host || '').toLowerCase();
+          const portOk = !this.expectedPort || Number(port) === this.expectedPort;
+          // 不核对就等于把这条本地端口当任意主机的跳板，主进程按资产主机落的日志也会与真实目标不符
+          if (got !== this.expectedHost.toLowerCase() || !portOk) {
+            this.onState('error', {
+              message: 'RDCleanPath destination does not match this session',
+              code: 'RDP_DEST_MISMATCH',
+            });
+            try {
+              ws.close(1008, 'destination mismatch');
+            } catch (_) {}
+            return;
+          }
+        }
         const { x224Response, certChain, tlsSocket } = await performRDPHandshake(
           host,
           port,
-          request.x224ConnectionRequest
+          request.x224ConnectionRequest,
+          (sock) => this._track(sock)
         );
         if (this._closed || ws.readyState !== WebSocket.OPEN) {
           tlsSocket.destroy();
@@ -176,6 +210,12 @@ class RdpProxy {
     try {
       if (this._tlsSock) this._tlsSock.destroy();
     } catch (_) {}
+    for (const sock of this._pending) {
+      try {
+        sock.destroy();
+      } catch (_) {}
+    }
+    this._pending.clear();
     try {
       if (this._server) this._server.close();
     } catch (_) {}
@@ -336,22 +376,23 @@ function parseDestination(destination) {
   return { host: destination.slice(0, lastColon), port: Number.isNaN(port) ? 3389 : port };
 }
 
-function performRDPHandshake(host, port, x224Request) {
-  return tryRDPHandshake(host, port, x224Request)
+function performRDPHandshake(host, port, x224Request, register) {
+  return tryRDPHandshake(host, port, x224Request, false, register)
     .catch((err) => {
       // BoringSSL 严格校验证书 keyUsage：自签 RDP 证书缺少 digitalSignature 位时，
       // TLS 1.3 握手会报 KEY_USAGE_BIT_INCORRECT（mstsc 等用系统 TLS 不拦截）。
       // 回退到 TLS 1.2 重试以兼容这类 RDP 网关证书；不影响正常服务器（保持默认版本优先）。
       if (!/KEY_USAGE_BIT_INCORRECT/.test((err && err.message) || '')) throw err;
-      return tryRDPHandshake(host, port, x224Request, true);
+      return tryRDPHandshake(host, port, x224Request, true, register);
     });
 }
 
-function tryRDPHandshake(host, port, x224Request, tls12only) {
+function tryRDPHandshake(host, port, x224Request, tls12only, register) {
   return new Promise((resolve, reject) => {
     const tcpSocket = net.createConnection({ host, port }, () => {
       tcpSocket.write(x224Request);
     });
+    if (register) register(tcpSocket);
     tcpSocket.once('error', (err) => {
       reject(new Error(`TCP connection failed: ${err.message}`));
     });
@@ -379,6 +420,7 @@ function tryRDPHandshake(host, port, x224Request, tls12only) {
         tlsOpts.maxVersion = 'TLSv1.2';
       }
       const tlsSocket = tls.connect(tlsOpts, () => {
+        if (register) register(tlsSocket);
         clearTimeout(tlsTimer);
         const peerCert = tlsSocket.getPeerCertificate(true);
         resolve({

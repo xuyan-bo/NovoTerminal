@@ -56,7 +56,7 @@ class SshMonitorManager {
     if (requestedMs) runner.intervalMs = requestedMs;
     this.runners.set(sessionId, runner);
     runner.pending = this.runStart(sessionId, runner).catch((e) => {
-      this.runners.delete(sessionId);
+      if (this.runners.get(sessionId) === runner) this.runners.delete(sessionId);
       throw e;
     });
     return runner.pending;
@@ -79,7 +79,7 @@ class SshMonitorManager {
     if (!platform) {
       runner.supported = false;
       runner.pending = null;
-      this.runners.delete(sessionId);
+      if (this.runners.get(sessionId) === runner) this.runners.delete(sessionId);
       return { ok: true, supported: false, reason: 'probe-failed' };
     }
     const collector = collectors[platform];
@@ -94,7 +94,7 @@ class SshMonitorManager {
         snapshot = await this.openResident(sessionId, runner, target);
       } catch (e) {
         this.log && this.log.error('ssh', 'ssh monitor resident start failed', { sessionId, host, message: e.message, code: e.code });
-        this.stop(sessionId);
+        this.stopOwn(sessionId, runner);
         throw e;
       }
     } else {
@@ -117,7 +117,7 @@ class SshMonitorManager {
         snapshot = await this.pollOnce(sessionId, runner);
       } catch (e) {
         this.log && this.log.error('ssh', 'ssh monitor first poll failed', { sessionId, host, message: e.message, code: e.code });
-        this.stop(sessionId);
+        this.stopOwn(sessionId, runner);
         throw e;
       }
     }
@@ -130,7 +130,7 @@ class SshMonitorManager {
     // 首帧没回来说明采集输出不可用（注册定时器会让渲染端永久停在加载遮罩上，种子帧残缺时速率也一直空白）
     if (!snapshot) {
       this.log && this.log.error('ssh', 'ssh monitor start failed: no usable first frame', { sessionId, host });
-      this.stop(sessionId);
+      this.stopOwn(sessionId, runner);
       throw monitorError('SSH_MONITOR_PARSE', 'monitor first frame unparseable');
     }
     this.resetTimer(sessionId, runner);
@@ -259,6 +259,12 @@ class SshMonitorManager {
     } else {
       this.log && this.log.warn('ssh', 'ssh monitor poll failed', meta);
     }
+  }
+
+  /** runStart 内部的失败收尾：探测期间用户重开面板会建出新 runner，不能把它一并停掉。 */
+  stopOwn(sessionId, runner) {
+    if (this.runners.get(sessionId) !== runner) return;
+    this.stop(sessionId);
   }
 
   stop(sessionId) {

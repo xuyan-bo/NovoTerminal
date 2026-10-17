@@ -519,6 +519,14 @@ function send(channel, payload) {
   });
 }
 
+/** SFTP 面板是唯一消费传输事件的后端窗口；面板不在（已关）就丢弃，不留给别的窗口当噪声。 */
+function sendToPanel(channel, payload) {
+  if (!sftpPanel || sftpPanel.isDestroyed() || sftpPanel.webContents.isDestroyed()) return;
+  try {
+    sftpPanel.webContents.send(channel, payload);
+  } catch (_) {}
+}
+
 /** Targeted send used by SSH events: only the window currently hosting the session needs them. */
 function sendToOwner(channel, payload, ownerId) {
   const owner = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && !w.webContents.isDestroyed() && w.webContents.id === ownerId);
@@ -585,7 +593,11 @@ const overBar = (w, point) => {
 function pollDockTarget() {
   if (!dockRaise) return;
   const source = dockRaise.source;
-  if (source.isDestroyed()) { restoreDockTargets(); return; }
+  if (source.isDestroyed() || source.webContents.isDestroyed()) {
+    restoreDockTargets();
+    clearDockGhosts();
+    return;
+  }
   const point = screen.getCursorScreenPoint();
   const hit = overBar(source, point)
     ? source
@@ -932,12 +944,21 @@ function registerIpc() {
       return false;
     }
   });
-  handle('app:open-external', (url) => {
-    if (url && typeof url === 'string') {
-      shell.openExternal(url);
+  handle('app:open-external', async (sender, url) => {
+    // 交给系统打开的只允许网页与邮件协议：file:/ UNC 会把本机目录和网络共享摊给外部程序
+    const target = typeof url === 'string' ? url.trim() : '';
+    if (!/^https?:\/\//i.test(target) && !/^mailto:/i.test(target)) {
+      logger.warn('shell', 'external open rejected', { scheme: target.slice(0, 40) });
+      return false;
     }
-    return true;
-  });
+    try {
+      await shell.openExternal(target);
+      return true;
+    } catch (e) {
+      logger.warn('shell', 'external open failed', { message: e.message });
+      return false;
+    }
+  }, true);
   handle('update:check', async () => {
     const current = app.getVersion();
     const cur = parseVersion(current);
@@ -977,15 +998,15 @@ function registerIpc() {
       reason: hasUpdate ? '' : best ? 'up_to_date' : 'no_release',
     };
   });
-  handle('store:create-group', (p) => unwrap(store.createGroup(p)));
-  handle('store:update-group', (gid, p) => unwrap(store.updateGroup(gid, p)));
-  handle('store:reorder-groups', (p) => unwrap(store.reorderGroups(p)));
-  handle('store:reorder-asset', (p) => unwrap(store.reorderAsset(p)));
-  handle('store:delete-group', (gid) => unwrap(store.deleteGroup(gid)));
-  handle('store:create-asset', (gid, p) => unwrap(store.createAsset(gid, p)));
-  handle('store:update-asset', (aid, p) => unwrap(store.updateAsset(aid, p)));
-  handle('store:delete-asset', (aid) => unwrap(store.deleteAsset(aid)));
-  handle('store:remove-recent', (p) => unwrap(store.removeRecent(p && p.id, p && p.method)));
+  handle('store:create-group', (sender, p) => unwrap(store.createGroup(p)), true);
+  handle('store:update-group', (sender, gid, p) => unwrap(store.updateGroup(gid, p)), true);
+  handle('store:reorder-groups', (sender, p) => unwrap(store.reorderGroups(p)), true);
+  handle('store:reorder-asset', (sender, p) => unwrap(store.reorderAsset(p)), true);
+  handle('store:delete-group', (sender, gid) => unwrap(store.deleteGroup(gid)), true);
+  handle('store:create-asset', (sender, gid, p) => unwrap(store.createAsset(gid, p)), true);
+  handle('store:update-asset', (sender, aid, p) => unwrap(store.updateAsset(aid, p)), true);
+  handle('store:delete-asset', (sender, aid) => unwrap(store.deleteAsset(aid)), true);
+  handle('store:remove-recent', (sender, p) => unwrap(store.removeRecent(p && p.id, p && p.method)), true);
   /**
    * 凭证入库前的两道边界：长度由 store 报错（不静默截断），私钥必须当场就能按给定口令解析。
    * 后者是为了别让「加密私钥没填口令」混到连接时才报「无法解析私钥」——那时用户已看不出
@@ -1006,10 +1027,10 @@ function registerIpc() {
     return src;
   }
 
-  handle('credential:create', (p) => unwrap(store.createCredential(prepareCredentialPayload(p))));
-  handle('credential:update', (cid, p) => unwrap(store.updateCredential(cid, prepareCredentialPayload(p))));
-  handle('credential:delete', (cid) => unwrap(store.deleteCredential(cid)));
-  handle('credential:reorder', (p) => unwrap(store.reorderCredential(p)));
+  handle('credential:create', (sender, p) => unwrap(store.createCredential(prepareCredentialPayload(p))), true);
+  handle('credential:update', (sender, cid, p) => unwrap(store.updateCredential(cid, prepareCredentialPayload(p))), true);
+  handle('credential:delete', (sender, cid) => unwrap(store.deleteCredential(cid)), true);
+  handle('credential:reorder', (sender, p) => unwrap(store.reorderCredential(p)), true);
   /** 凭证的秘密字段只从这条通道离开主进程：限宿主窗口，且必须先过系统身份验证。 */
   handle('credential:reveal', async (sender, cid) => {
     if (!isMainWindow(sender)) {
@@ -1078,7 +1099,16 @@ function registerIpc() {
       );
     }
     if ('logTotalMb' in clean) clean.logTotalMb = clampedLogTotalMb(clean.logTotalMb);
-    if ('fileEditor' in clean) clean.fileEditor = String(clean.fileEditor == null ? '' : clean.fileEditor).trim().slice(0, 1000);
+    if ('fileEditor' in clean) {
+      const editor = String(clean.fileEditor == null ? '' : clean.fileEditor).trim().slice(0, 1000);
+      // 文件编辑器最终交给 spawn，变更过的那条路径要走与选择器同一道可执行文件闸门；
+      // 原样回存的旧值不重判，否则程序被卸载或移到别处后连其它设置都保存不了。
+      if (editor && editor !== String(store.getSettings().fileEditor || '') && !isProgramPath(editor)) {
+        logger.warn('settings', 'file editor update rejected', { path: editor });
+        throw Object.assign(new Error('file editor is not an executable program'), { code: 'INVALID_EDITOR' });
+      }
+      clean.fileEditor = editor;
+    }
     if ('zoom' in clean) clean.zoom = clampedZoom(clean.zoom);
     if ('theme' in clean && !SETTING_THEMES.includes(clean.theme)) clean.theme = 'system';
     if ('lang' in clean) clean.lang = clean.lang === 'en' ? 'en' : 'zh';
@@ -1127,7 +1157,9 @@ function registerIpc() {
   }));
 
   // Renderer resolved the "close window" custom prompt
-  handle('app:resolve-close', (payload) => {
+  handle('app:resolve-close', async (sender, payload) => {
+    // 这条通道能直接退出整个应用，只认主窗口：关闭确认对话框只可能来自主窗口
+    if (!isMainWindow(sender)) throw untrustedSenderError();
     const action = payload && payload.action === 'quit' ? 'quit' : 'minimize';
     if (payload && payload.remember) {
       try { store.updateSettings({ closeAction: action }); } catch (_) {}
@@ -1138,7 +1170,7 @@ function registerIpc() {
       doMinimizeToTray();
     }
     return true;
-  });
+  }, true);
   /** 备份操作前的本机身份验证；导出与导入始终重新认证，不复用 30 秒缓存（缓存只留给密码查看）。 */
   async function requireSystemAuth(reason) {
     const lang = store.getSettings().lang;
@@ -1195,7 +1227,9 @@ function registerIpc() {
     return { ok: true, path: r.filePath, bytes: buffer.length };
   });
 
-  handle('backup:import', async (payload) => {
+  handle('backup:import', async (sender, payload) => {
+    // 导入会整库覆盖本机数据，只认主窗口：备份对话框只可能出现在那里
+    if (!isMainWindow(sender)) throw untrustedSenderError();
     const en = store.getSettings().lang === 'en';
     const password = checkBackupPassword(payload && payload.password);
     // 先解密校验密码，再要求身份验证：密码错时不必先过一道生物识别
@@ -1256,7 +1290,7 @@ function registerIpc() {
 
   // ---- Logs ----
   handle('log:list', (filter) => logStore.list(filter || {}));
-  handle('log:clear', () => logStore.clear());
+  handle('log:clear', (sender) => logStore.clear(), true);
   handle('log:write', (sender, p) => {
     const level =
       p && p.level && ['error', 'warn', 'info'].includes(p.level) ? p.level : 'info';
@@ -1419,9 +1453,14 @@ function registerIpc() {
     monitorUi.set(tabId, next);
     return { ok: true };
   }, true);
-  /** 主窗口关掉页签时清掉这条界面偏好，否则会被关掉的 tabId 一直占着这张表。 */
-  handle('monitor:ui-drop', (sender, tabId) => {
-    if (typeof tabId === 'string') monitorUi.delete(tabId);
+  /** 主窗口关掉自己承载的页签：搬运描述符与监控偏好都按 tabId 记账，一起清掉才不会长期累积。 */
+  handle('session:tab-forget', (sender, req) => {
+    if (!isMainWindow(sender)) return { ok: false };
+    const id = String((req && req.tabId) || '');
+    // 仍挂在某个独立窗口上的页签由那条窗口记账，主窗口这份副本还要用于收回落位
+    if (!id || groupOf(id)) return { ok: true };
+    detachedTabs.delete(id);
+    monitorUi.delete(id);
     return { ok: true };
   }, true);
 
@@ -1548,9 +1587,11 @@ function registerIpc() {
 
   // ---- VNC terminal (noVNC via WebSocket proxy) ----
   handle('vnc:connect', async (sender, req) => {
+    if (!req || req.methodId !== 'vnc') throw Object.assign(new Error('Invalid VNC method'), { code: 'VNC_METHOD' });
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
-    const method = hit.asset.methods && hit.asset.methods[req.methodId];
+    const methods = hit.asset.methods || {};
+    const method = Object.prototype.hasOwnProperty.call(methods, 'vnc') ? methods.vnc : null;
     if (!method) throw new Error('method not found');
     const host = String(hit.asset.host || '').trim();
     if (!host) throw Object.assign(new Error('asset host is required'), { code: 'HOST_MISSING' });
@@ -1570,12 +1611,16 @@ function registerIpc() {
     return result;
   }, true);
   handle('vnc:disconnect', (sender, sid) => vncSessions.disconnect(sid, sender.id), true);
+  // noVNC 的 RFB connect 事件才算认证通过，主进程据此写「已连接」；代理的 ready 只代表通道建立
+  handle('vnc:handshake', (sender, sid) => vncSessions.noteHandshake(sid, sender.id), true);
 
   // ---- RDP embedded sessions (IronRDP-WASM via RDCleanPath proxy) ----
   handle('rdp:connect', async (sender, req) => {
+    if (!req || req.methodId !== 'rdp') throw Object.assign(new Error('Invalid RDP method'), { code: 'RDP_METHOD' });
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
-    const method = hit.asset.methods && hit.asset.methods[req.methodId];
+    const methods = hit.asset.methods || {};
+    const method = Object.prototype.hasOwnProperty.call(methods, 'rdp') ? methods.rdp : null;
     if (!method) throw new Error('method not found');
     const host = String(hit.asset.host || '').trim();
     if (!host) throw Object.assign(new Error('asset host is required'), { code: 'HOST_MISSING' });
@@ -1738,7 +1783,9 @@ function registerIpc() {
      * 渲染进程已死、尚未就绪或应用正在退出时不能弹这个确认，否则窗口永远关不掉。
      */
     detached.on('close', (e) => {
-      if (!group.ready || group.reason || group.confirming || group.dead || appQuitting) return;
+      if (!group.ready || group.reason || group.dead || appQuitting) return;
+      // 确认框还挂着时第二次点 X 也必须拦住，否则窗口带着全部会话被静默关掉；
+      // 重复询问是为了上一次答复没送达时，用户还能靠再点一次 X 走通（close-answer 对重复答复是幂等的）。
       e.preventDefault();
       group.confirming = true;
       detached.webContents.send('session:confirm-close', { tabIds: group.tabIds.slice() });
@@ -2116,7 +2163,9 @@ function registerIpc() {
      * 页面还没加载完、渲染进程已死或应用正在退出时必须放行，否则窗口会关不掉。
      */
     panel.on('close', (e) => {
-      if (trayDestroying || appQuitting || sftpCloseGuard.bypass || sftpCloseGuard.asking || !sftpPanelReady) return;
+      if (trayDestroying || appQuitting || sftpCloseGuard.bypass || !sftpPanelReady) return;
+      // 询问进行中第二次点 X 同样拦下：面板里的会话与在途传输不能被一次误点带走。
+      // 重发询问让「答复没送达」还能靠再点一次 X 恢复，sftp:close-answer 对重复答复是幂等的。
       e.preventDefault();
       sftpCloseGuard.asking = true;
       panel.webContents.send('sftp:confirm-close');
@@ -2210,8 +2259,12 @@ function registerIpc() {
   const sftpLocalName = (name) => {
     const s = String(name == null ? '' : name).trim();
     if (!s || s === '.' || s === '..') throw sftpBadPath();
-    // 只有 Windows 需要挡分隔符；POSIX 文件名里反斜杠是合法字符
-    if (process.platform === 'win32' && /[\\/]/.test(s)) throw sftpBadPath();
+    /**
+     * '/' 在任何平台都是分隔符，一律拒绝——下载扫描会把服务器可控的名字传进来，
+     * 放行就等于让对端越过目标目录写文件。反斜杠只有 Windows 是分隔符，POSIX 下是合法字符。
+     */
+    if (s.indexOf('/') >= 0) throw sftpBadPath();
+    if (process.platform === 'win32' && s.indexOf('\\') >= 0) throw sftpBadPath();
     return s;
   };
 
@@ -2371,7 +2424,8 @@ app.whenReady().then(() => {
   });
   vncSessions = new VncSessionManager({ send, log: logger });
   rdpSessions = new RdpSessionManager({ send, log: logger });
-  sftpManager = new SftpManager({ send, store, log: logger });
+  // 传输与连接状态事件只有 SFTP 面板消费，按面板窗口定向发送，不再广播给每个宿主窗口
+  sftpManager = new SftpManager({ send: sendToPanel, store, log: logger });
   editManager = new EditManager({ store, log: logger, sftp: sftpManager });
   registerIpc();
   app.on('browser-window-created', () => applyZoom());

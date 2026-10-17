@@ -131,7 +131,7 @@ button {
 }
 
 .el-dialog__body::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 
 .el-dialog__body::-webkit-scrollbar-thumb {
@@ -263,6 +263,23 @@ button {
 .el-dialog__title,
 .el-dialog__body {
   color: var(--text);
+}
+
+/* 弹框标题：图标取「打开它的入口按钮」那一个，上色与 AI/监控面板头部同为 --accent。
+   slot="title" 会整颗替换掉 .el-dialog__title，所以字号行高要和 Element 默认的 18px/24px 对齐。 */
+.dlg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 28px;
+  font-size: 18px;
+  line-height: 24px;
+  color: var(--text);
+}
+
+.dlg-icon {
+  color: var(--accent);
+  font-size: 16px;
 }
 
 .el-dialog__header {

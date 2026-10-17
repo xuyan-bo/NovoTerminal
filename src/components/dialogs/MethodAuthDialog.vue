@@ -1,12 +1,16 @@
 <template>
   <el-dialog
-    :title="$t('asset.authSettings') + ' · ' + dlg.methodName"
     :visible.sync="visible"
     width="520px"
     top="14vh"
     append-to-body
     :close-on-click-modal="false"
   >
+    <div slot="title" class="dlg-head">
+      <i class="dlg-icon el-icon-key"></i>
+      <span>{{ $t('asset.authSettings') + ' · ' + dlg.methodName }}</span>
+    </div>
+
     <el-form
       ref="form"
       :model="form"

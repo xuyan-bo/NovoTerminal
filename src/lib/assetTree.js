@@ -114,17 +114,21 @@ export function buildAssetTree(groups) {
   return build('');
 }
 
-/** 搜索时保留命中节点及其祖先链；文件夹自身命中则整棵子树留下 */
-export function filterTree(nodes, keyword) {
+/**
+ * 搜索时保留命中节点及其祖先链；文件夹自身命中则整棵子树留下。
+ * 登录名属于凭证，资产对象上没有 user 字段，由调用方给 userOf 回查（保持本模块不碰状态）。
+ */
+export function filterTree(nodes, keyword, userOf) {
   const kw = (keyword || '').trim().toLowerCase();
   if (!kw) return nodes;
   const walk = (list) => {
     const out = [];
     list.forEach((n) => {
       if (n.kind === 'asset') {
+        const user = typeof userOf === 'function' ? userOf(n.raw) : (n.raw && n.raw.user) || '';
         const hit =
           (n.name || '').toLowerCase().includes(kw) ||
-          ((n.raw.host || '') + ' ' + (n.raw.user || '')).toLowerCase().includes(kw);
+          ((n.raw.host || '') + ' ' + (user || '')).toLowerCase().includes(kw);
         if (hit) out.push({ ...n, children: [] });
         return;
       }

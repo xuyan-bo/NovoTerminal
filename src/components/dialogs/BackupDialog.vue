@@ -1,12 +1,16 @@
 <template>
   <el-dialog
-    :title="mode === 'export' ? $t('backup.exportTitle') : $t('backup.importTitle')"
     :visible.sync="visible"
     width="480px"
     top="12vh"
     append-to-body
     :close-on-click-modal="false"
   >
+    <div slot="title" class="dlg-head">
+      <i class="dlg-icon" :class="mode === 'export' ? 'el-icon-download' : 'el-icon-upload2'"></i>
+      <span>{{ mode === 'export' ? $t('backup.exportTitle') : $t('backup.importTitle') }}</span>
+    </div>
+
     <div v-if="mode === 'export'" class="bk-body">
       <div class="bk-label">{{ $t('backup.contentLabel') }}</div>
       <el-checkbox-group v-model="include" class="bk-cats">

@@ -53,11 +53,11 @@ const UNSAFE = [
   /\b(eval|exec|source)\b/,
 ];
 
-/** 任意参数都只读的命令：既不落盘，也不会常驻。 */
+/** 任意参数都只读的命令：既不落盘，也不会常驻。带输出文件选项的工具（tree/uniq/jq…）都放 SCOPED。 */
 const BARE = new Set([
-  'ls', 'll', 'cat', 'tac', 'zcat', 'bzcat', 'xzcat', 'wc', 'nl', 'head', 'cut', 'tr', 'uniq',
+  'ls', 'll', 'cat', 'tac', 'zcat', 'bzcat', 'xzcat', 'wc', 'nl', 'head', 'cut', 'tr',
   'column', 'df', 'du', 'free', 'uptime', 'uname', 'id', 'whoami', 'who', 'w', 'ps', 'pgrep',
-  'pidof', 'pwdx', 'pwd', 'ss', 'netstat', 'lsof', 'grep', 'egrep', 'fgrep', 'zgrep', 'tree', 'stat',
+  'pidof', 'pwdx', 'pwd', 'ss', 'netstat', 'lsof', 'grep', 'egrep', 'fgrep', 'zgrep', 'stat',
   'file', 'realpath', 'basename', 'dirname', 'readlink', 'which', 'whereis', 'type', 'nproc',
   'lscpu', 'lsmem', 'lsblk', 'lspci', 'lsusb', 'findmnt', 'blkid', 'getent', 'last', 'lastlog', 'lastb',
   'groups', 'locale', 'strings', 'od', 'hexdump', 'dig', 'host', 'nslookup', 'printenv', 'echo',
@@ -113,7 +113,15 @@ const SCOPED = {
   tail: { check: (a) => !a.some((t) => t === '--follow' || (/^-[0-9a-zA-Z]+$/.test(t) && /[fF]/.test(t))) },
   history: { check: noFlags('-c', '-w', '-d') },
   sort: { check: noFlags('-o', '--output', '--compress-program', '--random-source') },
-  awk: { check: (a) => !a.some((t) => /system\s*\(/.test(t) || /getline/.test(t) || t.startsWith('-f') || t.startsWith('--file') || t.startsWith('-i') || />/.test(t)) },
+  // tree 的 -o 会把目录树写成文件
+  tree: { check: noFlags('-o', '--output') },
+  // `uniq a b` 的第二位置参数是输出文件，只有至多一个输入文件才纯读
+  uniq: { check: (a) => positional(a).length <= 1 },
+  // awk 的脚本在引号内，断句器不会把 `print x | "cmd"` 的管道拆出来，`|` 与 `>` 都要在这里挡；
+  // getline 与 -i/--in-place 会改文件，system() 直接起进程。
+  awk: {
+    check: (a) => !a.some((t) => /system\s*\(/.test(t) || /getline/.test(t) || t.startsWith('-f') || t.startsWith('--file') || t.startsWith('-i') || /[|<>]/.test(t)),
+  },
   sed: {
     check: (a) => {
       if (a.some((t) => t.startsWith('-i') || t.startsWith('--in-place') || t.startsWith('-f') || t.startsWith('--file'))) return false;
@@ -198,8 +206,8 @@ const SCOPED = {
   },
   kubectl: {
     check: (a) => subs('get', 'describe', 'logs', 'explain', 'version', 'api-resources', 'api-versions')(a)
-      // --watch 会一直挂着等事件，与 tail -f 同类
-      && noFlags('-f', '--follow', '-w', '--watch', '--watch-only')(a),
+      // --watch 会一直挂着等事件，与 tail -f 同类；--raw 直接打 API Server 任意路径，能取到 Secret 正文
+      && noFlags('-f', '--follow', '-w', '--watch', '--watch-only', '--raw')(a),
   },
   rpm: {
     check: (a) => a.some((t) => /^-q/.test(t) || t === '--query')
@@ -929,6 +937,10 @@ function createTools(ctx) {
     // exec 通道不继承终端当前目录，相对路径会落在 SSH 用户主目录下，读到的根本不是同一个文件
     if (path[0] !== '/') {
       return { channel: 'file', failed: true, text: '文件工具只接受绝对路径（以 / 开头），先确认目标文件的完整路径。' };
+    }
+    // /dev 下的设备与 FIFO 要么无限产出（zero、urandom）要么永久挂着（kmsg、tty），只能按普通文件排除
+    if (path === '/dev' || path.startsWith('/dev/')) {
+      return { channel: 'file', failed: true, text: '文件工具不支持 /dev 下的设备与特殊文件，请改用 run_command。' };
     }
     await resolveShell();
     if (shell !== 'posix' || family === 'unknown') {

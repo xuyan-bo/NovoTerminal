@@ -122,6 +122,7 @@
       append-to-body
     >
       <div slot="title" class="hist-head">
+        <i class="dlg-icon el-icon-time"></i>
         <span class="hist-title">{{ $t('ai.historyTitle') }}</span>
         <span class="hist-sub mono">{{ historyAssetText }}</span>
       </div>
@@ -866,6 +867,14 @@ export default {
         this.scrollThink();
         return;
       }
+      if (ev.type === 'call') {
+        const turn = this.turnOf(ev);
+        this.endThink(turn);
+        this.closeSay(turn);
+        this.busy(turn, this.liveCallLabel(ev.name));
+        this.stick();
+        return;
+      }
       if (ev.type === 'tool') {
         const turn = this.turnOf(ev);
         this.endThink(turn);
@@ -1045,6 +1054,13 @@ export default {
     toolName(name) {
       const key = TOOL_LABELS[name];
       return key ? this.$t(key) : name;
+    },
+
+    /** 参数还在流式生成时说不出命令内容，占位只能报到工具这一级。 */
+    liveCallLabel(name) {
+      if (name === 'run_command') return this.$t('ai.liveCallCmd');
+      if (TOOL_LABELS[name]) return this.$t('ai.liveCallTool', { tool: this.toolName(name) });
+      return this.$t('ai.liveCallNext');
     },
 
     actClass(node) {

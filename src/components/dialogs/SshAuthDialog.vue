@@ -1,12 +1,16 @@
 <template>
   <el-dialog
     :visible="!!active"
-    :title="'SSH · ' + $t('ssh.authTitle')"
     width="480px"
     append-to-body
     :close-on-click-modal="false"
     :before-close="cancel"
   >
+    <div slot="title" class="dlg-head">
+      <i class="dlg-icon el-icon-key"></i>
+      <span>{{ 'SSH · ' + $t('ssh.authTitle') }}</span>
+    </div>
+
     <template v-if="active">
       <p>{{ active.host }}:{{ active.port }}</p>
       <p v-if="active.name">{{ active.name }}</p>

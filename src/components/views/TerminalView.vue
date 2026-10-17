@@ -1024,6 +1024,8 @@ export default {
         this.statusDetail = '';
         refresh().catch(() => {});
         this.scheduleRemoteResize();
+        // 视图实例被「刷新」重建时同样要复原面板：偏好按 tabId 存在主进程，不该因为换实例而丢失
+        this.applyMonitorUi();
         if (this.active && this.term) this.term.focus();
       } catch (e) {
         if (!isCurrent()) return;
@@ -1357,9 +1359,9 @@ export default {
   gap: 8px;
   padding: 6px 14px;
   border-radius: 999px;
-  background: rgba(20, 28, 38, 0.92);
-  border: 1px solid var(--border, #2a3544);
-  color: var(--text-2, #9aa7b8);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-2);
   font-size: 12px;
   pointer-events: none;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
@@ -1367,9 +1369,9 @@ export default {
 .fs-hint kbd {
   padding: 1px 7px;
   border-radius: 4px;
-  background: #2a3544;
-  border: 1px solid #3a4657;
-  color: #d7dde8;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
   font-family: Consolas, monospace;
   font-size: 11px;
 }

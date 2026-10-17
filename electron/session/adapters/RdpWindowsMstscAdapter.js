@@ -104,12 +104,15 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
           windowsHide: false,
         });
       } catch (e) {
+        // 还没登记进 sessions，按局部变量回收，否则口令条目一直留在凭据管理器里
+        if (credTarget) this.removeCredential(credTarget);
         e.code = e.code || 'SPAWN_FAILED';
         return reject(e);
       }
 
       child.once('error', (e) => {
-        this.cleanupSession(sessionId);
+        // 出错时多半还没走到 'spawn'，sessions 里没有这条记录，按局部变量补回收
+        if (!this.cleanupSession(sessionId) && credTarget) this.removeCredential(credTarget);
         this.onEvent({ type: 'error', sessionId, code: 'SPAWN_FAILED', message: e.message });
         reject(Object.assign(e, { code: 'SPAWN_FAILED' }));
       });
@@ -129,21 +132,24 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
     });
   }
 
+  /** 只回收我们自己写的那条 generic 凭证；用户在 mstsc 里勾「记住我的凭证」留下的条目不动。 */
+  removeCredential(target) {
+    if (!target) return Promise.resolve();
+    return new Promise((resolve) => {
+      execFile('cmdkey.exe', ['/delete:' + target], (error) => {
+        if (error && this.log) {
+          this.log.warn('rdp', 'cmdkey credential cleanup failed', { target, message: error.message });
+        }
+        resolve();
+      });
+    });
+  }
+
   cleanupSession(sessionId) {
     const entry = this.sessions.get(sessionId);
     if (!entry) return false;
     this.sessions.delete(sessionId);
-    if (entry.credTarget) {
-      // 只回收我们自己写的那条 generic 凭证，用户在 mstsc 里勾「记住我的凭证」留下的条目不动
-      execFile('cmdkey.exe', ['/delete:' + entry.credTarget], (error) => {
-        if (error && this.log) {
-          this.log.warn('rdp', 'cmdkey credential cleanup failed', {
-            target: entry.credTarget,
-            message: error.message,
-          });
-        }
-      });
-    }
+    if (entry.credTarget) this.removeCredential(entry.credTarget);
     return true;
   }
 
@@ -157,9 +163,10 @@ class RdpWindowsMstscAdapter extends BaseAdapter {
         });
       }
     } catch (_) {}
-    if (this.cleanupSession(sessionId)) {
-      this.onEvent({ type: 'ended', sessionId, code: 0, client: this.id });
-    }
+    // 退出流程会 await 到这里：fire-and-forget 的 cmdkey /delete 常常来不及执行，口令会留在凭据管理器
+    this.sessions.delete(sessionId);
+    await this.removeCredential(entry.credTarget);
+    this.onEvent({ type: 'ended', sessionId, code: 0, client: this.id });
     return { ok: true };
   }
 

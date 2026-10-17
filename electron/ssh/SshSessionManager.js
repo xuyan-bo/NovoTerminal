@@ -203,9 +203,18 @@ class SshSessionManager {
 
   resize(sessionId, cols, rows) {
     const rec = this.sessions.get(sessionId);
-    if (!rec || !rec.stream) return false;
+    if (!rec) return false;
     if (![cols, rows].every((n) => Number.isInteger(n) && n > 0 && n <= 1000)) return false;
     if (cols === rec.cols && rows === rec.rows) return true;
+    /**
+     * shell 还没建立（连接中就被拆到别的窗口，新宿主按自己的尺寸来 attach）：
+     * 把尺寸记在会话上，client.shell() 建通道时直接按它开档，不然后果是远端 PTY 永久停在旧尺寸。
+     */
+    if (!rec.stream) {
+      rec.cols = cols;
+      rec.rows = rows;
+      return true;
+    }
     rec.stream.setWindow(rows, cols, 0, 0);
     rec.cols = cols;
     rec.rows = rows;

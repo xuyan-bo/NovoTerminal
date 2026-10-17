@@ -1,12 +1,16 @@
 <template>
   <el-dialog
-    :title="title"
     :visible.sync="visible"
     width="620px"
     top="8vh"
     :close-on-click-modal="false"
     append-to-body
   >
+    <div slot="title" class="dlg-head">
+      <svg-icon name="gear" :size="16" class="dlg-icon" />
+      <span>{{ title }}</span>
+    </div>
+
     <el-form
       ref="advForm"
       :model="form"
@@ -194,7 +198,7 @@ export default {
       const rules = {};
       if (this.schemaKey === 'rdp' && this.form.engine === 'external') {
         rules.client = [{ ...requiredRule(t, 'adv.rdp.client.required', 'change'), required: true }];
-        rules.clientPath = [{ ...requiredRule(t, 'adv.rdp.clientPath.ph', ['blur', 'change']), required: true }];
+        rules.clientPath = [{ ...requiredRule(t, 'msg.fieldRequired', ['blur', 'change']), required: true }];
         return rules;
       }
       // SSH/SFTP 的必填与枚举合法性走 el-form 规则，校验结果落在字段下方而不是弹一条 $message

@@ -40,6 +40,8 @@ const OUTPUT_REJECT = /max[_ ]?tokens?|maximum context|context length|too long|e
  * 只是白跑五趟。这种报错里没提输出/max_tokens 时直接把网关原文抛给用户。
  */
 const INPUT_OVERFLOW = /\b(input|prompt)[\s\S]{0,40}(length|tokens?|too long|too large|exceed)/i;
+/** 网关最常见的那句 "maximum context length is 8192 tokens, you requested 9000 tokens" 既没说 input 也没说 prompt。 */
+const CONTEXT_TOTAL_OVERFLOW = /maximum context length[\s\S]{0,80}you requested|context (?:length|window)[\s\S]{0,40}exceed/i;
 
 function aiError(code, message) {
   return Object.assign(new Error(message), { code });
@@ -212,6 +214,8 @@ class AiManager {
 
   removeSession(req) {
     const conv = this._meta(req && req.sessionId);
+    // 与归档同一条护栏：回合还在跑时删当前记录，晚到的 _archive 会把整份内容原样写回来，等于没删掉
+    if (conv.running) throw aiError('AI_BUSY', '上一轮还没结束');
     this.sessions.remove(conv.meta.assetId, conv.meta.protocol, req.id);
     const cleared = req.id === conv.recordId;
     if (cleared) {
@@ -511,7 +515,7 @@ class AiManager {
     const message = String((error && error.message) || '');
     if ((status !== 400 && status !== 422) || !OUTPUT_REJECT.test(message)) return 0;
     // 输入本身就超窗口时砍输出救不回来，别把同一句话的 400 再问五遍
-    if (INPUT_OVERFLOW.test(message) && !/max[_ ]?tokens|output/i.test(message)) return 0;
+    if ((INPUT_OVERFLOW.test(message) || CONTEXT_TOTAL_OVERFLOW.test(message)) && !/max[_ ]?tokens|output/i.test(message)) return 0;
     if (cap <= OUTPUT_FLOOR) return 0;
     const next = Math.max(OUTPUT_FLOOR, Math.floor(cap / 2));
     conv.outputCaps[model.model] = next;
@@ -726,6 +730,7 @@ class AiManager {
               this.emitTurn(conv, { type: 'think', state: 'delta', text: reasonBuf });
             }
           },
+          onCall: (name) => this.emitTurn(conv, { type: 'call', name }),
         });
         // 猜高的输出上限只会换来一次 400：被拒就降档重问，学到的高度按模型钉在这一场会话上
         let cap = scope.maxTokens;

@@ -181,10 +181,8 @@ export default {
 
         this.offState = api.onVncState((ev) => {
           if (!ev || ev.sessionId !== this.liveSessionId) return;
-          if (ev.type === 'ready') {
-            this.status = 'ready';
-            this.statusDetail = '';
-          } else if (ev.type === 'ended') {
+          // 代理的 ready 只代表本机通道通了；服务器不回 RFB 版本时不能把页签点成已连接
+          if (ev.type === 'ended') {
             // 代理在报错后紧接着也会结束，不能让随后的 ended 把失败原因抹成「已断开」。
             if (this.status === 'error') return;
             this.status = 'ended';
@@ -215,11 +213,12 @@ export default {
         this._vncScale = r.scale;
 
         // Apply quality/compression settings
+        // noVNC 对越界值是 Log.Error 后静默忽略，脏数据要让界面显示旧值却不生效，这里先夹回 0-9
         if (r.jpegQuality != null) {
-          rfb.qualityLevel = Number(r.jpegQuality);
+          rfb.qualityLevel = Math.min(9, Math.max(0, Math.round(Number(r.jpegQuality))));
         }
         if (r.compressLevel != null) {
-          rfb.compressionLevel = Number(r.compressLevel);
+          rfb.compressionLevel = Math.min(9, Math.max(0, Math.round(Number(r.compressLevel))));
         }
 
         rfb.addEventListener('connect', () => {
@@ -228,6 +227,7 @@ export default {
           this.statusDetail = '';
           this._reask = false;
           this._authTries = 0;
+          if (api.vncHandshake) api.vncHandshake(this.liveSessionId).catch(() => {});
           this._applyVncScale();
           if (r.clipboard !== false && !rfb.viewOnly) {
             this._cleanupClipboard = this._setupClipboard(rfb);

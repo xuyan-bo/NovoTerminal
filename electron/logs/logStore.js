@@ -32,8 +32,12 @@ const SENSITIVE_KEYS = new Set([
   'spawnargs',
 ]);
 
-/** 命令行形态的口令参数：xfreerdp/wfreerdp 的 /p:、cmdkey 的 /pass:，出现在任何字符串值里都先遮掉 */
-const CLI_SECRET_RE = /(\/(?:p|pass|password|predipwd):)[^\s"']+/gi;
+/**
+ * 命令行形态的口令参数：xfreerdp/wfreerdp 的 /p:、cmdkey 的 /pass:，出现在任何字符串值里都先遮掉。
+ * 口令可以带空格，所以一直遮到下一个「/旗标:」或行尾；含 / 的口令会被整段遮掉，
+ * 但不能顺手把后面的 /size: /bpp: 这些诊断信息一起吃掉。
+ */
+const CLI_SECRET_RE = /(\/(?:p|pass|password|predipwd):)((?:[^\/\r\n]|\/(?![a-zA-Z][a-zA-Z0-9]*:))*)/gi;
 
 function scrubCliSecrets(text) {
   return String(text).replace(CLI_SECRET_RE, '$1[redacted]');

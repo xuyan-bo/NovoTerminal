@@ -1,12 +1,16 @@
 <template>
   <el-dialog
-    :title="$t('update.title')"
     :visible.sync="visible"
     width="520px"
     append-to-body
     :close-on-click-modal="false"
     @close="onClose"
   >
+    <div slot="title" class="dlg-head">
+      <i class="dlg-icon el-icon-refresh"></i>
+      <span>{{ $t('update.title') }}</span>
+    </div>
+
     <div class="update-line">
       <span class="update-badge">{{ $t('update.newVersion', { version: info.latest }) }}</span>
       <span class="update-current">{{ $t('update.currentVersion', { version: info.current }) }}</span>

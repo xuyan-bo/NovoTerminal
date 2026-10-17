@@ -369,7 +369,9 @@ export default {
         builder.username(logon.user);
         if (logon.domain) builder.serverDomain(logon.domain);
         builder.password(password);
-        builder.destination(`${host}:${port}`);
+        // IPv6 不加方括号时代理按最后一个冒号切端口，会把地址本身切坏（与外部客户端适配器同一条规则）
+        const rdpTarget = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+        builder.destination(`${rdpTarget}:${port}`);
         builder.proxyAddress(r.wsUrl);
         builder.authToken('none');
         builder.renderCanvas(canvas);

@@ -65,9 +65,10 @@ function reasonOf(delta) {
 /**
  * 发一轮对话并流式回调文本增量，返回聚合后的完整文本与工具调用列表。
  * tool_calls 在流里是按 index 分片到达的（arguments 是 JSON 字符串碎片），必须自己累加。
+ * 第一条分片到达就用 onCall 报出工具名：参数要整轮跑完才有 tool 事件，这段静默面板得先知道。
  */
 async function streamChat(opts) {
-  const { baseUrl, apiKey, model, messages, tools, maxTokens, temperature, signal, onText, onReason, log } = opts;
+  const { baseUrl, apiKey, model, messages, tools, maxTokens, temperature, signal, onText, onReason, onCall, log } = opts;
   const body = () => {
     const b = {
       model,
@@ -103,6 +104,8 @@ async function streamChat(opts) {
   let text = '';
   let finishReason = '';
   let usage = null;
+  let firstCallKey = null;
+  let firstCallName = '';
   try {
     for await (const part of stream) {
       if (signal && signal.aborted) break;
@@ -124,6 +127,13 @@ async function streamChat(opts) {
         const acc = calls.get(key);
         if (tc.id) acc.id = tc.id;
         if (tc.function && tc.function.name) acc.name += tc.function.name;
+        // 第一条 tool_call 的名字一到就报给面板，参数还要跑完整轮才成事件；
+        // 网关把名字也分片送时（首片空或半截），名字每长一截就重报一次，面板只是替换占位文案。
+        if (firstCallKey === null) firstCallKey = key;
+        if (key === firstCallKey && acc.name && acc.name !== firstCallName) {
+          firstCallName = acc.name;
+          if (onCall) onCall(acc.name);
+        }
         if (tc.function && typeof tc.function.arguments === 'string') acc.args += tc.function.arguments;
       }
     }

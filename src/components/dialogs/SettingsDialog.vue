@@ -1,11 +1,15 @@
 <template>
   <el-dialog
-    :title="$t('settings.title')"
     :visible.sync="visible"
     width="1120px"
     top="5vh"
     :close-on-click-modal="false"
   >
+    <div slot="title" class="dlg-head">
+      <svg-icon name="gear" :size="16" class="dlg-icon" />
+      <span>{{ $t('settings.title') }}</span>
+    </div>
+
     <div class="settings-layout">
       <div class="settings-nav">
         <button

@@ -1,12 +1,16 @@
 <template>
   <el-dialog
-    :title="$t('log.title')"
     :visible.sync="modalVisible"
     width="min(1120px, 94vw)"
     top="7vh"
     :close-on-click-modal="false"
     class="log-dialog"
   >
+    <div slot="title" class="dlg-head">
+      <svg-icon name="doc-log" :size="16" class="dlg-icon" />
+      <span>{{ $t('log.title') }}</span>
+    </div>
+
     <div class="log-toolbar">
       <el-select
         v-model="level"

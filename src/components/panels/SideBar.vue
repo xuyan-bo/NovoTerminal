@@ -137,7 +137,11 @@ export default {
     treeData() {
       // el-tree 拖放会就地改写它拿到的那份数组，失败时没有刷新，靠 treeRev 强制重建回真实数据
       const _ = this.treeRev;
-      return filterTree(buildAssetTree(this.groups), this.appliedFilter);
+      return filterTree(
+        buildAssetTree(this.groups),
+        this.appliedFilter,
+        (asset) => assetDisplayUser(asset, store.snapshot.credentials)
+      );
     },
   },
   watch: {

@@ -110,7 +110,7 @@ const api = {
   monitorStop: (sessionId) => ipcRenderer.invoke('monitor:stop', sessionId),
   monitorUiGet: (tabId) => ipcRenderer.invoke('monitor:ui-get', tabId),
   monitorUiSet: (tabId, ui) => ipcRenderer.invoke('monitor:ui-set', tabId, ui),
-  monitorUiDrop: (tabId) => ipcRenderer.invoke('monitor:ui-drop', tabId),
+  sessionTabForget: (req) => ipcRenderer.invoke('session:tab-forget', req),
   onMonitorSnapshot: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('monitor:snapshot', handler);
@@ -145,6 +145,7 @@ const api = {
   // VNC sessions (noVNC via WebSocket proxy)
   vncConnect: (req) => ipcRenderer.invoke('vnc:connect', req),
   vncDisconnect: (sessionId) => ipcRenderer.invoke('vnc:disconnect', sessionId),
+  vncHandshake: (sessionId) => ipcRenderer.invoke('vnc:handshake', sessionId),
   onVncState: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on('vnc:state', handler);

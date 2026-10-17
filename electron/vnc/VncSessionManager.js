@@ -54,8 +54,9 @@ class VncSessionManager {
       host: (payload && payload.host) || (rec && rec.host),
       port: (payload && payload.port) || (rec && rec.port),
     };
+    // 代理的 'ready' 只代表本机 TCP 通了，RFB 认证结果只有渲染端知道，成功日志交给 noteHandshake
     if (type === 'ready') {
-      this.log.info('vnc', 'vnc connected', meta);
+      this.log.info('vnc', 'vnc channel established', meta);
     } else if (type === 'error') {
       this.log.error('vnc', 'vnc error', {
         ...meta,
@@ -139,9 +140,21 @@ class VncSessionManager {
       const err = Object.assign(new Error(e.message || String(e)), {
         code: 'VNC_PROXY_ERROR',
       });
-      this._emit(sessionId, 'error', { code: err.code, message: err.message });
+      this._emit(sessionId, 'error', { code: err.code, message: err.message, host, port });
       throw err;
     }
+  }
+
+  /** RFB 握手（含认证）成功只能由渲染端确认，代理侧无从判断。 */
+  noteHandshake(sessionId, ownerId) {
+    const rec = this.sessions.get(sessionId);
+    if (!rec) return { ok: false };
+    if (ownerId !== undefined && rec.ownerId !== ownerId) return { ok: false };
+    // 重连与拆窗重握手都会再报一次，同一场会话只记一条 connected
+    if (rec.reported) return { ok: true };
+    rec.reported = true;
+    this.log && this.log.info('vnc', 'vnc connected', { sessionId, host: rec.host, port: rec.port });
+    return { ok: true };
   }
 
   disconnect(sessionId, ownerId) {

@@ -46,6 +46,8 @@ class RdpSessionManager {
     const port = Number(method.port) || 3389;
 
     const proxy = new RdpProxy({
+      host,
+      port,
       onState: (state, detail) => {
         this._emit(sessionId, state, detail || {});
       },

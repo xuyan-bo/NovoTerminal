@@ -2,7 +2,56 @@ import { api, unwrap, connectionErrorMessage } from '../../store';
 import { t } from '../../i18n';
 import { joinLocal, joinRemote, parentRemote, transferErrorText } from './utils';
 
+// 文件夹任务的 row-key 尾巴：同一毫秒建出两条任务时 Date.now() 会重复，el-table 的 row-key 必须唯一
+let folderSeq = 0;
+
 export default {
+  /**
+   * 文件夹子任务的目标同名时先问再传：主进程按 'w' 打开会直接截断已有内容。
+   * 整棵树只问一次——确认即全部覆盖，取消即逐个跳过（把行摘出树，不提交传输）。
+   */
+  async allowFolderTarget(s, root, row, direction) {
+    if (!row || !row.targetPath) return true;
+    let exists = false;
+    try {
+      const st = unwrap(
+        await (direction === 'upload'
+          ? api.sftpStat(s.connId, row.targetPath)
+          : api.sftpLocalExists(row.targetPath))
+      );
+      exists = !!(st && st.exists && !st.isDir);
+    } catch (_) {
+      // 探测失败不拦正常传输：主进程自己还会返回真实的写入错误
+      return true;
+    }
+    if (!exists) return true;
+    const state = this.folderState(s, root.taskId);
+    if (!state) return true;
+    if (state.overwrite === undefined) {
+      try {
+        await this.$confirm(
+          t(
+            direction === 'upload' ? 'sftp.overwriteFolderRemote' : 'sftp.overwriteFolderLocal',
+            { name: root.name }
+          ),
+          t('sftp.overwriteTitle'),
+          { type: 'warning', confirmButtonText: t('msg.confirm'), cancelButtonText: t('msg.cancel') }
+        );
+        state.overwrite = true;
+      } catch (_) {
+        state.overwrite = false;
+      }
+    }
+    if (state.overwrite) return true;
+    this.dropChildRow(s, row);
+    return false;
+  },
+  /** 同一路径可能已经在某棵文件夹树里传：进度事件会按 source|target 命中那一行，两条任务不能各建一份。 */
+  rowByKeyHit(s, sourcePath, targetPath) {
+    const row = s.rowByKey && s.rowByKey.get(`${sourcePath}|${targetPath}`);
+    if (!row || row.status === 'done' || row.status === 'error') return null;
+    return row;
+  },
   async confirmOverwrite(direction, name) {
     try {
       if (direction === 'upload') {
@@ -77,7 +126,7 @@ export default {
     const folderName = String(localDir).split(/[\\/]/).filter(Boolean).pop() || 'folder';
     const remoteRoot = joinRemote(remoteDir, folderName);
     const root = this.makeTaskRow(s, {
-      taskId: `folder-${s.id}-${Date.now().toString(36)}`,
+      taskId: `folder-${s.id}-${Date.now().toString(36)}-${(folderSeq += 1).toString(36)}`,
       name: folderName,
       isFolder: true,
       hasChildren: true,
@@ -157,6 +206,9 @@ export default {
         }
         await this.waitForResume(state);
         if (state.canceled) return;
+        // 扫描按提交前捕获的 rows 逐条走：行被移除或用户拒绝覆盖时要当场跳过，不能照常上传
+        if (row.dropped) continue;
+        if (!(await this.allowFolderTarget(s, root, row, 'upload'))) continue;
         try {
           const r = unwrap(
             await api.sftpUpload({
@@ -182,7 +234,7 @@ export default {
     const folderName = String(remoteDir).split('/').filter(Boolean).pop() || 'folder';
     const localRoot = joinLocal(localDir, folderName);
     const root = this.makeTaskRow(s, {
-      taskId: `folder-${s.id}-${Date.now().toString(36)}`,
+      taskId: `folder-${s.id}-${Date.now().toString(36)}-${(folderSeq += 1).toString(36)}`,
       name: folderName,
       isFolder: true,
       hasChildren: true,
@@ -247,6 +299,8 @@ export default {
         }
         await this.waitForResume(state);
         if (state.canceled) return;
+        if (row.dropped) continue;
+        if (!(await this.allowFolderTarget(s, root, row, 'download'))) continue;
         try {
           const r = unwrap(
             await api.sftpDownload({
@@ -291,12 +345,13 @@ export default {
         }
       } catch (_) {}
     }
-    const dup = s.tasks.find(
-      (x) =>
-        x.sourcePath === localPath &&
-        x.targetPath === remotePath &&
-        (x.status === 'running' || x.status === 'paused' || x.status === 'queued')
-    );
+    const dup =
+      s.tasks.find(
+        (x) =>
+          x.sourcePath === localPath &&
+          x.targetPath === remotePath &&
+          (x.status === 'running' || x.status === 'paused' || x.status === 'queued')
+      ) || this.rowByKeyHit(s, localPath, remotePath);
     if (dup) return;
     const name = remotePath.split('/').filter(Boolean).pop() || localPath;
     if (api.sftpStat && s.connId) {
@@ -327,12 +382,13 @@ export default {
     }
   },
   async startDownload(s, remotePath, localPath) {
-    const dup = s.tasks.find(
-      (x) =>
-        x.sourcePath === remotePath &&
-        x.targetPath === localPath &&
-        (x.status === 'running' || x.status === 'paused' || x.status === 'queued')
-    );
+    const dup =
+      s.tasks.find(
+        (x) =>
+          x.sourcePath === remotePath &&
+          x.targetPath === localPath &&
+          (x.status === 'running' || x.status === 'paused' || x.status === 'queued')
+      ) || this.rowByKeyHit(s, remotePath, localPath);
     if (dup) return;
     const name = localPath.split(/[\\/]/).pop() || remotePath;
     if (api.sftpLocalExists) {

@@ -265,6 +265,26 @@ export default {
     if (!taskId) return;
     this.expandedKeys = this.expandedKeys.filter((k) => k !== taskId);
   },
+  /** 把一行从文件夹树里摘掉：没提交给主进程的子行只有这样才会真正停止上传。 */
+  dropChildRow(s, row) {
+    if (!s || !row) return;
+    row.dropped = true;
+    const state = this.folderState(s, row.rootId);
+    if (!state) return;
+    const remove = (r) => {
+      const kids = r.children || [];
+      const i = kids.indexOf(row);
+      if (i >= 0) {
+        kids.splice(i, 1);
+        return true;
+      }
+      return kids.some(remove);
+    };
+    remove(state.root);
+    s.rowByKey.delete(this.childKey(row));
+    if (row.xferId) s.rowByXferId.delete(row.xferId);
+    this.scheduleRecalc(s, state.root);
+  },
   childKey(row) {
     return `${(row && row.sourcePath) || ''}|${(row && row.targetPath) || ''}`;
   },
@@ -278,11 +298,18 @@ export default {
   },
   mergeTask(s, p) {
     if (!s || !s.alive || !p || !p.taskId) return;
+    // 主进程事件负载没有 xferId 字段，它的 taskId 才是传输 id；行对象自带 xferId，taskId 是渲染端 row-key
+    const fromEvent = !Object.prototype.hasOwnProperty.call(p, 'xferId');
     const row = this.findFolderRow(s, p);
     if (row) {
       // In-place update keeps the row identity the table cells already depend on.
-      Object.assign(row, p, { taskId: row.taskId, isFolder: false, isDir: row.isDir, xferId: p.taskId });
-      s.rowByXferId.set(p.taskId, row);
+      Object.assign(row, p, {
+        taskId: row.taskId,
+        isFolder: false,
+        isDir: row.isDir,
+        xferId: fromEvent ? p.taskId : row.xferId,
+      });
+      if (fromEvent) s.rowByXferId.set(p.taskId, row);
       const state = this.folderState(s, row.rootId);
       this.scheduleRecalc(s, state ? state.root : row);
       return;
@@ -495,7 +522,15 @@ export default {
       }
       const wasUnfinished = unfinished(task);
       // 半截目标文件由主进程在取消时一并删除，渲染端不再重复删一次
-      unwrap(await api.sftpCancel(task.xferId || task.taskId));
+      if (task.xferId) unwrap(await api.sftpCancel(task.xferId));
+      if (task.rootId) {
+        // 子行不在 s.tasks 里：还没提交给主进程的行只能靠摘出树来阻止扫描循环继续上传
+        this.dropChildRow(s, task);
+        if (wasUnfinished) await this.refreshListsAfterTaskRemove(s, task);
+        this.syncTasks(s);
+        return;
+      }
+      if (!task.xferId) unwrap(await api.sftpCancel(task.taskId));
       s.tasks = s.tasks.filter((x) => x.taskId !== task.taskId);
       if (wasUnfinished) await this.refreshListsAfterTaskRemove(s, task);
       this.syncTasks(s);

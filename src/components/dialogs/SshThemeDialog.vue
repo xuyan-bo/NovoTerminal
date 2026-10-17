@@ -1,11 +1,15 @@
 <template>
   <el-dialog
-    :title="$t('theme.title')"
     :visible.sync="visible"
     width="520px"
     top="10vh"
     :close-on-click-modal="false"
   >
+    <div slot="title" class="dlg-head">
+      <svg-icon name="palette" :size="16" class="dlg-icon" />
+      <span>{{ $t('theme.title') }}</span>
+    </div>
+
     <div class="theme-sec-title">{{ $t('theme.textColors') }}</div>
     <div class="theme-row" v-for="row in basicRows" :key="row.key">
       <span class="theme-row-label">{{ row.label }}</span>
@@ -133,7 +137,11 @@ export default {
         const hit = findAsset(this.assetId);
         if (!hit) throw new Error(t('detail.empty'));
         const methods = JSON.parse(JSON.stringify(hit.asset.methods || {}));
-        const prev = methods.ssh || {};
+        if (!methods.ssh) {
+          // 资产上没有 SSH 方式（连接后被删掉）：凭空写一行会让用户多出一条没启用过的访问方式
+          throw Object.assign(new Error(t('ssh.themeNoMethod')), { code: 'SSH_METHOD_MISSING' });
+        }
+        const prev = methods.ssh;
         // 保留旧记录的额外字段（包括 bold），但只编辑、应用 xterm 支持的颜色。
         const colors = { ...(prev.advanced?.colors || {}), ...resolveSshTheme(this.form) };
         methods.ssh = {

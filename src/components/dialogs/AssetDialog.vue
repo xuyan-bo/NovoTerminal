@@ -1,11 +1,15 @@
 <template>
   <el-dialog
-    :title="dialogTitle"
     :visible.sync="visible"
     width="760px"
     top="5vh"
     :close-on-click-modal="false"
   >
+    <div slot="title" class="dlg-head">
+      <i class="dlg-icon" :class="dialogIcon"></i>
+      <span>{{ dialogTitle }}</span>
+    </div>
+
     <el-divider content-position="left" class="section-divider">{{ $t('asset.info') }}</el-divider>
 
     <el-form
@@ -319,6 +323,11 @@ export default {
       if (this.isView) return this.$t('asset.dialogView');
       if (this.isEdit) return this.$t('asset.dialogEdit');
       return this.isClone ? this.$t('asset.dialogClone') : this.$t('asset.dialogNew');
+    },
+    dialogIcon() {
+      if (this.isView) return 'el-icon-view';
+      if (this.isEdit) return 'el-icon-edit';
+      return this.isClone ? 'el-icon-document-copy' : 'el-icon-plus';
     },
     groups() {
       return store.snapshot.groups || [];

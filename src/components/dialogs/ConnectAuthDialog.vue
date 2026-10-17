@@ -1,13 +1,17 @@
 <template>
   <el-dialog
     :visible="!!active"
-    :title="(active && active.title) || $t('asset.authSettings')"
     width="460px"
     append-to-body
     :close-on-click-modal="false"
     :show-close="false"
     :before-close="cancel"
   >
+    <div slot="title" class="dlg-head">
+      <i class="dlg-icon el-icon-key"></i>
+      <span>{{ (active && active.title) || $t('asset.authSettings') }}</span>
+    </div>
+
     <template v-if="active">
       <p class="hint ask-hint">{{ active.hint }}</p>
       <el-form

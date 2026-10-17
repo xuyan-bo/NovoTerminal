@@ -1,11 +1,15 @@
 <template>
   <el-dialog
-    :title="isEdit ? $t('group.dialogEdit') : $t('group.dialogNew')"
     :visible.sync="visible"
     width="440px"
     top="5vh"
     :close-on-click-modal="false"
   >
+    <div slot="title" class="dlg-head">
+      <i class="dlg-icon" :class="isEdit ? 'el-icon-edit' : 'el-icon-folder-add'"></i>
+      <span>{{ isEdit ? $t('group.dialogEdit') : $t('group.dialogNew') }}</span>
+    </div>
+
     <el-form
       ref="form"
       :model="form"

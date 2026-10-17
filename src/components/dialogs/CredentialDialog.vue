@@ -1,11 +1,15 @@
 <template>
   <el-dialog
-    :title="$t('cred.title')"
     :visible.sync="modalVisible"
     width="min(980px, 94vw)"
     top="8vh"
     :close-on-click-modal="false"
   >
+    <div slot="title" class="dlg-head">
+      <i class="dlg-icon el-icon-key"></i>
+      <span>{{ $t('cred.title') }}</span>
+    </div>
+
     <div class="cred-toolbar">
       <el-input
         v-model="keyword"

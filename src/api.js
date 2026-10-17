@@ -33,7 +33,7 @@ function mockSettings() {
 
 export const api = hasBridge
   ? window.novoTerminal
-  : {
+  : new Proxy({
       getPathForFile(file) {
         return (file && file.path) || '';
       },
@@ -220,7 +220,7 @@ export const api = hasBridge
       async monitorUiSet() {
         return { ok: false, code: 'NO_BRIDGE' };
       },
-      async monitorUiDrop() {
+      async sessionTabForget() {
         return { ok: false, code: 'NO_BRIDGE' };
       },
       onMonitorSnapshot() {
@@ -305,7 +305,15 @@ export const api = hasBridge
         return () => {};
       },
       platform: 'browser',
-    };
+    }, {
+      /** 浏览器预览没有 Electron 桥：缺失的入口一律明确回不可用，而不是 undefined 让调用方抛 TypeError。 */
+      get(target, key) {
+        if (key in target) return target[key];
+        if (typeof key !== 'string') return undefined;
+        if (key.startsWith('on')) return () => () => {};
+        return () => Promise.resolve({ __error: true, code: 'NO_BRIDGE', message: t('msg.needElectron') });
+      },
+    });
 
 export function unwrap(res) {
   if (res && res.__error) {

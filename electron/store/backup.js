@@ -329,9 +329,27 @@ function clampLogTotalMb(v) {
  * 还原：只处理包里实际存在的类别。
  * 设置、资产与凭证为覆盖（dataPath 不动），AI 会话按文件叠加（同名覆盖、其余保留）。
  */
+/** 备份条目落盘前各自解一遍：坏包不该只恢复一半（两条 import 都会当场 persist）。 */
+function readEntryList(entry, label) {
+  if (!entry) return null;
+  const text = entry.data.toString('utf8');
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (_) {
+    throw fail('BACKUP_BAD_FORMAT', label + ' unreadable');
+  }
+  if (!Array.isArray(parsed) || parsed.some((x) => !x || typeof x !== 'object' || !x.id)) {
+    throw fail('BACKUP_BAD_FORMAT', label + ' is not a valid list');
+  }
+  return text;
+}
+
 function restoreBackup({ store, entries }) {
   const summary = { settings: false, assets: false, credentials: false, aiSessions: 0 };
   const byName = new Map(entries.map((e) => [e.name, e]));
+  const assetsJson = readEntryList(byName.get(ASSETS_ENTRY), 'assets');
+  const credentialsJson = readEntryList(byName.get(CREDENTIALS_ENTRY), 'credentials');
 
   const settingsEntry = byName.get(SETTINGS_ENTRY);
   if (settingsEntry) {
@@ -354,16 +372,15 @@ function restoreBackup({ store, entries }) {
     summary.settings = true;
   }
 
-  const assetsEntry = byName.get(ASSETS_ENTRY);
-  if (assetsEntry) {
-    store.importGroups(assetsEntry.data.toString('utf8'));
-    summary.assets = true;
+  // 凭证先落库：资产里的 credentialId 只有在不换主键的前提下才还指得上
+  if (credentialsJson !== null) {
+    store.importCredentials(credentialsJson);
+    summary.credentials = true;
   }
 
-  const credentialsEntry = byName.get(CREDENTIALS_ENTRY);
-  if (credentialsEntry) {
-    store.importCredentials(credentialsEntry.data.toString('utf8'));
-    summary.credentials = true;
+  if (assetsJson !== null) {
+    store.importGroups(assetsJson);
+    summary.assets = true;
   }
 
   const aiRoot = path.join(store.dataDir(), AI_DIR);
