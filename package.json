@@ -1,6 +1,6 @@
 {
   "name": "novoterminal",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Thinking operations terminal for SSH, VNC and RDP with SFTP file transfer",
   "main": "electron/main.js",
   "author": "NovoTerminal <xuyanbo.c@qq.com>",

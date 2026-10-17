@@ -600,7 +600,7 @@ export default {
       repoUrl: import.meta.env.VITE_HOMEPAGE,
       releasesUrl: import.meta.env.VITE_HOMEPAGE + '/releases',
       activeMenu: 'general',
-      appVersion: import.meta.env.VITE_APP_VERSION || '0.1.0',
+      appVersion: import.meta.env.VITE_APP_VERSION || '1.0.0',
       newSvcIds: new Set(),
       permissions: AI_PERMISSIONS,
       draft: {},
