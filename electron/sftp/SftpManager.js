@@ -1288,75 +1288,84 @@ class SftpManager {
   }
 
   /**
-   * 把写完整的 .part 改名到目标位置。覆盖既有文件要用 posix-rename 扩展；
-   * 拿不到就先按标准改名（目标不存在时够用），再退化成「删目标 + 改名」：
-   * 内容此时已整份落在 .part 上，最坏情况是留着 .part 让用户找回，不会出现半份目标文件。
+   * 把写完整的 .part 改名到目标位置。覆盖既有文件要靠 posix-rename 扩展（OpenSSH 都有）；
+   * 没有该扩展时才退化成标准改名 + 「确认目标存在才删除再改名」。
+   * 任何一步失败都只留着 .part 报错，绝不在没弄清原因时删掉用户已有的目标文件。
    */
   _placeRemotePart(c, task, onDone, onError) {
     const sftp = c.sftp;
     const partPath = task.partPath;
     const target = task.targetPath;
-    const move = (cb) => {
-      try {
-        return sftp.ext_openssh_rename(partPath, target, cb);
-      } catch (_) {
-        return sftp.rename(partPath, target, cb);
-      }
-    };
-    move((err) => {
-      if (!err) return onDone();
-      this.log &&
-        this.log.warn('sftp', 'remote rename into place failed, retrying after unlink', {
-          host: c.host,
-          port: c.port,
-          path: target,
-          message: err.message,
-        });
-      sftp.unlink(target, (ue) => {
-        if (ue) {
-          return onError(
-            Object.assign(new Error('cannot replace the target file: ' + (ue.message || String(ue))), {
-              code: 'SFTP_TRANSFER',
-            })
-          );
-        }
-        sftp.rename(partPath, target, (re) => {
-          if (!re) return onDone();
-          onError(
-            Object.assign(
-              new Error('cannot move the uploaded part into place; it stays at ' + partPath),
-              { code: 'SFTP_TRANSFER' }
-            )
-          );
+    const giveUp = (why) =>
+      onError(
+        Object.assign(
+          new Error(
+            'cannot move the uploaded part into place; it stays at ' + partPath + (why ? ' (' + why + ')' : '')
+          ),
+          { code: 'SFTP_TRANSFER' }
+        )
+      );
+    let usedPosixRename = true;
+    try {
+      sftp.ext_openssh_rename(partPath, target, (err) => {
+        if (err) return giveUp(err.message);
+        onDone();
+      });
+    } catch (_) {
+      // ssh2 在服务器没有声明 posix-rename@openssh.com 时同步抛出
+      usedPosixRename = false;
+    }
+    if (usedPosixRename) return;
+    // 两个改名调用在通道已销毁时都可能同步抛出，抛出与回调两种失败都按「保留 .part」处理
+    try {
+      sftp.rename(partPath, target, (err) => {
+        if (!err) return onDone();
+        sftp.stat(target, (se, st) => {
+          if (se || !st) return giveUp(err.message);
+          // 目标确实存在，说明这次失败就是「不肯覆盖」；用户要的就是覆盖，才动它
+          sftp.unlink(target, (ue) => {
+            if (ue) return giveUp(ue.message);
+            sftp.rename(partPath, target, (re) => {
+              if (re) return giveUp(re.message);
+              onDone();
+            });
+          });
         });
       });
-    });
+    } catch (e) {
+      giveUp((e && e.message) || String(e));
+    }
   }
 
-  /** 本机侧同理：整份齐了才改名到位。Windows 的改名不覆盖既有文件，先删目标再改。 */
+  /** 本机侧同理：整份齐了才改名到位。Windows 的改名不覆盖既有文件，确认目标在原地才删它再改。 */
   _placeLocalPart(task, onDone, onError) {
     const partPath = task.partPath;
+    const giveUp = (why) => {
+      this.log &&
+        this.log.warn('sftp', 'local rename into place failed', {
+          path: task.targetPath,
+          part: partPath,
+          message: why,
+        });
+      onError(
+        Object.assign(
+          new Error('cannot move the downloaded part into place; it stays at ' + partPath),
+          { code: 'LOCAL_WRITE' }
+        )
+      );
+    };
     try {
       fs.renameSync(partPath, task.targetPath);
       return onDone();
     } catch (e) {
+      // 目标不在原地，失败原因就不是「不肯覆盖」，这时删任何东西都只是毁数据
+      if (!fs.existsSync(task.targetPath)) return giveUp((e && e.message) || String(e));
       try {
         fs.rmSync(task.targetPath, { force: true });
         fs.renameSync(partPath, task.targetPath);
         return onDone();
       } catch (e2) {
-        this.log &&
-          this.log.warn('sftp', 'local rename into place failed', {
-            path: task.targetPath,
-            part: partPath,
-            message: (e2 && e2.message) || String(e2),
-          });
-        onError(
-          Object.assign(
-            new Error('cannot move the downloaded part into place; it stays at ' + partPath),
-            { code: 'LOCAL_WRITE' }
-          )
-        );
+        giveUp((e2 && e2.message) || String(e2));
       }
     }
   }

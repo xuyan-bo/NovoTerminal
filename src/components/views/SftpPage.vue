@@ -170,7 +170,7 @@
 </template>
 
 <script>
-import { api, unwrap, connectionErrorMessage } from '../../store';
+import { api, unwrap, connectionErrorMessage, refresh } from '../../store';
 import { t } from '../../i18n';
 import CtxMenu from '../common/CtxMenu.vue';
 import SftpNameDialog from '../dialogs/SftpNameDialog.vue';
@@ -345,6 +345,12 @@ export default {
     this._offWinConfirm =
       api.onSftpConfirmClose &&
       api.onSftpConfirmClose(() => this.confirmWindowClose());
+    // 覆盖策略按资产的高级参数取，主窗口改了要跟着刷新，否则本窗口一直用开窗那一刻的值
+    this._offStoreChanged =
+      api.onStoreChanged &&
+      api.onStoreChanged(() => {
+        refresh().catch(() => {});
+      });
 
     // document capture 一对监听同时覆盖 OS 拖入和面板外的落点，面板自己的 drop 优先
     this._docOver = (e) => {
@@ -422,6 +428,7 @@ export default {
     if (this._offState) this._offState();
     if (this._offAddSession) this._offAddSession();
     if (this._offWinConfirm) this._offWinConfirm();
+    if (this._offStoreChanged) this._offStoreChanged();
   },
   methods: {
     ...selectionMethods,
