@@ -364,7 +364,6 @@ class AssetStore {
       if (!g || typeof g !== 'object') return;
       if (!Array.isArray(g.nodes)) g.nodes = [];
       if (typeof g.open !== 'boolean') g.open = true;
-      delete g.locked;
       if (typeof g.pid !== 'string') g.pid = '';
       if (g.pid && g.pid === g.id) g.pid = '';
       ids.add(g.id);

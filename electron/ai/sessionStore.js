@@ -3,9 +3,9 @@
  *
  * 目录结构：<数据存储路径>/ai-sessions/<资产 ID>--<协议>/<会话 ID>.json，
  * 一个会话一个文件，所以「A 资产的 SSH」这类归属天然隔离，删资产也不会牵连别处。
- * version 1 只有展示记录（用户提问、思考、正文、命令、审批/选择、压缩行、整轮统计）；
- * version 2 另存 context——当时真正发给模型的那份序列与水位快照，加载会话才能原样接上。
- * 两个版本都不写 system 提示词与审批等待中的凭证。
+ * version 2 存展示记录（用户提问、思考、正文、命令、审批/选择、压缩行、整轮统计）与
+ * context——当时真正发给模型的那份序列与水位快照，加载会话才能原样接上。
+ * 两者都不写 system 提示词与审批等待中的凭证。
  *
  * 同目录另有 index.list：该目录所有会话的摘要缓存（含每个文件的 mtime/大小）。
  * 列历史只读它，不再逐个打开会话文件；与目录对不上时按差异单个重读或删除条目并写回。
@@ -142,7 +142,7 @@ class AiSessionStore {
     const prev = this._readFile(file);
     const context = record.context && Array.isArray(record.context.messages) ? normalizeContext(record.context) : null;
     const rec = {
-      version: context ? 2 : 1,
+      version: 2,
       id: record.id,
       assetId: record.assetId,
       assetName: str(record.assetName, 120),
@@ -270,8 +270,8 @@ function normalizeMessage(m) {
       command: str(m.command, TEXT_CHARS),
       reason: str(m.reason, 1000),
       readOnly: !!m.readOnly,
-      // 读不懂的结论按「未允许」处理：脏记录不能伪装成用户点过允许。timeout 是旧记录里的「整轮被停止」
-      decision: ['allow', 'deny', 'canceled', 'ended', 'timeout'].includes(m.decision) ? m.decision : 'deny',
+      // 读不懂的结论按「未允许」处理：脏记录不能伪装成用户点过允许。
+      decision: ['allow', 'deny', 'canceled', 'ended'].includes(m.decision) ? m.decision : 'deny',
     };
     return out;
   }

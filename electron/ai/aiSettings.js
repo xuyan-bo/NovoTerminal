@@ -58,13 +58,7 @@ const int = (value, min, max, fallback) => {
   const n = Number(value);
   return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : fallback;
 };
-/** 布尔项只认真布尔；旧数据里的 0/'0'/'false' 按关闭处理，其余无法判断的才回落默认值。 */
-const bool = (value, fallback) => {
-  if (typeof value === 'boolean') return value;
-  if (value === 0 || value === '0' || value === 'false') return false;
-  if (value === 1 || value === '1' || value === 'true') return true;
-  return fallback;
-};
+const bool = (value, fallback) => (typeof value === 'boolean' ? value : fallback);
 const clampTemp = (value, fallback) => {
   const n = Number(value);
   return Number.isFinite(n) ? Math.min(0.5, Math.max(0, n)) : fallback;
