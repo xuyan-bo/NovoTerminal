@@ -1172,19 +1172,6 @@ function registerIpc() {
     }
     return true;
   }, true);
-  /** 备份操作前的本机身份验证；导出与导入始终重新认证，不复用 30 秒缓存（缓存只留给密码查看）。 */
-  async function requireSystemAuth(reason) {
-    const lang = store.getSettings().lang;
-    const auth = await verifySystemAuth(reason, mainWindowHwnd(), {
-      force: true, lang, log: logger,
-    });
-    if (!auth.ok) {
-      const e = new Error(auth.message || (lang === 'en' ? 'System identity verification failed' : '系统身份验证失败'));
-      e.code = auth.code || 'AUTH_FAILED';
-      throw e;
-    }
-  }
-
   /** 密码长度是主进程边界：渲染端表单校验不构成安全保证。 */
   function checkBackupPassword(password) {
     const pw = typeof password === 'string' ? password : '';
@@ -1202,7 +1189,6 @@ function registerIpc() {
     const en = store.getSettings().lang === 'en';
     const include = payload && Array.isArray(payload.include) ? payload.include : [];
     const password = checkBackupPassword(payload && payload.password);
-    await requireSystemAuth(en ? 'Export NovoTerminal backup (includes sensitive information)' : '导出 NovoTerminal 备份（包含敏感信息）');
     let buffer;
     try {
       buffer = packBackup({ store, include, password, appVersion: app.getVersion() });
@@ -1228,12 +1214,11 @@ function registerIpc() {
     return { ok: true, path: r.filePath, bytes: buffer.length };
   });
 
+  // 身份验证在「导入备份」按钮那一步做完（见 SettingsDialog.openBackup），这里不再重复认证。
   handle('backup:import', async (sender, payload) => {
     // 导入会整库覆盖本机数据，只认主窗口：备份对话框只可能出现在那里
     if (!isMainWindow(sender)) throw untrustedSenderError();
-    const en = store.getSettings().lang === 'en';
     const password = checkBackupPassword(payload && payload.password);
-    // 先解密校验密码，再要求身份验证：密码错时不必先过一道生物识别
     let parsed;
     try {
       parsed = unpackBackup({ data: payload && payload.data, password });
@@ -1241,7 +1226,6 @@ function registerIpc() {
       logger.warn('backup', 'backup open failed', { code: e.code, message: e.message });
       throw e;
     }
-    await requireSystemAuth(en ? 'Import NovoTerminal backup (replaces current data)' : '导入 NovoTerminal 备份（将覆盖当前数据）');
     const summary = restoreBackup({ store, entries: parsed.entries });
     logStore.setTotalBytes(clampedLogTotalMb(store.getSettings().logTotalMb) * MB);
     applyZoom();
@@ -1255,7 +1239,7 @@ function registerIpc() {
       aiSessions: summary.aiSessions,
     });
     return { ok: true, summary, manifest: parsed.manifest };
-  });
+  }, true);
   /** 设置里的「文件编辑器」浏览：只允许挑可执行程序，选到别的当场拒绝，不回路径。 */
   handle('app:browse-file-editor', async () => {
     const en = store.getSettings().lang === 'en';
@@ -2283,8 +2267,23 @@ function registerIpc() {
     const methods = hit.asset.methods || {};
     const port = methods.sftp?.port || methods.ssh?.port || 22;
     // reask：上一次握手被服务器按认证拒绝（或私钥解析不了），面板的「重试」要能当场重问凭证
-    const { auth } = await resolveAuthForWindow(sender, hit.asset, 'sftp', port, !!(req && req.reask));
-    return sftpManager.openSession({ assetId: hit.asset.id, auth, ...sshRequestContext(sender) });
+    const { auth, askAgain } = await resolveAuthForWindow(sender, hit.asset, 'sftp', port, !!(req && req.reask));
+    let used = auth;
+    // 与 ssh:connect 同一套当场重问：握手被拒不让面板先吃一句报错再去点「重新连接」
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await sftpManager.openSession({ assetId: hit.asset.id, auth: used, ...sshRequestContext(sender) });
+      } catch (error) {
+        const reaskable = error.code === 'SSH_AUTH_FAILED' || error.code === 'SSH_KEY_PARSE';
+        if (!reaskable || attempt >= SSH_AUTH_RETRY || sender.isDestroyed()) throw error;
+        const again = await askAgain('rejected');
+        if (!again || again.needsPrompt) throw error;
+        logger.warn('sftp', 'sftp authentication rejected, asking again', {
+          assetId: hit.asset.id, host: hit.asset.host, port, attempt,
+        });
+        used = again;
+      }
+    }
   }, true);
   handle('sftp:list', (sender, connId, remotePath) => sftpManager.list(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
   handle('sftp:stat', (sender, connId, remotePath) => sftpManager.stat(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);

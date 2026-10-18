@@ -317,9 +317,11 @@ export default {
           if (this.status === 'error') return;
           this.status = 'ended';
           this.statusDetail = '';
+          this._clearScreen();
         } else if (ev.type === 'error') {
           this.status = 'error';
           this.statusDetail = this.errText(ev);
+          this._clearScreen();
         }
       });
 
@@ -431,6 +433,7 @@ export default {
             if (this.session === session) {
               this.session = null;
               this._stopClipPoll();
+              this._clearScreen();
               this.status = 'error';
               this.statusDetail = this.authErrorText(e);
               this.retryAuth();
@@ -662,6 +665,12 @@ export default {
         if (this._disposeInput) this._disposeInput();
         // 会话自己结束时也要停掉剪贴板轮询，不能留到页签销毁
         this._stopClipPoll();
+        this._clearScreen();
+        // 代理的 ended 可能晚一步到，先按真实结束把状态翻过来
+        if (this.status === 'connected') {
+          this.status = 'ended';
+          this.statusDetail = '';
+        }
       }
     },
 
@@ -691,6 +700,16 @@ export default {
       }
     },
 
+    // wasm 不会自己擦屏：图像不收掉，状态写着「已断开」而画面看着还活着
+    _clearScreen() {
+      const canvasEl = this.$refs.canvas;
+      if (canvasEl) {
+        const ctx = canvasEl.getContext && canvasEl.getContext('2d');
+        if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+      }
+      this.showCanvas = false;
+    },
+
     disconnectNow(silent) {
       this._closing = true;
       const sid = this.liveSessionId;
@@ -708,13 +727,7 @@ export default {
       }
       if (this._disposeInput) this._disposeInput();
       this._stopClipPoll();
-      // Clear the last rendered frame so the screen does not linger after close.
-      const canvasEl = this.$refs.canvas;
-      if (canvasEl) {
-        const ctx = canvasEl.getContext && canvasEl.getContext('2d');
-        if (ctx) ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
-      }
-      this.showCanvas = false;
+      this._clearScreen();
       if (sid && api.rdpDisconnect) {
         try {
           const r = api.rdpDisconnect(sid);

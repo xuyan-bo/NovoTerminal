@@ -109,7 +109,7 @@ export default {
   },
   methods: {
     reset() {
-      this.include = ['settings', 'assets', 'ai'];
+      this.include = ['settings', 'assets', 'credentials', 'ai'];
       this.password = '';
       this.password2 = '';
       this.busy = false;

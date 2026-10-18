@@ -624,7 +624,10 @@ export default {
       };
       const detail = r && (r.error || r.__error);
       const base = map[code];
-      return base && detail ? base + ' — ' + detail : base || detail || t('asset.testFail');
+      if (base) return detail ? base + ' — ' + detail : base;
+      // 网络层错误码（ENOTFOUND 等）按 err.<CODE> 取译文，英文原文只进日志
+      const coded = code ? t('err.' + code) : '';
+      return coded !== 'err.' + code ? coded : (detail || t('asset.testFail'));
     },
     save() {
       if (this.isView) return;

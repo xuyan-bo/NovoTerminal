@@ -249,9 +249,9 @@ button {
   background-color: transparent;
 }
 
-/* Element 的加载遮罩是不透明底色淡入淡出，会把表格框线整个盖掉（实测淡入峰值 0.74，框线对比减半），
-   翻页时就成了「框线消失一瞬」。遮罩只承载 spinner，底色透明。 */
-.log-table .el-loading-mask {
+/* Element 的加载遮罩默认底色是不透明的浅色（rgba(255,255,255,.9)），淡入时整块列表被刷白、
+   框线对比减半（实测淡入峰值 0.74）。日志表翻页、凭证表「查看/编辑」的认证等待、AI 历史列表共用这条。 */
+.el-loading-mask {
   background-color: transparent;
 }
 /* Element 还会在挂上 loading 父类时把外框 border-color 清成 transparent（它假定遮罩不透明），

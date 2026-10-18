@@ -1102,7 +1102,7 @@ export default {
       };
     },
 
-    /** 备份交给独立弹窗；系统身份验证先于弹窗，未通过则不打开导出/导入弹窗。 */
+    /** 备份的系统身份验证就在点这颗按钮时做完，弹窗内的导出/导入不再重复认证。 */
     async openBackup(mode) {
       if (!api.verifySystemAuth) {
         this.$message.error(t('auth.needElectron'));

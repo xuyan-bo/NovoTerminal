@@ -1165,6 +1165,15 @@ export default {
       try { await api.aiCancel({ sessionId: this.sessionId }); } catch (_) { /* 主进程会自己收尾 */ }
     },
 
+    /** 回合占用是"停下来再点一次"就能重来的动作冲突，用 toast 说一次，不钉在面板顶部。 */
+    reportHistoryActionError(e) {
+      if (e && e.code === 'AI_BUSY') {
+        this.$message.warning(t('err.AI_BUSY'));
+        return;
+      }
+      this.error = { code: e.code || 'AI_REQUEST', message: e.message };
+    },
+
     /** 新建会话：先让主进程把当前对话写成一条会话记录，再清空面板重新攒。 */
     async newSession() {
       if (this.running || this.archiveBusy) return;
@@ -1177,7 +1186,7 @@ export default {
         this.clearLocal();
         if (r && r.archived) this.$message.success(t('ai.archived', { name: r.archived.title || t('ai.untitled') }));
       } catch (e) {
-        this.error = { code: e.code || 'AI_REQUEST', message: e.message };
+        this.reportHistoryActionError(e);
       } finally {
         this.archiveBusy = false;
       }
@@ -1276,7 +1285,7 @@ export default {
         this.historyOpen = false;
         this.$message.success(t('ai.loaded', { name: r.session.title || t('ai.untitled') }));
       } catch (e) {
-        this.error = { code: e.code || 'AI_REQUEST', message: e.message };
+        this.reportHistoryActionError(e);
       } finally {
         this.historyLoading = false;
       }
@@ -1331,7 +1340,7 @@ export default {
         if (r && r.cleared) this.clearLocal();
         this.$message.success(t('ai.deleted', { name: s.title || t('ai.untitled') }));
       } catch (e) {
-        this.error = { code: e.code || 'AI_REQUEST', message: e.message };
+        this.reportHistoryActionError(e);
       }
     },
 

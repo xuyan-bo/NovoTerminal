@@ -99,7 +99,7 @@ class VncProxy {
     });
 
     tcp.on('error', (err) => {
-      this.onState('error', { message: err.message || 'TCP error' });
+      this.onState('error', { message: err.message || 'TCP error', code: err.code });
       cleanup('tcp-error');
     });
 

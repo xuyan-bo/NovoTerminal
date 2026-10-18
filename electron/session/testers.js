@@ -22,14 +22,14 @@ function tcpProbe(host, port, timeoutMs = 2500) {
       if (done) return;
       done = true;
       socket.destroy();
-      resolve({ ok, error: error || undefined, latencyMs: latencyMs });
+      resolve(result(ok, error, error, latencyMs));
     };
     socket.setTimeout(timeoutMs);
     socket.once('connect', () => finish(true, undefined, Date.now() - t0));
     socket.once('timeout', () => finish(false, 'TCP_TIMEOUT'));
     socket.once('error', (e) => {
       const code = e.code || 'TCP_ERROR';
-      finish(false, code === 'ECONNREFUSED' || code === 'ETIMEDOUT' ? 'TCP_TIMEOUT' : 'TCP_ERROR');
+      finish(false, code === 'ECONNREFUSED' || code === 'ETIMEDOUT' ? 'TCP_TIMEOUT' : code);
     });
     socket.connect(Number(port) || 0, host);
   });
@@ -165,7 +165,7 @@ function testVnc({ host, port, password, timeoutMs = 8000, lang }) {
     sock.setTimeout(timeoutMs);
     sock.on('timeout', () => finish(false, 'TCP_TIMEOUT', 'TCP_TIMEOUT'));
     sock.on('error', (e) => {
-      const c = e.code === 'ECONNREFUSED' || e.code === 'ETIMEDOUT' ? 'TCP_TIMEOUT' : 'TCP_ERROR';
+      const c = e.code === 'ECONNREFUSED' || e.code === 'ETIMEDOUT' ? 'TCP_TIMEOUT' : (e.code || 'TCP_ERROR');
       finish(false, c, e.message);
     });
     sock.on('data', (d) => {
@@ -320,7 +320,7 @@ function testRdp({ host, port, timeoutMs = 5000, lang }) {
     sock.setTimeout(timeoutMs);
     sock.on('timeout', () => finish(false, 'TCP_TIMEOUT', 'TCP_TIMEOUT'));
     sock.on('error', (e) => {
-      const c = e.code === 'ECONNREFUSED' || e.code === 'ETIMEDOUT' ? 'TCP_TIMEOUT' : 'TCP_ERROR';
+      const c = e.code === 'ECONNREFUSED' || e.code === 'ETIMEDOUT' ? 'TCP_TIMEOUT' : (e.code || 'TCP_ERROR');
       finish(false, c, e.message);
     });
     sock.on('connect', () => sock.write(buildRdpRequest()));
