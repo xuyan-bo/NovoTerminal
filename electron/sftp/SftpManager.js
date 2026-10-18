@@ -468,6 +468,33 @@ class SftpManager {
     });
   }
 
+  /** 改远端权限：mode 由 IPC 入口收敛成 0~0777 的整数，具体位的含义交给服务器。 */
+  chmod(connId, remotePath, mode) {
+    const c = this._conn(connId);
+    return new Promise((resolve, reject) => {
+      c.sftp.chmod(remotePath, mode, (err) => {
+        if (err) {
+          return reject(
+            this._remoteError('CHMOD', err, 'sftp chmod failed', {
+              connId,
+              host: c.host,
+              port: c.port,
+              path: remotePath,
+            })
+          );
+        }
+        this.log &&
+          this.log.info('sftp', 'sftp chmod applied', {
+            host: c.host,
+            port: c.port,
+            path: remotePath,
+            mode: mode.toString(8),
+          });
+        resolve({ ok: true, mode });
+      });
+    });
+  }
+
   _rememberDir(c, dir) {
     if (!dir || dir === '/' || c.dirs.size >= DIR_CACHE_MAX) return;
     c.dirs.add(dir);
@@ -635,7 +662,9 @@ class SftpManager {
       rs: null,
       ws: null,
       connId: meta.connId,
-      // 目标文件是否已被本次传输打开（截断/创建）：未打开时取消不能删它，否则会毁掉覆盖前已存在的文件
+      // 本次写出的 .part 路径：传输全程只碰它，成功才改名成 targetPath
+      partPath: '',
+      // .part 是否已被本次传输打开：没打开过就没有残留可清，取消时不能去动 targetPath
       _touched: false,
     };
     this.tasks.set(taskId, task);
@@ -900,24 +929,28 @@ class SftpManager {
           handle = null;
           if (ce) return fail(ce);
           task.transferred = size || donePos;
-          if (task.status !== 'canceled' && task.status !== 'error') {
+          if (task.status === 'canceled' || task.status === 'error') return;
+          this._placeRemotePart(c, task, () => {
+            // 改名是异步的，期间用户可能已经取消：不能把已取消的行翻成完成
+            if (task.status === 'canceled' || task.status === 'error') return;
             task.status = 'done';
             task.speed = 0;
             this._progress(task);
-          }
+          }, fail);
         });
       }
     };
 
     // ensure remote parent directory exists (avoid ENOENT / "No such file")
     const remoteParent = String(remotePath).replace(/\/[^/]*$/, '');
+    // 全程写 .part，整份落完才改名到位：取消或失败都不碰远端既有文件，它不会被截成半份
+    task.partPath = remotePath + '.' + task.taskId.slice(-6) + '.part';
     let retried = false;
     const openRemote = () => {
       this._mkdirp(c, remoteParent).then(() => {
-        // 等 mkdirp 期间任务可能已被取消：行已删除、清理判定也因 _touched 为假跳过了，
-        // 这时再 open('w') 会把远端既有文件截成 0 字节，且再没人负责恢复
+        // 等 mkdirp 期间任务可能已被取消：行已删除，这时再打开 .part 就没人负责清它
         if (task.status === 'canceled') return;
-        sftp.open(remotePath, 'w', (err, h) => {
+        sftp.open(task.partPath, 'w', (err, h) => {
           if (err) {
             // The directory cache goes stale when the remote tree changes underneath us
             if (!retried && this._isMissingEntry(err)) {
@@ -1023,8 +1056,10 @@ class SftpManager {
 
       if (task.status === 'canceled') return;
 
+      // 与上传同一条口径：先写 .part，整份齐了才改名，取消不会毁掉本机既有同名文件
+      task.partPath = localPath + '.' + task.taskId.slice(-6) + '.part';
       try {
-        outFd = fs.openSync(localPath, 'w');
+        outFd = fs.openSync(task.partPath, 'w');
       } catch (e) {
         return fail(
           Object.assign(new Error('cannot write local file: ' + `${e.code || ''} ${e.message}`.trim()), {
@@ -1088,11 +1123,14 @@ class SftpManager {
               handle = null;
               if (ce) return fail(ce);
               task.transferred = task.size || donePos;
-              if (task.status !== 'canceled' && task.status !== 'error') {
+              if (task.status === 'canceled' || task.status === 'error') return;
+              this._placeLocalPart(task, () => {
+                // 改名之前也可能被取消：行已经摘掉就不要把它报成完成
+                if (task.status === 'canceled' || task.status === 'error') return;
                 task.status = 'done';
                 task.speed = 0;
                 this._progress(task);
-              }
+              }, fail);
             });
           }
         };
@@ -1249,19 +1287,92 @@ class SftpManager {
     await Promise.all(Array.from({ length: Math.min(limit, pending.length) }, worker));
   }
 
-  /** Close fds first (Windows lock), then delete incomplete target file */
+  /**
+   * 把写完整的 .part 改名到目标位置。覆盖既有文件要用 posix-rename 扩展；
+   * 拿不到就先按标准改名（目标不存在时够用），再退化成「删目标 + 改名」：
+   * 内容此时已整份落在 .part 上，最坏情况是留着 .part 让用户找回，不会出现半份目标文件。
+   */
+  _placeRemotePart(c, task, onDone, onError) {
+    const sftp = c.sftp;
+    const partPath = task.partPath;
+    const target = task.targetPath;
+    const move = (cb) => {
+      try {
+        return sftp.ext_openssh_rename(partPath, target, cb);
+      } catch (_) {
+        return sftp.rename(partPath, target, cb);
+      }
+    };
+    move((err) => {
+      if (!err) return onDone();
+      this.log &&
+        this.log.warn('sftp', 'remote rename into place failed, retrying after unlink', {
+          host: c.host,
+          port: c.port,
+          path: target,
+          message: err.message,
+        });
+      sftp.unlink(target, (ue) => {
+        if (ue) {
+          return onError(
+            Object.assign(new Error('cannot replace the target file: ' + (ue.message || String(ue))), {
+              code: 'SFTP_TRANSFER',
+            })
+          );
+        }
+        sftp.rename(partPath, target, (re) => {
+          if (!re) return onDone();
+          onError(
+            Object.assign(
+              new Error('cannot move the uploaded part into place; it stays at ' + partPath),
+              { code: 'SFTP_TRANSFER' }
+            )
+          );
+        });
+      });
+    });
+  }
+
+  /** 本机侧同理：整份齐了才改名到位。Windows 的改名不覆盖既有文件，先删目标再改。 */
+  _placeLocalPart(task, onDone, onError) {
+    const partPath = task.partPath;
+    try {
+      fs.renameSync(partPath, task.targetPath);
+      return onDone();
+    } catch (e) {
+      try {
+        fs.rmSync(task.targetPath, { force: true });
+        fs.renameSync(partPath, task.targetPath);
+        return onDone();
+      } catch (e2) {
+        this.log &&
+          this.log.warn('sftp', 'local rename into place failed', {
+            path: task.targetPath,
+            part: partPath,
+            message: (e2 && e2.message) || String(e2),
+          });
+        onError(
+          Object.assign(
+            new Error('cannot move the downloaded part into place; it stays at ' + partPath),
+            { code: 'LOCAL_WRITE' }
+          )
+        );
+      }
+    }
+  }
+
+  /** Close fds first (Windows lock), then delete the leftover .part file — never the target */
   async cleanupPartialTarget(task) {
     if (!task) return;
     try {
       if (typeof task._release === 'function') task._release();
     } catch (_) {}
-    // 本次没打开过目标文件（还在排队/重连等握手）：删除目标等于毁掉覆盖前就存在的文件，直接放弃清理
-    if (!task._touched) return;
+    // 没打开过 .part（还在排队、重连等握手阶段）就没有残留可清；去删 targetPath 会毁掉覆盖前已存在的文件
+    if (!task._touched || !task.partPath) return;
+    const p = task.partPath;
     // give Windows a moment to drop the handle lock
     await new Promise((r) => setTimeout(r, 40));
-    if (!task.targetPath) return;
     if (task.direction === 'download') {
-      const p = task.targetPath;
       for (let i = 0; i < 6; i++) {
         try {
           if (!fs.existsSync(p)) return;
@@ -1281,17 +1392,17 @@ class SftpManager {
       if (c && c.sftp) {
         await new Promise((resolve) => {
           try {
-            c.sftp.unlink(task.targetPath, (err) => {
+            c.sftp.unlink(p, (err) => {
               this.log &&
                 (err
                   ? this.log.warn('sftp', 'unlink remote partial failed', {
                       host: c.host,
                       port: c.port,
-                      path: task.targetPath,
+                      path: p,
                       code: err.code,
                       message: err.message,
                     })
-                  : this.log.info('sftp', 'removed partial remote file', { host: c.host, path: task.targetPath }));
+                  : this.log.info('sftp', 'removed partial remote file', { host: c.host, path: p }));
               resolve();
             });
           } catch (_) {

@@ -540,9 +540,6 @@ import {
   LOG_TOTAL_MIN_MB,
   LOG_TOTAL_MAX_MB,
 } from '../../constants';
-import locale from 'element-ui/lib/locale';
-import zhLocale from 'element-ui/lib/locale/lang/zh-CN';
-import enLocale from 'element-ui/lib/locale/lang/en';
 
 /** 上下文窗口：界面按 k token 输入（1k = 1000 token），落盘仍是 token。 */
 const K_UNIT = 1000;
@@ -758,7 +755,7 @@ export default {
       try {
         s = unwrap(await api.getSettings());
       } catch (e) {
-        this.$message.error(e.message);
+        this.$message.error(connectionErrorMessage(e));
         return;
       }
       if (!s) return;
@@ -804,7 +801,6 @@ export default {
       applyTheme(s.theme || 'system');
       applyFont(s.font || 'default');
       setLocale(lang);
-      locale.use(lang === 'en' ? enLocale : zhLocale);
       store.localeTick++;
     },
     onFont(id) {
@@ -831,7 +827,7 @@ export default {
         if (s && s.dataPath) this.form.dataPath = s.dataPath;
         await refresh();
       } catch (e) {
-        this.$message.error(e.message);
+        this.$message.error(connectionErrorMessage(e));
       } finally {
         this.browsing = false;
       }
@@ -1202,7 +1198,7 @@ export default {
           this.$message.success(t('msg.settingsSaved'));
           this.visible = false;
         } catch (e) {
-          this.$message.error(e.message);
+          this.$message.error(connectionErrorMessage(e));
         } finally {
           this.saving = false;
         }

@@ -696,7 +696,9 @@ export default {
       let text = '';
       try {
         if (api.clipboardReadText) {
-          text = await api.clipboardReadText();
+          const raw = await api.clipboardReadText();
+          // 主进程出错时回包是 { __error, message, code } 对象，真值但不是文本，直接粘贴会变成 "[object Object]"
+          text = typeof raw === 'string' ? raw : '';
         }
       } catch (_) {
         text = '';

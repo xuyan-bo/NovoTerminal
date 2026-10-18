@@ -413,6 +413,10 @@ export default {
     this._pollTimer = null;
     if (this._doneToastTimer) clearTimeout(this._doneToastTimer);
     this._doneToastTimer = null;
+    if (this._dragPayloadTimer) clearTimeout(this._dragPayloadTimer);
+    this._dragPayloadTimer = null;
+    if (this._dragClearTimer) clearTimeout(this._dragClearTimer);
+    this._dragClearTimer = null;
     this.sessions.forEach((s) => this.releaseSession(s));
     if (this._offProgress) this._offProgress();
     if (this._offState) this._offState();
@@ -971,6 +975,7 @@ export default {
       if (!many) {
         if (!f.isDir) items.push({ act: 'edit', label: t('sftp.edit'), icon: 'el-icon-edit' });
         items.push({ act: 'rename', label: t('sftp.rename'), icon: 'el-icon-edit-outline' });
+        if (side === 'remote') items.push({ act: 'chmod', label: t('sftp.chmod'), icon: 'el-icon-setting' });
       }
       items.push({ act: 'delete', label: t('sftp.delete'), icon: 'el-icon-delete', danger: true });
       this.openCtxAt(e, side, f, items);
@@ -992,15 +997,12 @@ export default {
       const list = targets.length ? targets : item ? [item] : [];
       const localOf = (x) => localPathOf(this.localPath, x);
       const remoteOf = (x) => joinRemote(s.remotePath, x.name);
+      // 与面板拖拽那条同源：文件走 downloadPaths，目录走聚合任务，队列里能看到进度也能暂停取消
       const downloadList = async (dir) => {
-        for (const x of list) {
-          if (x.isDir) {
-            unwrap(await api.sftpLocalMkdir(dir, x.name));
-            await this.downloadRemoteDir(s, remoteOf(x), joinLocal(dir, x.name));
-          } else {
-            await this.startDownload(s, remoteOf(x), joinLocal(dir, x.name));
-          }
-        }
+        const dirs = list.filter((x) => x.isDir);
+        const files = list.filter((x) => !x.isDir);
+        if (files.length) await this.downloadPaths(s, files.map((x) => remoteOf(x)), dir);
+        for (const x of dirs) await this.transferFolderDownload(s, remoteOf(x), dir);
       };
       try {
         if (it.act === 'upload-folder' && item && item.isDir) {
@@ -1091,6 +1093,21 @@ export default {
             await this.goRemote(s, s.remotePath);
           }
           this.$message.success(t('sftp.renameDone', { name: neu }));
+          return;
+        }
+        if (it.act === 'chmod' && item && side === 'remote') {
+          // 行里的 mode 带类型位（0o100644 之类），只取权限三位给服务器改回去
+          const current = (((Number(item.mode) || 0) & 0o777) >>> 0).toString(8).padStart(3, '0');
+          const r = await this.$prompt(t('sftp.chmodMsg'), t('sftp.chmodTitle'), {
+            confirmButtonText: t('msg.confirm'),
+            cancelButtonText: t('msg.cancel'),
+            inputValue: current,
+            inputPattern: /^[0-7]{1,3}$/,
+            inputErrorMessage: t('sftp.chmodInvalid'),
+          });
+          unwrap(await api.sftpChmod(s.connId, remoteOf(item), String(r.value).trim()));
+          await this.goRemote(s, s.remotePath);
+          this.$message.success(t('sftp.chmodDone'));
           return;
         }
         if (it.act === 'delete' && list.length) {

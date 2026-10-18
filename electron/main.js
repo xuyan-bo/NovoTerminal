@@ -1085,7 +1085,7 @@ function registerIpc() {
     const s = store.getSettings();
     return isMainWindow(sender) ? s : withoutAiKeys(s);
   }, true);
-  handle('store:update-settings', (patch) => {
+  handle('store:update-settings', (sender, patch) => {
     const clean = patch && typeof patch === 'object' ? { ...patch } : {};
     // 存储位置只经 app:browse-data-path 走 switchDataPath 生效，那里会一起搬日志与 AI 会话；
     // 从这条通道写 dataPath 会让指针文件、日志目录和数据文件三者分家，一律拒收。
@@ -1137,8 +1137,9 @@ function registerIpc() {
       aiServices: ai ? ai.services.length : undefined,
       aiModels: ai ? ai.services.reduce((n, sv) => n + sv.models.length, 0) : undefined,
     });
-    return s;
-  });
+    // 回包里带着 AI Key，所以与 store:settings 共用同一道闸门：只有宿主窗口拿得到完整设置
+    return isMainWindow(sender) ? s : withoutAiKeys(s);
+  }, true);
   /** Get the current main window HWND so the native auth dialog can be parented to it */
   function mainWindowHwnd() {
     if (process.platform !== 'win32') return 0;
@@ -2249,6 +2250,14 @@ function registerIpc() {
     if (p != null && typeof p !== 'string') throw sftpBadPath();
     return typeof p === 'string' ? p : '';
   };
+  /** 权限只收 1~3 位八进制数字串，交给 parseInt 之前先挡住任意字符串 */
+  const sftpMode = (v) => {
+    const s = String(v == null ? '' : v).trim();
+    if (!/^[0-7]{1,3}$/.test(s)) {
+      throw Object.assign(new Error('invalid file mode'), { code: 'SFTP_MODE' });
+    }
+    return parseInt(s, 8);
+  };
   const sftpLocalPath = (p) => {
     if (typeof p !== 'string' || !p || !path.isAbsolute(p)) throw sftpBadPath();
     // Windows 下 '/x' 只是当前盘的根相对路径，不能当作绝对目录用
@@ -2284,12 +2293,14 @@ function registerIpc() {
     editManager.openRemote({ ownerId: sender.id, connId: sftpConnOwner(sender, connId), remotePath: sftpRemotePath(remotePath) }), true);
   handle('sftp:local-exists', (sender, p) => sftpManager.localExists(sftpLocalPath(p)), true);
   handle('sftp:local-list', (sender, p) => sftpManager.localList(sftpLocalPathOrHome(p)), true);
-  handle('sftp:drives', () => sftpManager.drives());
+  handle('sftp:drives', () => sftpManager.drives(), true);
   handle('sftp:mkdir', (sender, connId, remotePath) => sftpManager.mkdir(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
   handle('sftp:mkdirp', (sender, connId, remotePath) => sftpManager.mkdirp(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);
   handle('sftp:rename', (sender, connId, oldPath, newPath) => sftpManager.rename(sftpConnOwner(sender, connId), sftpRemotePath(oldPath), sftpRemotePath(newPath)), true);
   handle('sftp:unlink', (sender, connId, remotePath, isDir) =>
     sftpManager.unlink(sftpConnOwner(sender, connId), sftpRemotePath(remotePath), !!isDir), true);
+  handle('sftp:chmod', (sender, connId, remotePath, mode) =>
+    sftpManager.chmod(sftpConnOwner(sender, connId), sftpRemotePath(remotePath), sftpMode(mode)), true);
   handle('sftp:local-mkdir', (sender, dirPath, name) => sftpManager.localMkdir(sftpLocalPath(dirPath), sftpLocalName(name)), true);
   handle('sftp:create-file', (sender, connId, remotePath) =>
     sftpManager.createFile(sftpConnOwner(sender, connId), sftpRemotePath(remotePath)), true);

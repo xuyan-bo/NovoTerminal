@@ -57,10 +57,12 @@ export default {
   onDragEnd() {
     this.dropHi = '';
     // keep _lastDrag until drop handled; clear payload late
-    setTimeout(() => {
+    clearTimeout(this._dragPayloadTimer);
+    clearTimeout(this._dragClearTimer);
+    this._dragPayloadTimer = setTimeout(() => {
       this.dragPayload = null;
     }, 100);
-    setTimeout(() => {
+    this._dragClearTimer = setTimeout(() => {
       this._lastDrag = null;
     }, 4000);
   },

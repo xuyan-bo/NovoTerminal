@@ -274,7 +274,7 @@ export default {
         }
       } catch (err) {
         this.treeRev++;
-        this.$message.error(err.message || String(err));
+        this.$message.error(connectionErrorMessage(err));
       }
       this.syncExpansion();
     },
@@ -401,7 +401,7 @@ export default {
           this.syncExpansion();
         }
       } catch (err) {
-        if (err !== 'cancel') this.$message.error(err.message || String(err));
+        if (err !== 'cancel') this.$message.error(connectionErrorMessage(err));
       }
     },
     async connect(asset, method) {

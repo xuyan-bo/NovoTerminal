@@ -99,7 +99,7 @@
 </template>
 
 <script>
-import { store, api, unwrap } from '../../store';
+import { connectionErrorMessage, store, api, unwrap } from '../../store';
 import { t } from '../../i18n';
 import CtxMenu from '../common/CtxMenu.vue';
 
@@ -193,7 +193,7 @@ export default {
           await this.load();
         }
       } catch (e) {
-        this.$message.error(e.message || String(e));
+        this.$message.error(connectionErrorMessage(e));
       } finally {
         this.loading = false;
       }
@@ -240,7 +240,7 @@ export default {
         this.page = 1;
         this.$message.success(t('log.cleared'));
       } catch (e) {
-        this.$message.error(e.message || String(e));
+        this.$message.error(connectionErrorMessage(e));
       }
     },
     fmtTime(ms) {

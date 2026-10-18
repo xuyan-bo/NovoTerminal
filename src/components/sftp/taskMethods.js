@@ -403,7 +403,19 @@ export default {
       const unchanged =
         next.length === s.tasks.length && next.every((row, i) => row === s.tasks[i]);
       if (!unchanged) s.tasks = next;
-    } catch (_) {}
+      s.syncFailed = false;
+    } catch (e) {
+      // 这条每秒轮询只在刚坏和修好时各记一次，否则一次 IPC 故障会把日志刷满
+      if (s && !s.syncFailed) {
+        s.syncFailed = true;
+        api.logWrite?.({
+          level: 'warn',
+          source: 'sftp',
+          message: 'sftp task poll failed',
+          meta: { connId, code: e.code || 'ERROR', message: e.message || String(e) },
+        })?.catch(() => {});
+      }
+    }
   },
   /** Pause the scan loop too, so queued files do not start while the folder is paused. */
   waitForResume(state) {

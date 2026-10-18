@@ -66,7 +66,7 @@
 </template>
 
 <script>
-import { store, createGroup, updateGroup } from '../../store';
+import { connectionErrorMessage, store, createGroup, updateGroup } from '../../store';
 import { t } from '../../i18n';
 import { cascaderOptions, folderIdPath, subtreeIds } from '../../lib/assetTree';
 
@@ -215,7 +215,7 @@ export default {
           }
           this.visible = false;
         } catch (e) {
-          this.$message.error(e.message);
+          this.$message.error(connectionErrorMessage(e));
         } finally {
           this.saving = false;
         }

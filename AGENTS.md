@@ -42,7 +42,7 @@
 | `electron/store/`、`electron/auth/` | 持久化与系统身份验证；UI 不绕过这些边界自行实现 |
 | `scripts/` | 构建钩子与工具（`build-mac-auth.cjs`、`afterPack.cjs`、`gen-os-icons.js`）及开发期 SSH 检查脚本；不参与运行时，新增文件须同步 `.gitignore` 的 `/scripts/*` 例外 |
 
-- 普通页面使用 store 页签；SFTP 使用独立窗口的 `#sftp?assetId=...` 入口，拆分出去的会话窗口使用 `#window?gid=…`（一个窗口承载多条页签），两者都不擅自迁移为另一套路由。
+- 普通页面使用 store 页签；SFTP 使用独立窗口的 `#/sftp` 入口（会话由 `sftp:add-session` 事件交给面板，不靠 URL 传资产），拆分出去的会话窗口使用 `#window?gid=…`（一个窗口承载多条页签），两者都不擅自迁移为另一套路由。
 - SSH 实际使用主进程 ssh2 与渲染进程 xterm；VNC 使用主进程代理与 noVNC；不能把 `SessionManager` 的 SSH/VNC 占位适配器当作真实连接实现。
 - 重型会话组件通过异步 import 按需加载，不能为了读取常量反向引入整个视图或主进程模块。
 - `README.md` 可作背景参考，实现与其不一致时应核对代码；项目不再维护设计说明、路线图与交互原型，历史目标一律以当前代码为准，不得据此推断已实现功能。

@@ -739,12 +739,7 @@ function isReadOnly(command, family = 'posix') {
 const TOOL_OUTPUT_LIMIT = 6000;
 /** 文件工具的行窗口与整文件上限：读窗口对齐 clip() 的体量；写上限要给 base64 留出 Linux 单参数 128KB（MAX_ARG_STRLEN）的空间。 */
 const FILE_LINE_CAP = 500;
-const FILE_MAX_LINES = 20000;
 const FILE_MAX_BYTES = 80 * 1024;
-/** 审批卡片里「改前」只给命中处前后各这么多行：整文件贴上来用户看不清，改动本身才是要确认的东西。 */
-const FILE_DIFF_PAD = 5;
-/** 卡片改前/改后的字数上限：会话记录按 4000 字存，clip 还要留出截断标记的位置，所以取更小的预算。 */
-const FILE_CARD_CHARS = 3900;
 /** 探针标记：存在与非空各带一个回来，不靠退出码猜——sed/tail 读不到（没权限）和文件不存在都是非零。 */
 const FILE_MARK_EXIST = '@@NOVO-E';
 const FILE_MARK_SIZE = '@@NOVO-S';
@@ -807,13 +802,13 @@ const DEFINITIONS = [
     type: 'function',
     function: {
       name: 'write_file',
-      description: '把整份内容写入这台主机上的文本文件（POSIX 主机），覆盖已有内容；只用来新建文件或整份重写。改其中几行请用 edit_file，不要用这里。写前必须先 read_file 拿全当前内容再改，绝不能只凭记忆重写。执行前用户会在确认卡片里看到改前与改后的内容。',
+      description: '把整份内容写入这台主机上的文本文件（POSIX 主机），覆盖已有内容；只用来新建文件或整份重写。改其中几行请用 edit_file，不要用这里。写前必须先 read_file 拿全当前内容再改，绝不能只凭记忆重写。确认卡片只显示目标文件路径与 rationale 这一句，用户看不到文件内容，所以 rationale 要讲清新建还是覆盖、文件会变成什么。',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: '文件绝对路径' },
           content: { type: 'string', description: '要写入的完整文件内容' },
-          rationale: { type: 'string', description: '一句话说明这次写入要达成什么，会展示给用户确认' },
+          rationale: { type: 'string', description: '确认卡片正文给用户看的一句话：这次把这个文件改成什么，是用户允许或拒绝的唯一依据' },
           mkdir_parent: { type: 'boolean', description: '父目录不存在时是否创建，默认不创建' },
         },
         required: ['path', 'content'],
@@ -824,7 +819,7 @@ const DEFINITIONS = [
     type: 'function',
     function: {
       name: 'edit_file',
-      description: '改这台主机上文本文件的局部内容（POSIX 主机），改几行就用它，不必重写整个文件。mode=append 把 content 追加到文件末尾，不需要先读全文（文件末尾缺换行会自动补一个，避免末行和新内容粘成一行）；mode=replace 用 old_string 逐字匹配文件里的一段原文并换成 new_string，old_string 必须原样来自 read_file 的输出，含缩进和空格，出现多次时会要求你扩大上下文或改用 replace_all。replace 会先把整个文件读到本地改好再写回，所以超过大小上限的文件改不了。执行前用户会在确认卡片里看到改前与改后的内容。',
+      description: '改这台主机上文本文件的局部内容（POSIX 主机），改几行就用它，不必重写整个文件。mode=append 把 content 追加到文件末尾，不需要先读全文（文件末尾缺换行会自动补一个，避免末行和新内容粘成一行）；mode=replace 用 old_string 逐字匹配文件里的一段原文并换成 new_string，old_string 必须原样来自 read_file 的输出，含缩进和空格，出现多次时会要求你扩大上下文或改用 replace_all。replace 会先把整个文件读到本地改好再写回，所以超过大小上限的文件改不了。确认卡片只显示目标文件路径、rationale 与追加或替换的落点，用户看不到文件内容，所以 rationale 要讲清这段改动把文件换成什么。',
       parameters: {
         type: 'object',
         properties: {
@@ -834,7 +829,7 @@ const DEFINITIONS = [
           old_string: { type: 'string', description: 'replace 模式要替换的原文，逐字来自当前文件' },
           new_string: { type: 'string', description: 'replace 模式换上的新文本，留空表示删掉这段原文' },
           replace_all: { type: 'boolean', description: 'replace 模式下 old_string 出现多次时是否全部替换，默认否' },
-          rationale: { type: 'string', description: '一句话说明这次修改要达成什么，会展示给用户确认' },
+          rationale: { type: 'string', description: '确认卡片正文给用户看的一句话：这次要把文件的哪一段换成什么，是用户允许或拒绝的唯一依据' },
           mkdir_parent: { type: 'boolean', description: 'append 到尚不存在的文件时是否创建父目录，默认不创建' },
         },
         required: ['path', 'mode'],
@@ -1128,16 +1123,6 @@ function createTools(ctx) {
     return { ok: true };
   }
 
-  /** 审批卡片只给命中处前后各若干行：整文件贴上来反而看不出这次改了什么。 */
-  function excerpt(text, at, length) {
-    const lines = text.split('\n');
-    const startLine = text.slice(0, at).split('\n').length - 1;
-    const endLine = startLine + text.slice(at, at + length).split('\n').length - 1;
-    const from = Math.max(0, startLine - FILE_DIFF_PAD);
-    const to = Math.min(lines.length, endLine + FILE_DIFF_PAD + 1);
-    return (from > 0 ? '…\n' : '') + lines.slice(from, to).join('\n') + (to < lines.length ? '\n…' : '');
-  }
-
   async function writeFile(rawPath, opts = {}) {
     const path = typeof rawPath === 'string' ? rawPath.trim() : rawPath;
     const blocked = await fileGuard(path);
@@ -1149,29 +1134,21 @@ function createTools(ctx) {
       return { channel: 'file', failed: true, text: '内容超过 ' + FILE_MAX_BYTES + ' 字节上限，文件工具写不了这么大的整文件，请改用 run_command 分段处理。' };
     }
     const started = Date.now();
-    // 写之前先读当前内容进审批卡片：用户点允许/拒绝靠的就是这份改前对照。
-    // 存在与否用标记判断而不是退出码：文件读不到（没权限）时 sed 也给非零码，按不存在处理会走 mv，
-    // 把已有文件的 inode、权限和属主一起换掉。
-    let oldCard = '';
+    // 探针只定新建还是覆盖：新建走 mv、覆盖就地写，判错会把已有文件的 inode、权限和属主一起换掉。
+    // 与其他文件探针一样用标记回包，不靠退出码。
     let oldMissing = false;
     try {
-      const probe = await runExec(markProbe(path, "sed -n '1," + FILE_MAX_LINES + "p' " + sq(path) + " 2>/dev/null"));
-      const marks = probeMarks(probe.stdout);
-      oldMissing = !marks.exists;
-      if (marks.exists) oldCard = marks.nonEmpty ? clip(marks.rest, FILE_CARD_CHARS) || '（文件当前内容读不到）' : '';
+      const probe = await runExec(markProbe(path, ':'));
+      oldMissing = !probeMarks(probe.stdout).exists;
     } catch (error) {
       if (error.code === 'SSH_EXEC_CANCELED') return { channel: 'file', canceled: true, text: '用户已停止这一轮，文件没有写入。' };
-      log && log.warn('ai', 'ai write_file read current content failed', { sessionId, host: target.host, path, message: error.message });
-      oldCard = '(读取当前内容失败：' + error.message + ')';
+      log && log.warn('ai', 'ai write_file probe failed', { sessionId, host: target.host, path, message: error.message });
     }
     if (settings.permission !== 'full') {
       const decision = await requestApproval({
         name: 'write_file',
         command: path,
-        subject: 'file',
-        old: oldCard,
-        new: clip(content, FILE_CARD_CHARS),
-        reason: opts.rationale || '',
+        reason: (opts.rationale ? opts.rationale + ' · ' : '') + (oldMissing ? '新建文件，' : '覆盖原文件，') + buf.length + ' 字节',
       });
       if (decision !== 'allow') {
         return decision === 'deny'
@@ -1206,31 +1183,24 @@ function createTools(ctx) {
       if (payload.length > FILE_MAX_BYTES) {
         return { channel: 'file', failed: true, text: '一次追加不能超过 ' + FILE_MAX_BYTES + ' 字节，请分成几次。' };
       }
-      // 卡片给出落点，同时判断要不要补换行：追加不能把原末行和新内容粘成一行。
-      // 读不到（没权限）与空文件都只给非零码，所以用 markProbe 的两个标记区分。
+      // 落点由卡片 reason 给出；这里判断的是要不要补一个换行——追加不能把原末行和新内容粘成一行。
+      // 存在与非空各带回一个标记，不靠退出码：读不到（没权限）与文件不存在都是非零。
       let exists = false;
-      let nonEmpty = false;
       let tail = '';
       try {
         const probe = await runExec(markProbe(path, 'tail -n 20 ' + sq(path) + ' 2>/dev/null'));
         const marks = probeMarks(probe.stdout);
         exists = marks.exists;
-        nonEmpty = marks.nonEmpty;
         tail = marks.rest;
       } catch (error) {
         if (error.code === 'SSH_EXEC_CANCELED') return { channel: 'file', canceled: true, text: '用户已停止这一轮，文件没有写入。' };
         log && log.warn('ai', 'ai edit_file read tail failed', { sessionId, host: target.host, path, message: error.message });
       }
       const sep = exists && tail.length && !tail.endsWith('\n') ? '\n' : '';
-      let oldCard = '';
-      if (exists) oldCard = tail ? '…（文件末尾）\n' + tail : (nonEmpty ? '（文件当前内容读不到）' : '');
       if (settings.permission !== 'full') {
         const decision = await requestApproval({
           name: 'edit_file',
           command: path,
-          subject: 'file',
-          old: clip(oldCard, FILE_CARD_CHARS),
-          new: clip(added, FILE_CARD_CHARS),
           reason: (opts.rationale ? opts.rationale + ' · ' : '') + '追加到文件末尾',
         });
         if (decision !== 'allow') {
@@ -1283,9 +1253,6 @@ function createTools(ctx) {
       const decision = await requestApproval({
         name: 'edit_file',
         command: path,
-        subject: 'file',
-        old: clip(excerpt(text, at, needle.length), FILE_CARD_CHARS),
-        new: clip(excerpt(nextText, at, replacement.length), FILE_CARD_CHARS),
         reason: (opts.rationale ? opts.rationale + ' · ' : '') + '替换 ' + (opts.replaceAll === true ? hits : 1) + ' 处',
       });
       if (decision !== 'allow') {

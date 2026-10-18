@@ -263,9 +263,10 @@ function packBackup({ store, include, password, appVersion }) {
   const counts = {};
 
   if (cats.includes('settings') && snap.settings) {
-    // dataPath 是本机路径，带到另一台机器只会指向不存在的目录
+    // dataPath 与 fileEditor 都是本机路径，带到另一台机器只会指向不存在的目录或程序
     const settings = { ...snap.settings };
     delete settings.dataPath;
+    delete settings.fileEditor;
     entries.push({ name: SETTINGS_ENTRY, data: Buffer.from(JSON.stringify(settings, null, 2), 'utf8') });
   }
   if (cats.includes('assets')) {

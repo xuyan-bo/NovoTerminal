@@ -140,7 +140,7 @@
 </template>
 
 <script>
-import { store, api, unwrap } from '../../store';
+import { connectionErrorMessage, store, api, unwrap } from '../../store';
 import {
   ADVANCED_FIELDS,
   ADVANCED_DEFAULTS,
@@ -317,7 +317,7 @@ export default {
           this.$message.error(t('adv.rdp.clientPath.wrongFile'));
         }
       } catch (e) {
-        this.$message.error(e.message || t('err.connect'));
+        this.$message.error(connectionErrorMessage(e));
       }
     },
     selectOptionRule(f) {

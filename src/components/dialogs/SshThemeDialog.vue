@@ -70,7 +70,7 @@
 </template>
 
 <script>
-import { api, unwrap, findAsset, refresh, store } from '../../store';
+import { connectionErrorMessage, api, unwrap, findAsset, refresh, store } from '../../store';
 import { resolveSshTheme } from '../../constants';
 import { t } from '../../i18n';
 
@@ -163,7 +163,7 @@ export default {
           level: 'error', source: 'settings', message: 'ssh theme save failed',
           meta: { assetId: this.assetId, code: e.code },
         }).catch(() => {});
-        this.$message.error(e.message || t('err.connect'));
+        this.$message.error(connectionErrorMessage(e));
       } finally {
         this.saving = false;
       }

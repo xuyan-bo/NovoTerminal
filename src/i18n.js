@@ -1,6 +1,9 @@
 /** Lightweight i18n — reactive via Vue.observable after setLocale */
 
 import { UI_FONTS } from './constants';
+import elementLocale from 'element-ui/lib/locale';
+import zhLocale from 'element-ui/lib/locale/lang/zh-CN';
+import enLocale from 'element-ui/lib/locale/lang/en';
 
 const dict = {
   zh: {
@@ -358,6 +361,10 @@ const dict = {
     'adv.sftp.timeout': '连接超时（秒）',
     'adv.sftp.timeoutPh': '默认 20 · 整数 5–300',
     'adv.sftp.timeoutHint': '涵盖 SSH 握手、认证与 SFTP 子系统初始化；跳板机链路较长时可适当加大。',
+    'adv.sftp.overwrite': '同名文件时',
+    'adv.sftp.overwrite.ask': '每次询问',
+    'adv.sftp.overwrite.replace': '直接覆盖',
+    'adv.sftp.overwrite.skip': '跳过不传',
     'msg.advSaved': '高级设置已保存',
     'ssh.reconnect': '重连',
     'ssh.disconnect': '断开',
@@ -560,7 +567,7 @@ const dict = {
     'settings.ai.addService': '添加服务商',
     'settings.ai.deleteService': '删除',
     'settings.ai.deleteServiceConfirm': '确定删除服务商「{name}」？该服务商下配置的所有模型也将一并移除。',
-    'settings.ai.servicesTip': '每个服务商对应一个兼容 OpenAI 标准的接口及若干模型。API Key 仅保存在本机配置中，不会写入导出文件或日志。',
+    'settings.ai.servicesTip': '每个服务商对应一个兼容 OpenAI 标准的接口及若干模型。API Key 仅保存在本机配置中，不会写入日志；导出备份时会连同配置一起加密保存。',
     'settings.ai.baseUrl': '服务商地址（Base URL）',
     'settings.ai.apiKey': 'API Key',
     'settings.ai.models': '模型',
@@ -663,6 +670,11 @@ const dict = {
     'sftp.edit': '编辑文件',
     'sftp.rename': '重命名',
     'sftp.renameTo': '新名称',
+    'sftp.chmod': '权限',
+    'sftp.chmodTitle': '修改权限',
+    'sftp.chmodMsg': '请输入八进制权限，例如 644',
+    'sftp.chmodInvalid': '权限需为 1~3 位八进制数字',
+    'sftp.chmodDone': '权限已更新',
     'sftp.delete': '删除',
     'sftp.confirmDelete': '删除「{name}」？',
     'sftp.confirmDeleteMulti': '确认删除选中的 {count} 项？',
@@ -773,6 +785,18 @@ const dict = {
     'err.SSH_CONFIG': 'SSH 连接配置无效',
     'err.SSH_AUTH_PROMPT': 'SSH 认证交互已中断',
     'err.SSH_AUTH_RESPONSE': 'SSH 认证应答无效',
+    'err.SSH_AUTH_FAILED': 'SSH 认证失败，请检查用户名、密码或私钥口令',
+    'err.SSH_KEYBOARD_REQUIRED': '该服务器要求键盘交互认证，当前连接无法弹出提问',
+    'err.SSH_KEYBOARD_RESPONSE': 'SSH 键盘交互应答无效',
+    'err.SSH_ERROR': 'SSH 连接失败',
+    'err.SSH_TIMEOUT': 'SSH 连接超时',
+    'err.SSH_ENDED': 'SSH 连接在完成认证前已断开',
+    'err.SSH_KEY_PARSE': '私钥无法解析，或口令不正确',
+    'err.SSH_INTERACTION': '已有认证交互在等待，请先回答上一个小问题',
+    'err.SSH_INTERACTION_TIMEOUT': 'SSH 认证交互等待超时',
+    'err.SSH_FORWARD': 'SSH 跳板转发通道建立失败',
+    'err.SSH_X11_DISPLAY': 'X11 转发需要本机可用的 X 服务器与 DISPLAY（例如 :0），不支持远程显示器',
+    'err.SSH_X11_AUTH': 'X11 转发取不到本机 MIT-MAGIC-COOKIE-1，请检查 XAUTHORITY 与 X 服务器的 cookie 访问控制',
     'err.SSH_HOST_KEY_UNKNOWN': '服务器主机密钥未受信，需先确认指纹',
     'err.SSH_HOST_KEY_CONFIRM_REQUIRED': '需要确认服务器主机密钥后才能连接',
     'err.SSH_HOST_KEY_REJECTED': '服务器主机密钥已被拒绝，无法连接',
@@ -788,6 +812,7 @@ const dict = {
     'err.VNC_CANCELED': '会话窗口已关闭，VNC 连接已取消',
     'err.RDP_PROXY_ERROR': 'RDP 本地代理启动失败',
     'err.RDCLEANPATH_FAILED': 'RDP 握手失败',
+    'err.RDP_DEST_MISMATCH': '服务器返回的连接目标与请求不一致，已拒绝连接',
     'err.RDP_CANCELED': '会话窗口已关闭，RDP 连接已取消',
     'err.SPAWN_FAILED': '无法启动远程桌面客户端',
     'err.NO_HOST': '资产未填写主机地址',
@@ -799,6 +824,10 @@ const dict = {
     'err.STORE_FORMAT': '配置库内容格式错误',
     'err.UPDATE_UNAVAILABLE': '更新检查暂不可用，请稍后再试',
     'err.SFTP_UNAVAILABLE': '服务器未开放 SFTP 子系统',
+    'err.SFTP_TRANSFER': '文件传输失败',
+    'err.SFTP_CHMOD': '无法修改远端文件权限',
+    'err.SFTP_MODE': '权限值无效',
+    'err.INVALID_EDITOR': '文件编辑器必须指向一个可执行程序',
     'err.mstscNotFound': '未找到 mstsc 远程桌面程序',
     'err.rdpWindowsOnly': 'mstsc RDP 仅支持 Windows',
     'err.xfreerdpNotFound': '未找到 xfreerdp（FreeRDP），请先安装：macOS 执行 brew install freerdp，Linux 执行 apt install freerdp2-x11',
@@ -1180,6 +1209,10 @@ const dict = {
     'adv.sftp.timeout': 'Connect timeout (seconds)',
     'adv.sftp.timeoutPh': 'Default 20 · integer 5–300',
     'adv.sftp.timeoutHint': 'Covers the SSH handshake, authentication and SFTP subsystem initialization. Raise it for long proxy-jump chains.',
+    'adv.sftp.overwrite': 'On name conflict',
+    'adv.sftp.overwrite.ask': 'Ask each time',
+    'adv.sftp.overwrite.replace': 'Overwrite',
+    'adv.sftp.overwrite.skip': 'Skip',
     'msg.advSaved': 'Advanced settings saved',
     'ssh.reconnect': 'Reconnect',
     'ssh.disconnect': 'Disconnect',
@@ -1382,7 +1415,7 @@ const dict = {
     'settings.ai.addService': 'Add provider',
     'settings.ai.deleteService': 'Delete',
     'settings.ai.deleteServiceConfirm': 'Delete provider “{name}”? All models configured under this provider will also be removed.',
-    'settings.ai.servicesTip': 'Each provider corresponds to one OpenAI-compatible endpoint and its models. API keys are stored only in the local configuration and never written to export files or logs.',
+    'settings.ai.servicesTip': 'Each provider maps to one OpenAI-compatible endpoint and its models. API keys live only in the local config, are never written to logs, and travel inside a backup file only as part of its encrypted payload.',
     'settings.ai.baseUrl': 'Provider Base URL',
     'settings.ai.apiKey': 'API Key',
     'settings.ai.models': 'Models',
@@ -1485,6 +1518,11 @@ const dict = {
     'sftp.edit': 'Edit File',
     'sftp.rename': 'Rename',
     'sftp.renameTo': 'New name',
+    'sftp.chmod': 'Permissions',
+    'sftp.chmodTitle': 'Change permissions',
+    'sftp.chmodMsg': 'Enter the octal permission, for example 644',
+    'sftp.chmodInvalid': 'Use 1–3 octal digits',
+    'sftp.chmodDone': 'Permissions updated',
     'sftp.delete': 'Delete',
     'sftp.confirmDelete': 'Delete “{name}”?',
     'sftp.confirmDeleteMulti': 'Delete the {count} selected items?',
@@ -1595,6 +1633,18 @@ const dict = {
     'err.SSH_CONFIG': 'Invalid SSH connection settings',
     'err.SSH_AUTH_PROMPT': 'SSH authentication exchange was interrupted',
     'err.SSH_AUTH_RESPONSE': 'Invalid SSH authentication response',
+    'err.SSH_AUTH_FAILED': 'SSH authentication failed — check the username, password or private key passphrase',
+    'err.SSH_KEYBOARD_REQUIRED': 'The server requires keyboard-interactive authentication, which this connection cannot prompt for',
+    'err.SSH_KEYBOARD_RESPONSE': 'Invalid SSH keyboard-interactive response',
+    'err.SSH_ERROR': 'SSH connection failed',
+    'err.SSH_TIMEOUT': 'SSH connection timed out',
+    'err.SSH_ENDED': 'The SSH connection closed before authentication finished',
+    'err.SSH_KEY_PARSE': 'Cannot parse the private key, or the passphrase is wrong',
+    'err.SSH_INTERACTION': 'Another authentication prompt is still waiting — answer it first',
+    'err.SSH_INTERACTION_TIMEOUT': 'Timed out waiting for the SSH authentication prompt',
+    'err.SSH_FORWARD': 'The SSH jump-host forwarding channel failed',
+    'err.SSH_X11_DISPLAY': 'X11 forwarding needs a local X server and DISPLAY (for example :0); remote displays are not supported',
+    'err.SSH_X11_AUTH': 'No local MIT-MAGIC-COOKIE-1 for X11 forwarding — check XAUTHORITY and the X server cookie access control',
     'err.SSH_HOST_KEY_UNKNOWN': 'The server host key is not trusted; verify its fingerprint first',
     'err.SSH_HOST_KEY_CONFIRM_REQUIRED': 'Verify the server host key before connecting',
     'err.SSH_HOST_KEY_REJECTED': 'The server host key was rejected; cannot connect',
@@ -1610,6 +1660,7 @@ const dict = {
     'err.VNC_CANCELED': 'The session window closed; VNC connection canceled',
     'err.RDP_PROXY_ERROR': 'Failed to start the local RDP proxy',
     'err.RDCLEANPATH_FAILED': 'RDP handshake failed',
+    'err.RDP_DEST_MISMATCH': 'The server returned a different connection target than requested; connection refused',
     'err.RDP_CANCELED': 'The session window closed; RDP connection canceled',
     'err.SPAWN_FAILED': 'Unable to start the remote desktop client',
     'err.NO_HOST': 'The asset has no host address',
@@ -1621,6 +1672,10 @@ const dict = {
     'err.STORE_FORMAT': 'The library file is malformed',
     'err.UPDATE_UNAVAILABLE': 'Update check is unavailable, please retry later',
     'err.SFTP_UNAVAILABLE': 'The server does not expose the SFTP subsystem',
+    'err.SFTP_TRANSFER': 'File transfer failed',
+    'err.SFTP_CHMOD': 'Cannot change the remote file permissions',
+    'err.SFTP_MODE': 'Invalid permission value',
+    'err.INVALID_EDITOR': 'The file editor must point to an executable program',
     'err.mstscNotFound': 'mstsc client not found',
     'err.rdpWindowsOnly': 'mstsc RDP is only supported on Windows',
     'err.xfreerdpNotFound': 'xfreerdp (FreeRDP) not found. Install via brew install freerdp on macOS, or apt install freerdp2-x11 on Linux.',
@@ -1656,6 +1711,9 @@ export const i18n = {
 export function setLocale(locale) {
   i18n.locale = locale === 'en' ? 'en' : 'zh';
   document.documentElement.lang = i18n.locale === 'zh' ? 'zh-CN' : 'en';
+  // Element 内置文案（分页、表格空态、日期控件）只有 locale.use 才换，
+  // 走这条唯一入口，备份导入与快照刷新才不会只换掉自有文案。
+  elementLocale.use(i18n.locale === 'zh' ? zhLocale : enLocale);
 }
 
 export function t(key, params) {

@@ -176,6 +176,7 @@ const api = {
   sftpMkdirp: (connId, remotePath) => ipcRenderer.invoke('sftp:mkdirp', connId, remotePath),
   sftpRename: (connId, oldPath, newPath) => ipcRenderer.invoke('sftp:rename', connId, oldPath, newPath),
   sftpUnlink: (connId, remotePath, isDir) => ipcRenderer.invoke('sftp:unlink', connId, remotePath, isDir),
+  sftpChmod: (connId, remotePath, mode) => ipcRenderer.invoke('sftp:chmod', connId, remotePath, mode),
   sftpLocalMkdir: (dirPath, name) => ipcRenderer.invoke('sftp:local-mkdir', dirPath, name),
   sftpLocalCreateFile: (dirPath, name) => ipcRenderer.invoke('sftp:local-create-file', dirPath, name),
   sftpLocalRename: (oldPath, newPath) => ipcRenderer.invoke('sftp:local-rename', oldPath, newPath),

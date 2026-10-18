@@ -273,11 +273,6 @@ function normalizeMessage(m) {
       // 读不懂的结论按「未允许」处理：脏记录不能伪装成用户点过允许。timeout 是旧记录里的「整轮被停止」
       decision: ['allow', 'deny', 'canceled', 'ended', 'timeout'].includes(m.decision) ? m.decision : 'deny',
     };
-    if (m.subject === 'file') {
-      out.subject = 'file';
-      out.old = str(m.old, OUTPUT_CHARS);
-      out.new = str(m.new, OUTPUT_CHARS);
-    }
     return out;
   }
   if (m.role === 'think') {

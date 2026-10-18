@@ -440,7 +440,6 @@ function rowsFromRecord(record) {
     } else if (e.role === 'approval') {
       useTurn().nodes.push({
         key: nextKey(), nk: 'ask', requestId: '', name: e.name, command: e.command || '', reason: e.reason || '',
-        subject: e.subject || '', old: e.old || '', new: e.new || '',
         readOnly: !!e.readOnly, decided: e.decision || 'deny', askedAt: 0, open: false,
       });
     } else if (e.role === 'choice') {
@@ -757,7 +756,6 @@ export default {
         } else {
           turn.nodes.push({
             key: nextKey(), nk: 'ask', requestId: p.requestId, name: p.name || '', command: p.command || '',
-            subject: p.subject || '', old: p.old || '', new: p.new || '',
             reason: p.reason || '', readOnly: !!p.readOnly, decided: '', askedAt, open: false,
           });
         }
@@ -910,7 +908,6 @@ export default {
         turn.live = '';
         const node = {
           key: nextKey(), nk: 'ask', requestId: ev.requestId, name: ev.name, command: ev.command || '',
-          subject: ev.subject || '', old: ev.old || '', new: ev.new || '',
           reason: ev.reason || '', readOnly: !!ev.readOnly, decided: '', askedAt: Number(ev.askedAt) || Date.now(), open: false,
         };
         turn.nodes.push(node);

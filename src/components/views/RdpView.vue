@@ -45,7 +45,7 @@
 </template>
 
 <script>
-import { api, unwrap, refresh, findAsset, enabledMethods, store } from '../../store';
+import { connectionErrorMessage, api, unwrap, refresh, findAsset, enabledMethods, store } from '../../store';
 import { t } from '../../i18n';
 import init, {
   SessionBuilder,
@@ -310,11 +310,9 @@ export default {
 
       this.offState = api.onRdpState((ev) => {
         if (!ev || ev.sessionId !== this.liveSessionId) return;
-        if (ev.type === 'connected') {
-          this.status = 'connected';
-          this.statusDetail = '';
-          this._reask = false;
-        } else if (ev.type === 'ended') {
+        // 代理的 connected 只到 TCP+TLS 与 RDCleanPath，认证仍发生在 wasm 侧，不能提前翻绿：
+        // builder.connect() 取回 Session 才算连上，与 VNC 故意忽略代理 ready 是同一条口径。
+        if (ev.type === 'ended') {
           // 代理在报错后紧接着也会结束，不能让随后的 ended 把失败原因抹成「已断开」。
           if (this.status === 'error') return;
           this.status = 'ended';
@@ -675,7 +673,7 @@ export default {
       try {
         unwrap(await api.sftpOpenWindow({ assetId: this.assetId }));
       } catch (e) {
-        this.$message.error(e.message || String(e));
+        this.$message.error(connectionErrorMessage(e));
       }
     },
 

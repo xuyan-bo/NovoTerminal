@@ -145,6 +145,7 @@ export const ADVANCED_DEFAULTS = {
     chunkSize: 64,
     compression: false,
     connectTimeout: 20,
+    overwrite: 'ask',
   },
 };
 
@@ -337,6 +338,16 @@ export const ADVANCED_FIELDS = {
       integer: true,
       placeholderKey: 'adv.sftp.timeoutPh',
       hintKey: 'adv.sftp.timeoutHint',
+    },
+    {
+      key: 'overwrite',
+      type: 'select',
+      labelKey: 'adv.sftp.overwrite',
+      options: [
+        { value: 'ask', labelKey: 'adv.sftp.overwrite.ask' },
+        { value: 'replace', labelKey: 'adv.sftp.overwrite.replace' },
+        { value: 'skip', labelKey: 'adv.sftp.overwrite.skip' },
+      ],
     },
   ],
 };

@@ -1,4 +1,4 @@
-import { api, unwrap, connectionErrorMessage } from '../../store';
+import { api, unwrap, connectionErrorMessage, findAsset } from '../../store';
 import { t } from '../../i18n';
 import { joinLocal, joinRemote, parentRemote, transferErrorText } from './utils';
 
@@ -7,8 +7,17 @@ let folderSeq = 0;
 
 export default {
   /**
-   * 文件夹子任务的目标同名时先问再传：主进程按 'w' 打开会直接截断已有内容。
-   * 整棵树只问一次——确认即全部覆盖，取消即逐个跳过（把行摘出树，不提交传输）。
+   * 覆盖策略来自该资产 SFTP 方式的高级参数：ask 逐个询问（默认），replace 直接覆盖，skip 直接跳过。
+   * 主进程只在整份内容写完后才改名替换目标，所以跳过与询问都不会留下半份目标文件。
+   */
+  sftpOverwritePolicy(s) {
+    const hit = s && s.assetId ? findAsset(s.assetId) : null;
+    const adv = (hit && hit.asset && hit.asset.methods && hit.asset.methods.sftp && hit.asset.methods.sftp.advanced) || {};
+    return adv.overwrite === 'replace' || adv.overwrite === 'skip' ? adv.overwrite : 'ask';
+  },
+  /**
+   * 文件夹子任务的目标同名时先问再传：整棵树只问一次——确认即全部覆盖，
+   * 取消即逐个跳过（把行摘出树，不提交传输）。
    */
   async allowFolderTarget(s, root, row, direction) {
     if (!row || !row.targetPath) return true;
@@ -28,18 +37,23 @@ export default {
     const state = this.folderState(s, root.taskId);
     if (!state) return true;
     if (state.overwrite === undefined) {
-      try {
-        await this.$confirm(
-          t(
-            direction === 'upload' ? 'sftp.overwriteFolderRemote' : 'sftp.overwriteFolderLocal',
-            { name: root.name }
-          ),
-          t('sftp.overwriteTitle'),
-          { type: 'warning', confirmButtonText: t('msg.confirm'), cancelButtonText: t('msg.cancel') }
-        );
-        state.overwrite = true;
-      } catch (_) {
-        state.overwrite = false;
+      const policy = this.sftpOverwritePolicy(s);
+      if (policy !== 'ask') {
+        state.overwrite = policy === 'replace';
+      } else {
+        try {
+          await this.$confirm(
+            t(
+              direction === 'upload' ? 'sftp.overwriteFolderRemote' : 'sftp.overwriteFolderLocal',
+              { name: root.name }
+            ),
+            t('sftp.overwriteTitle'),
+            { type: 'warning', confirmButtonText: t('msg.confirm'), cancelButtonText: t('msg.cancel') }
+          );
+          state.overwrite = true;
+        } catch (_) {
+          state.overwrite = false;
+        }
       }
     }
     if (state.overwrite) return true;
@@ -52,7 +66,9 @@ export default {
     if (!row || row.status === 'done' || row.status === 'error') return null;
     return row;
   },
-  async confirmOverwrite(direction, name) {
+  async confirmOverwrite(s, direction, name) {
+    const policy = this.sftpOverwritePolicy(s);
+    if (policy !== 'ask') return policy === 'replace';
     try {
       if (direction === 'upload') {
         await this.$confirm(t('sftp.overwriteRemote', { name }), t('sftp.overwriteTitle'), {
@@ -319,20 +335,6 @@ export default {
       }
     }
   },
-  async downloadRemoteDir(s, remoteDir, localDir) {
-    const list = unwrap(await api.sftpList(s.connId, remoteDir));
-    const items = (list.items || []).filter((x) => !x.isParent && x.name !== '.' && x.name !== '..');
-    for (const it of items) {
-      const rp = joinRemote(remoteDir, it.name);
-      const lp = joinLocal(localDir, it.name);
-      if (it.isDir) {
-        unwrap(await api.sftpLocalMkdir(localDir, it.name));
-        await this.downloadRemoteDir(s, rp, lp);
-      } else {
-        await this.startDownload(s, rp, lp);
-      }
-    }
-  },
   async startUpload(s, localPath, remotePath) {
     // Folder path must not go through file upload (EISDIR)
     if (api.sftpLocalExists) {
@@ -358,7 +360,7 @@ export default {
       try {
         const st = unwrap(await api.sftpStat(s.connId, remotePath));
         if (st && st.exists && !st.isDir) {
-          const ok = await this.confirmOverwrite('upload', name);
+          const ok = await this.confirmOverwrite(s, 'upload', name);
           if (!ok) return;
         }
       } catch (_) {}
@@ -395,7 +397,7 @@ export default {
       try {
         const st = unwrap(await api.sftpLocalExists(localPath));
         if (st && st.exists && !st.isDir) {
-          const ok = await this.confirmOverwrite('download', name);
+          const ok = await this.confirmOverwrite(s, 'download', name);
           if (!ok) return;
         }
       } catch (_) {}

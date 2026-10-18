@@ -128,6 +128,7 @@
 
 <script>
 import {
+  connectionErrorMessage,
   store,
   api,
   unwrap,
@@ -600,7 +601,7 @@ export default {
           this.$message.error(this.testFailureMessage(r));
         }
       } catch (e) {
-        this.$message.error(e.message);
+        this.$message.error(connectionErrorMessage(e));
       } finally {
         this.testing = false;
         this.testingId = null;
@@ -659,7 +660,7 @@ export default {
           }
           this.visible = false;
         } catch (e) {
-          this.$message.error(e.message);
+          this.$message.error(connectionErrorMessage(e));
         } finally {
           this.saving = false;
         }

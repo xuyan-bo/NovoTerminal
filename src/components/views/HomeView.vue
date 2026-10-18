@@ -412,7 +412,7 @@ export default {
       try {
         await removeRecent(row.id, row.methodId);
       } catch (e) {
-        this.$message.error(e.message || String(e));
+        this.$message.error(connectionErrorMessage(e));
       }
     },
   },

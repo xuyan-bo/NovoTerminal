@@ -1,13 +1,10 @@
 import Vue from 'vue';
 import ElementUI from 'element-ui';
-import zhLocale from 'element-ui/lib/locale/lang/zh-CN';
-import enLocale from 'element-ui/lib/locale/lang/en';
-import locale from 'element-ui/lib/locale';
 import 'element-ui/lib/theme-chalk/index.css';
 import App from './App.vue';
 import SvgIcon from './components/common/SvgIcon.vue';
 import { refresh, store, api } from './store';
-import { t, setLocale, applySettings } from './i18n';
+import { t, applySettings } from './i18n';
 import './styles/main.css';
 
 /** Forward uncaught renderer errors to the main-process log sink (no-op in browser). */
@@ -63,7 +60,6 @@ refresh()
   .finally(() => {
     const s = store.snapshot.settings || {};
     applySettings(s);
-    locale.use(s.lang === 'en' ? enLocale : zhLocale);
     new Vue({
       render: (h) => h(App),
     }).$mount('#app');

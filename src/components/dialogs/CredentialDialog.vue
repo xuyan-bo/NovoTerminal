@@ -229,6 +229,7 @@
 
 <script>
 import {
+  connectionErrorMessage,
   store,
   api,
   unwrap,
@@ -477,7 +478,7 @@ export default {
       try {
         await reorderCredential({ fromId: src.id, beforeId: before ? before.id : null });
       } catch (err) {
-        this.$message.error(err.message || String(err));
+        this.$message.error(connectionErrorMessage(err));
       }
     },
     /** Element 把 row-class-name 当单个 { row, rowIndex } 参数调用 */
@@ -512,7 +513,7 @@ export default {
           }
           this.formOpen = false;
         } catch (e) {
-          this.$message.error(e.message);
+          this.$message.error(connectionErrorMessage(e));
         } finally {
           this.saving = false;
         }
@@ -523,7 +524,7 @@ export default {
         await deleteCredential(row.id);
         this.$message.success(t('msg.credentialDeleted'));
       } catch (e) {
-        this.$message.error(e.message || String(e));
+        this.$message.error(connectionErrorMessage(e));
       }
     },
   },
