@@ -5,7 +5,7 @@
       <span class="panel-title">{{ $t('ai.title') }}</span>
       <span class="panel-host mono" :title="hostText">{{ hostText }}</span>
       <button v-if="available" type="button" class="panel-ghost" :title="$t('ai.history')" @click="openHistory">
-        <i class="el-icon-time"></i>
+        <el-icon><Clock /></el-icon>
       </button>
       <button
         v-if="available"
@@ -15,23 +15,23 @@
         :disabled="archiveBusy"
         @click="newSession"
       >
-        <i :class="archiveBusy ? 'el-icon-loading' : 'el-icon-plus'"></i>
+        <el-icon :class="{ 'is-loading': archiveBusy }"><Loading v-if="archiveBusy" /><Plus v-else /></el-icon>
       </button>
       <button type="button" class="panel-close" :title="$t('ai.closeTip')" @click="$emit('close')">
-        <i class="el-icon-close"></i>
+        <el-icon><Close /></el-icon>
       </button>
     </div>
 
     <div v-if="!available" class="ai-offline">
-      <i class="el-icon-warning-outline"></i>
+      <el-icon><WarningFilled /></el-icon>
       <p>{{ $t('ai.offline') }}</p>
     </div>
 
     <div v-if="available && error" class="ai-error">
-      <i class="el-icon-warning-outline"></i>
+      <el-icon><WarningFilled /></el-icon>
       <span class="ai-error-text">{{ errorText }}</span>
       <a v-if="errorNeedsSettings" class="ai-error-link" @click="openSettings">{{ $t('ai.openSettings') }}</a>
-      <button type="button" class="panel-close" @click="error = null"><i class="el-icon-close"></i></button>
+      <button type="button" class="panel-close" @click="error = null"><el-icon><Close /></el-icon></button>
     </div>
 
     <div v-if="available" class="ai-main">
@@ -48,28 +48,28 @@
           <div v-else-if="row.kind === 'note'" class="step-note is-center">{{ row.text }}</div>
           <!-- 一次提问不再是一座卡片：思考/命令按正文打断成若干过程段，正文始终留在时间线上 -->
           <div v-else class="turn">
-            <template v-for="seg in segments(row)">
-              <div v-if="seg.t === 'say'" :key="seg.k" class="answer">
+            <template v-for="seg in segments(row)" :key="seg.k">
+              <div v-if="seg.t === 'say'" class="answer">
                 <ai-markdown :text="seg.node.text" /><span v-if="seg.node.typing" class="msg-ai-cursor"></span>
               </div>
-              <div v-else-if="seg.t === 'zip'" :key="seg.k" class="zip-line mono">
-                <i class="el-icon-scissors"></i>{{ $t('ai.zipLine', { moved: seg.node.moved, from: fmtTok(seg.node.from), to: fmtTok(seg.node.to) }) }}
+              <div v-else-if="seg.t === 'zip'" class="zip-line mono">
+                <el-icon><Scissor /></el-icon>{{ $t('ai.zipLine', { moved: seg.node.moved, from: fmtTok(seg.node.from), to: fmtTok(seg.node.to) }) }}
               </div>
-              <div v-else :key="seg.k" class="blk" :class="blkLive(row, seg) ? 'is-live' : 'is-done'">
+              <div v-else class="blk" :class="blkLive(row, seg) ? 'is-live' : 'is-done'">
                 <button type="button" class="turn-head" @click="toggleBlk(row, seg)">
-                  <i class="h-ico" :class="blkLive(row, seg) ? 'el-icon-loading' : 'el-icon-circle-check'"></i>
+                  <el-icon class="h-ico" :class="{ 'is-loading': blkLive(row, seg) }"><Loading v-if="blkLive(row, seg)" /><CircleCheck v-else /></el-icon>
                   <span class="h-title">{{ $t(blkLive(row, seg) ? 'ai.turnRunning' : 'ai.turnDone') }}</span>
                   <span class="h-stat mono">{{ blkStat(seg) }}</span>
                   <span class="h-count">{{ blkCount(seg) }}</span>
-                  <i class="h-caret" :class="blkOpen(row, seg) ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i>
+                  <el-icon class="h-caret"><ArrowDown v-if="blkOpen(row, seg)" /><ArrowRight v-else /></el-icon>
                 </button>
                 <div v-show="blkOpen(row, seg)" class="turn-body" :data-live="blkLive(row, seg) ? '1' : ''" :style="capStyle">
                   <div v-for="n in seg.nodes" :key="n.key" class="act" :class="actClass(n)">
                     <button type="button" class="act-head" @click="toggleNode(n)">
-                      <i class="a-ico" :class="nodeIcon(n)"></i>
+                      <el-icon class="a-ico"><component :is="nodeIcon(n)" /></el-icon>
                       <span class="a-title" :class="{ mono: n.nk === 'cmd' || n.nk === 'ask' }">{{ nodeTitle(n) }}</span>
                       <span class="a-stat mono">{{ nodeStat(n) }}</span>
-                      <i class="a-caret" :class="n.open ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i>
+                      <el-icon class="a-caret"><ArrowDown v-if="n.open" /><ArrowRight v-else /></el-icon>
                     </button>
                     <div v-show="n.open" class="act-detail">
                       <div v-if="n.nk === 'think'" class="think-text mono" :class="{ typing: n.running }" :style="capStyle">{{ n.text }}</div>
@@ -104,7 +104,7 @@
               <span class="lbl mono">{{ elapsed(row.liveStart) }}</span>
             </div>
             <div v-if="row.truncated" class="turn-truncated">
-              <i class="el-icon-warning-outline"></i>{{ $t('ai.truncatedTip') }}
+              <el-icon><WarningFilled /></el-icon>{{ $t('ai.truncatedTip') }}
             </div>
             <div v-if="turnFoot(row)" class="turn-usage mono">{{ turnFoot(row) }}</div>
           </div>
@@ -114,21 +114,23 @@
     </div>
 
     <el-dialog
-      :visible.sync="historyOpen"
+      v-model="historyOpen"
       width="920px"
       top="7vh"
       :close-on-click-modal="false"
-      custom-class="ai-hist"
+      class="ai-hist"
       append-to-body
     >
-      <div slot="title" class="hist-head">
-        <i class="dlg-icon el-icon-time"></i>
-        <span class="hist-title">{{ $t('ai.historyTitle') }}</span>
-        <span class="hist-sub mono">{{ historyAssetText }}</span>
-      </div>
+      <template #header>
+        <div class="hist-head">
+          <el-icon class="dlg-icon"><Clock /></el-icon>
+          <span class="hist-title">{{ $t('ai.historyTitle') }}</span>
+          <span class="hist-sub mono">{{ historyAssetText }}</span>
+        </div>
+      </template>
       <div class="hist-tools">
-        <el-input v-model="historyKeyword" size="mini" :placeholder="$t('ai.histSearch')" prefix-icon="el-icon-search" clearable class="hist-search" />
-        <el-select v-model="historySort" size="mini" class="hist-sort">
+        <el-input v-model="historyKeyword" :placeholder="$t('ai.histSearch')" prefix-icon="Search" clearable class="hist-search" />
+        <el-select v-model="historySort" class="hist-sort">
           <el-option :label="$t('ai.histSortTime')" value="time" />
           <el-option :label="$t('ai.histSortName')" value="name" />
         </el-select>
@@ -138,15 +140,15 @@
         <div v-if="!historyGroups.length && !historyLoading" class="hist-empty">
           {{ $t(historyRows.length ? 'ai.histNoMatch' : 'ai.histEmpty') }}
         </div>
-        <template v-for="group in historyGroups">
-          <div :key="'g-' + group.key" class="hist-group">{{ group.label }}</div>
+        <template v-for="group in historyGroups" :key="group.key">
+          <div class="hist-group">{{ group.label }}</div>
           <div
             v-for="s in group.items"
             :key="s.id"
             class="hist-row"
             :class="{ 'is-cur': s.id === recordId || s.isLive, 'is-edit': s.id === editingId }"
           >
-            <i class="hist-ico" :class="s.isLive ? 'el-icon-edit' : 'el-icon-chat-line-round'"></i>
+            <el-icon class="hist-ico"><Edit v-if="s.isLive" /><ChatLineRound v-else /></el-icon>
             <div class="hist-main">
               <div class="hist-line">
                 <span v-if="s.id !== editingId" class="hist-name">{{ s.title || $t('ai.untitled') }}</span>
@@ -160,15 +162,14 @@
                   <el-input
                     ref="renameEl"
                     v-model="editingTitle"
-                    size="mini"
-                    @keyup.enter.native="saveRename(s)"
-                    @keyup.esc.native="editingId = ''"
+                    @keyup.enter="saveRename(s)"
+                    @keyup.esc="editingId = ''"
                   />
                   <button type="button" class="hist-yes" :title="$t('ai.histRename')" @click="saveRename(s)">
-                    <i class="el-icon-check"></i>
+                    <el-icon><Check /></el-icon>
                   </button>
                   <button type="button" class="hist-no" :title="$t('msg.cancel')" @click="editingId = ''">
-                    <i class="el-icon-close"></i>
+                    <el-icon><Close /></el-icon>
                   </button>
                 </span>
               </div>
@@ -180,10 +181,10 @@
               </div>
             </div>
             <div class="hist-acts">
-              <el-button size="mini" type="primary" plain @click="loadSession(s)">
+              <el-button type="primary" plain @click="loadSession(s)">
                 {{ s.isLive || s.id === recordId ? $t('ai.histBack') : $t('ai.histLoad') }}
               </el-button>
-              <el-button size="mini" icon="el-icon-edit-outline" :title="$t('ai.histRename')" @click="startRename(s)" />
+              <el-button icon="EditPen" :title="$t('ai.histRename')" @click="startRename(s)" />
               <el-popconfirm
                 v-if="!s.isLive"
                 placement="top-end"
@@ -192,31 +193,35 @@
                 :cancel-button-text="$t('msg.cancel')"
                 @confirm="deleteSession(s)"
               >
-                <el-button slot="reference" size="mini" icon="el-icon-delete" class="hist-del" :title="$t('ai.histDelete')" />
+                <template #reference>
+                  <el-button icon="Delete" class="hist-del" :title="$t('ai.histDelete')" />
+                </template>
               </el-popconfirm>
             </div>
           </div>
         </template>
       </div>
-      <div slot="footer" class="hist-foot">
-        <el-button size="mini" @click="historyOpen = false">{{ $t('ai.histClose') }}</el-button>
-      </div>
+      <template #footer>
+        <div class="hist-foot">
+          <el-button @click="historyOpen = false">{{ $t('ai.histClose') }}</el-button>
+        </div>
+      </template>
     </el-dialog>
 
     <!-- 等审批/等选择是「必须看见」的：置顶在输入框上方，不埋在折叠的过程段里 -->
     <div v-if="pending" class="ai-pin">
       <div class="pin-head">
-        <i :class="pending.nk === 'ask' ? 'el-icon-warning' : 'el-icon-question'"></i>
+        <el-icon><Warning v-if="pending.nk === 'ask'" /><QuestionFilled v-else /></el-icon>
         <span class="pin-title">{{ pinTitle(pending) }}</span>
         <span class="pin-wait mono">{{ elapsed(pending.askedAt) }}</span>
       </div>
       <div v-if="pending.nk === 'ask' && pending.command" class="cmd-line mono">{{ pending.command }}</div>
       <div v-if="pending.reason" class="step-note">{{ pending.reason }}</div>
       <div v-if="pending.nk === 'ask'" class="ask-btns">
-        <el-button size="mini" type="primary" @click="decide(pending, 'allow')">
+        <el-button type="primary" @click="decide(pending, 'allow')">
           {{ $t('ai.approveAllow') }}
         </el-button>
-        <el-button size="mini" @click="decide(pending, 'deny')">
+        <el-button @click="decide(pending, 'deny')">
           {{ $t('ai.approveDeny') }}
         </el-button>
       </div>
@@ -234,11 +239,10 @@
         <div class="choice-other">
           <el-input
             v-model="pending.other"
-            size="mini"
             :placeholder="$t('ai.choiceOtherPh')"
-            @keyup.enter.native="submitOther(pending)"
+            @keyup.enter="submitOther(pending)"
           />
-          <el-button size="mini" type="primary" :disabled="!String(pending.other || '').trim()" @click="submitOther(pending)">
+          <el-button type="primary" :disabled="!String(pending.other || '').trim()" @click="submitOther(pending)">
             {{ $t('ai.choiceOtherSend') }}
           </el-button>
         </div>
@@ -267,24 +271,25 @@
         <div class="ai-bar">
           <el-dropdown trigger="click" placement="top-start" @command="setPermission">
             <button type="button" class="bar-btn" :class="'perm-' + permission">
-              <i :class="permissionIcon"></i>{{ $t('ai.perm.' + permission) }}<i class="el-icon-arrow-down bar-caret"></i>
+              <el-icon><component :is="permissionIcon" /></el-icon>{{ $t('ai.perm.' + permission) }}<el-icon class="bar-caret"><ArrowDown /></el-icon>
             </button>
-            <el-dropdown-menu slot="dropdown" class="ai-drop">
+            <template #dropdown>
+            <el-dropdown-menu class="ai-drop">
               <el-dropdown-item v-for="p in permissions" :key="p.id" :command="p.id" :disabled="savingPermission">
                 <div class="drop-item" :class="{ on: p.id === permission }">
-                  <i :class="p.icon"></i>
+                  <el-icon><component :is="p.icon" /></el-icon>
                   <span>{{ $t('ai.perm.' + p.id) }}</span>
                   <el-tooltip :content="$t('ai.permDesc.' + p.id)" placement="right">
-                    <i class="el-icon-info drop-info"></i>
+                    <el-icon class="drop-info"><InfoFilled /></el-icon>
                   </el-tooltip>
                 </div>
               </el-dropdown-item>
             </el-dropdown-menu>
+            </template>
           </el-dropdown>
           <span class="ai-bar-space"></span>
           <el-select
-            :value="modelKey"
-            size="mini"
+            :model-value="modelKey"
             class="model-select"
             :placeholder="$t('ai.model')"
             placement="top"
@@ -295,7 +300,8 @@
             </el-option-group>
           </el-select>
           <el-tooltip v-if="ctx.window" placement="top">
-            <div slot="content" class="ctx-pop">
+            <template #content>
+            <div class="ctx-pop">
               <div class="ctx-line is-head"><span>{{ $t('ai.ctxTip') }}</span><b class="mono">{{ ctx.pct }}%</b></div>
               <div class="ctx-line"><span>{{ $t('ai.ctxWindow') }}</span><b class="mono">{{ fmtTok(ctx.window) }}</b></div>
               <div class="ctx-line is-sub"><span>{{ $t('ai.ctxOutput') }}</span><b class="mono">{{ fmtTok(ctx.reserve) }}</b></div>
@@ -307,6 +313,7 @@
               </template>
               <div class="ctx-line"><span>{{ $t('ai.ctxLeft') }}</span><b class="mono">{{ fmtTok(ctxLeft) }}</b></div>
             </div>
+            </template>
             <el-progress
               class="ctx-ring"
               type="circle"
@@ -324,7 +331,7 @@
             :title="$t(running ? 'ai.stopTip' : 'ai.sendTip')"
             @click="running ? cancel() : send()"
           >
-            <i :class="running ? 'el-icon-video-pause' : 'el-icon-s-promotion'"></i>
+            <el-icon><VideoPause v-if="running" /><Promotion v-else /></el-icon>
           </button>
         </div>
       </div>
@@ -541,7 +548,7 @@ export default {
     },
     permissionIcon() {
       const hit = AI_PERMISSIONS.find((p) => p.id === this.permission);
-      return (hit && hit.icon) || 'el-icon-question';
+      return (hit && hit.icon) || 'QuestionFilled';
     },
     hasService() {
       return !!(this.ai.services && this.ai.services.length);
@@ -664,7 +671,7 @@ export default {
     this.scrollToEnd();
     this.observeLog();
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this._disposed = true;
     this.setTicker(false);
     if (this._ro) {
@@ -995,7 +1002,7 @@ export default {
       return st == null ? this.blkLive(turn, seg) : !!st;
     },
     toggleBlk(turn, seg) {
-      this.$set(turn.blk, seg.k, !this.blkOpen(turn, seg));
+      turn.blk[seg.k] = !this.blkOpen(turn, seg);
       if (turn.blk[seg.k]) this.stick();
     },
     blkStat(seg) {
@@ -1076,19 +1083,19 @@ export default {
       return '';
     },
     nodeIcon(node) {
-      if (node.nk === 'think') return 'el-icon-magic-stick';
+      if (node.nk === 'think') return 'MagicStick';
       if (node.nk === 'cmd') {
-        if (node.state === 'denied' || node.state === 'failed') return 'el-icon-circle-close';
-        if (node.state === 'stopped') return 'el-icon-warning-outline';
-        return 'el-icon-monitor';
+        if (node.state === 'denied' || node.state === 'failed') return 'CircleClose';
+        if (node.state === 'stopped') return 'WarningFilled';
+        return 'Monitor';
       }
       if (node.nk === 'ask') {
-        if (!node.decided) return 'el-icon-warning';
-        if (node.decided === 'allow') return 'el-icon-circle-check';
-        return node.decided === 'deny' ? 'el-icon-circle-close' : 'el-icon-warning-outline';
+        if (!node.decided) return 'Warning';
+        if (node.decided === 'allow') return 'CircleCheck';
+        return node.decided === 'deny' ? 'CircleClose' : 'WarningFilled';
       }
-      if (node.state === 'waiting') return 'el-icon-question';
-      return node.picked ? 'el-icon-circle-check' : 'el-icon-circle-close';
+      if (node.state === 'waiting') return 'QuestionFilled';
+      return node.picked ? 'CircleCheck' : 'CircleClose';
     },
     /** 审批卡标题按工具分型：读取、写入、命令各说各的，不再共用一条「有命令待确认」 */
     pinTitle(node) {
@@ -1608,7 +1615,7 @@ export default {
   line-height: 1.7;
   text-align: center;
 }
-.ai-offline i { font-size: 22px; }
+.ai-offline .el-icon { font-size: 22px; }
 .ai-empty-warn { margin-top: 8px; color: var(--warning); }
 .ai-item { font-size: 12.5px; flex: none; }
 .msg-user {
@@ -1698,7 +1705,7 @@ export default {
   font-size: 11px;
   color: var(--text-3);
 }
-.zip-line i { font-size: 12px; color: var(--accent); }
+.zip-line .el-icon { font-size: 12px; color: var(--accent); }
 .step-note { font-size: 10.5px; color: var(--text-3); line-height: 1.6; }
 .step-note.is-center { text-align: center; }
 .turn-live {
@@ -1735,7 +1742,7 @@ export default {
   display: flex; align-items: flex-start; gap: 5px; padding: 2px 4px;
   font-size: 10.5px; line-height: 1.6; color: var(--warning);
 }
-.turn-truncated i { font-size: 12px; line-height: 1.5; }
+.turn-truncated .el-icon { font-size: 12px; line-height: 1.5; }
 .back-tail {
   position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 2;
   padding: 3px 11px; border-radius: 999px; cursor: pointer; font-size: 10.5px;
@@ -1749,7 +1756,7 @@ export default {
   border-top: 1px solid var(--accent);
 }
 .pin-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text); }
-.pin-head i { font-size: 13px; color: var(--warning); }
+.pin-head .el-icon { font-size: 13px; color: var(--warning); }
 .pin-title { flex: 1; min-width: 0; font-weight: 600; }
 .pin-wait { font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
 .ai-input { flex: 0 0 auto; border-top: 1px solid var(--border); background: var(--bg-panel); padding: 7px 9px 9px; }
@@ -1824,16 +1831,19 @@ export default {
 .bar-btn.perm-auto { color: var(--warning); }
 .bar-btn.perm-full { color: var(--danger); }
 .model-select { width: 178px; flex: 0 1 auto; min-width: 96px; }
-.model-select /deep/ .el-input__inner {
-  height: 26px;
-  line-height: 26px;
+/* Element Plus 2.14 的 el-select 用 __wrapper 的 box-shadow 画框，内部不再有 el-input__inner */
+.model-select :deep(.el-select__wrapper) {
+  min-height: 26px;
+  padding: 2px 8px;
+  gap: 4px;
   font-size: 11.5px;
+  line-height: 20px;
   background: none;
-  border-color: transparent;
+  box-shadow: none;
   color: var(--text-2);
-  padding-left: 8px;
 }
-.model-select /deep/ .el-input__icon { line-height: 26px; font-size: 11px; }
+.model-select :deep(.el-select__wrapper.is-hovering:not(.is-focused)) { box-shadow: none; }
+.model-select :deep(.el-select__caret) { font-size: 11px; }
 .ctx-ring { flex: none; }
 .ctx-pop { min-width: 176px; }
 .ctx-line { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; font-size: 11.5px; line-height: 1.9; }
@@ -1910,7 +1920,7 @@ export default {
 .ai-hist .hist-row.is-edit .hist-acts { opacity: 1; }
 .ai-hist .hist-acts .el-button + .el-button { margin-left: 0; }
 .ai-hist .hist-acts .el-button.is-circle,
-.ai-hist .hist-acts .el-button [class*="el-icon-"] + span { margin-left: 0; }
+.ai-hist .hist-acts .el-button .el-icon + span { margin-left: 0; }
 .ai-hist .hist-del:hover { color: var(--danger); border-color: var(--danger); }
 .ai-hist .hist-foot { display: flex; align-items: center; justify-content: flex-end; }
 </style>

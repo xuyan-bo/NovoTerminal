@@ -1,9 +1,8 @@
-/** Lightweight i18n — reactive via Vue.observable after setLocale */
+/** Lightweight i18n — components re-read translations when store.localeTick changes */
 
 import { UI_FONTS } from './constants';
-import elementLocale from 'element-ui/lib/locale';
-import zhLocale from 'element-ui/lib/locale/lang/zh-CN';
-import enLocale from 'element-ui/lib/locale/lang/en';
+import zhLocale from 'element-plus/es/locale/lang/zh-cn';
+import enLocale from 'element-plus/es/locale/lang/en';
 
 const dict = {
   zh: {
@@ -1719,9 +1718,11 @@ export const i18n = {
 export function setLocale(locale) {
   i18n.locale = locale === 'en' ? 'en' : 'zh';
   document.documentElement.lang = i18n.locale === 'zh' ? 'zh-CN' : 'en';
-  // Element 内置文案（分页、表格空态、日期控件）只有 locale.use 才换，
-  // 走这条唯一入口，备份导入与快照刷新才不会只换掉自有文案。
-  elementLocale.use(i18n.locale === 'zh' ? zhLocale : enLocale);
+}
+
+/** Element Plus 内置文案（分页、表格空态、日期控件）由根部的 el-config-provider 消费。 */
+export function elementLocale() {
+  return i18n.locale === 'en' ? enLocale : zhLocale;
 }
 
 export function t(key, params) {

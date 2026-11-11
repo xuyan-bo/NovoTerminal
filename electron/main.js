@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard, Tray, Menu, nativeImage, shell, screen, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, Tray, Menu, nativeImage, shell, screen, net, nativeTheme } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -778,14 +778,18 @@ function sizedToWorkArea(ratioW, ratioH, floorW, floorH, area) {
 }
 
 function createWindow() {
-  const size = sizedToWorkArea(0.7, 0.78, 1100, 700);
+  const size = sizedToWorkArea(0.7 * 1.25, 0.78 * 1.15, 1100 * 1.25, 700 * 1.15);
+  // 窗口底色必须跟持久化主题一致：写死深色时浅色主题会先闪一块深底，再被启动画面覆盖
+  const bootLight = resolveInitialTheme() === 'light';
   win = new BrowserWindow({
     width: size.width,
     height: size.height,
     minWidth: 960,
     minHeight: 600,
     title: 'NovoTerminal',
-    backgroundColor: '#0f1419',
+    // 首帧画好之前不显示窗口：否则窗口会先拿底色（甚至上一帧）露一下，观感上就是"主页闪一下再进启动画面"
+    show: false,
+    backgroundColor: bootLight ? '#f5f7fa' : '#0f1419',
     icon: path.join(__dirname, 'assets', 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
@@ -799,6 +803,16 @@ function createWindow() {
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.error('[load-fail]', code, desc, url);
   });
+
+  // 首帧（启动画面）画好后再显示；超时兜底，避免 ready-to-show 不触发时窗口永不出现
+  let shown = false;
+  const reveal = () => {
+    if (shown || !win || win.isDestroyed()) return;
+    shown = true;
+    win.show();
+  };
+  win.once('ready-to-show', reveal);
+  setTimeout(reveal, 3000);
   win.webContents.on('console-message', (_e, level, message) => {
     if (level >= 2) {
       console.error('[renderer]', message);
@@ -923,7 +937,18 @@ function isMainWindow(sender) {
   return !!win && !win.isDestroyed() && BrowserWindow.fromWebContents(sender) === win;
 }
 
+/** 首帧主题：窗口底色与启动画面都要用同一个值，避免「先深后浅」闪一下。 */
+function resolveInitialTheme() {
+  const theme = (store && store.getSettings && store.getSettings().theme) || 'system';
+  const light = theme === 'light' || (theme === 'system' && !nativeTheme.shouldUseDarkColors);
+  return light ? 'light' : 'dark';
+}
+
 function registerIpc() {
+  // preload 首帧前同步读取，只回主题，不带任何输入
+  ipcMain.on('app:initial-theme', (event) => {
+    event.returnValue = resolveInitialTheme();
+  });
   // 快照会进每个窗口的 store，AI 配置里的凭证不能跟着扩散
   handle('store:snapshot', () => {
     const snap = store.snapshot();

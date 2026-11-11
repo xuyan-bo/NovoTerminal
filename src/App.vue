@@ -1,4 +1,5 @@
 <template>
+  <el-config-provider :locale="epLocale">
   <div class="app-root" :class="{ 'is-sftp': isSftpRoute, 'is-window': isGroupRoute }">
     <sftp-page v-if="isSftpRoute" />
     <session-window v-else-if="isGroupRoute" :group-id="groupQuery.gid || ''" />
@@ -58,9 +59,11 @@
     <ssh-auth-dialog />
     <connect-auth-dialog />
   </div>
+  </el-config-provider>
 </template>
 
 <script>
+import { defineAsyncComponent } from 'vue';
 import SideBar from './components/panels/SideBar.vue';
 import TabBar from './components/panels/TabBar.vue';
 import SettingsDialog from './components/dialogs/SettingsDialog.vue';
@@ -76,7 +79,7 @@ import ClosePromptDialog from './components/dialogs/ClosePromptDialog.vue';
 import UpdateDialog from './components/dialogs/UpdateDialog.vue';
 import SshAuthDialog from './components/dialogs/SshAuthDialog.vue';
 import { store, api, refresh, applyDetached, dropDetachedTab, applyTabState, openCopyForGroup, checkForUpdates } from './store';
-import { t, applySettings } from './i18n';
+import { t, applySettings, elementLocale } from './i18n';
 import { getProtocol } from './protocols';
 
 const MIN_SIDEBAR_W = 180;
@@ -116,7 +119,7 @@ export default {
   components: {
     SideBar,
     TabBar,
-    HomeView: () => import('./components/views/HomeView.vue'),
+    HomeView: defineAsyncComponent(() => import('./components/views/HomeView.vue')),
     SettingsDialog,
     CredentialDialog,
     BackupDialog,
@@ -129,8 +132,8 @@ export default {
     ClosePromptDialog,
     UpdateDialog,
     SshAuthDialog,
-    SftpPage: () => import('./components/views/SftpPage.vue'),
-    SessionWindow: () => import('./components/views/SessionWindow.vue'),
+    SftpPage: defineAsyncComponent(() => import('./components/views/SftpPage.vue')),
+    SessionWindow: defineAsyncComponent(() => import('./components/views/SessionWindow.vue')),
   },
   data() {
     return {
@@ -148,6 +151,11 @@ export default {
         width: this.sidebarWidth + 'px',
         flex: '0 0 ' + this.sidebarWidth + 'px',
       };
+    },
+    epLocale() {
+      // localeTick 是语言切换的唯一响应来源，这里读一下才会重新求值
+      void store.localeTick;
+      return elementLocale();
     },
     activeTab() {
       return store.activeTab;
@@ -225,7 +233,7 @@ export default {
       this._mqHandler = onChange;
     }
   },
-  beforeDestroy() {
+  beforeUnmount() {
     if (this._onHash) window.removeEventListener('hashchange', this._onHash);
     if (this._updateTimer) clearTimeout(this._updateTimer);
     if (this._off) this._off();

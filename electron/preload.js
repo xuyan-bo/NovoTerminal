@@ -1,6 +1,13 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+// 首帧之前同步取回初始主题；preload 阶段 DOM 根节点未必存在，改由 head 里的 boot-theme.js 落到 html 上
+let initialTheme = 'dark';
+try {
+  initialTheme = ipcRenderer.sendSync('app:initial-theme') || 'dark';
+} catch (_) {}
+
 const api = {
+  initialTheme,
   /** Electron 32+: File.path may be empty; use webUtils.getPathForFile */
   getPathForFile: (file) => {
     try {

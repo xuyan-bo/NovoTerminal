@@ -1,16 +1,18 @@
 <template>
   <el-dialog
-    :visible="!!active"
+    :model-value="!!active"
     width="460px"
     append-to-body
     :close-on-click-modal="false"
     :show-close="false"
     :before-close="cancel"
   >
-    <div slot="title" class="dlg-head">
-      <i class="dlg-icon el-icon-key"></i>
-      <span>{{ (active && active.title) || $t('asset.authSettings') }}</span>
-    </div>
+    <template #header>
+      <div class="dlg-head">
+        <el-icon class="dlg-icon"><Key /></el-icon>
+        <span>{{ (active && active.title) || $t('asset.authSettings') }}</span>
+      </div>
+    </template>
 
     <template v-if="active">
       <p class="hint ask-hint">{{ active.hint }}</p>
@@ -19,13 +21,12 @@
         :model="form"
         :rules="rules"
         label-width="76px"
-        size="small"
-        @submit.native.prevent="submit"
+        @submit.prevent="submit"
       >
         <el-form-item :label="$t('asset.authPick')">
           <el-radio-group v-model="form.mode" @change="onModeChange">
-            <el-radio label="inline">{{ $t('asset.mainInline') }}</el-radio>
-            <el-radio label="credential">{{ $t('auth.selectCredential') }}</el-radio>
+            <el-radio value="inline">{{ $t('asset.mainInline') }}</el-radio>
+            <el-radio value="credential">{{ $t('auth.selectCredential') }}</el-radio>
           </el-radio-group>
         </el-form-item>
         <template v-if="form.mode === 'inline'">
@@ -48,15 +49,15 @@
         </el-form-item>
         <el-form-item label-width="0" class="remember-row">
           <el-tooltip :content="$t('auth.rememberTip')" placement="top">
-            <i class="el-icon-info remember-tip" aria-hidden="true"></i>
+            <el-icon class="remember-tip" aria-hidden="true"><InfoFilled /></el-icon>
           </el-tooltip>
           <el-checkbox v-model="form.remember">{{ $t('auth.remember') }}</el-checkbox>
         </el-form-item>
       </el-form>
     </template>
     <template #footer>
-      <el-button size="mini" @click="cancel">{{ $t('settings.cancel') }}</el-button>
-      <el-button size="mini" type="primary" @click="submit">{{ $t('msg.confirm') }}</el-button>
+      <el-button @click="cancel">{{ $t('settings.cancel') }}</el-button>
+      <el-button type="primary" @click="submit">{{ $t('msg.confirm') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -132,7 +133,7 @@ export default {
       if (wasActive) this.resetForm();
     });
   },
-  beforeDestroy() {
+  beforeUnmount() {
     if (this._offRequest) this._offRequest();
     if (this._offCancel) this._offCancel();
     for (const req of this.requests) api.sessionAuthReply(req.requestId, null);

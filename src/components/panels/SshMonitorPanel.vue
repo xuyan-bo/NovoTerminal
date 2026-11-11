@@ -7,8 +7,8 @@
       <span class="refresh-set">
         <span class="refresh-label">{{ $t('monitor.refreshSec') }}</span>
         <el-input-number
-          :value="intervalSec || 3"
-          size="mini"
+          size="small"
+          :model-value="intervalSec || 3"
           :min="1"
           :max="60"
           :step="1"
@@ -17,23 +17,23 @@
         />
       </span>
       <button type="button" class="panel-close" :title="$t('monitor.closeTip')" @click="$emit('close')">
-        <i class="el-icon-close"></i>
+        <el-icon><Close /></el-icon>
       </button>
     </div>
     <div class="panel-body">
       <div v-if="state === 'unsupported'" class="panel-note warn">
-        <i class="el-icon-warning-outline"></i> {{ $t('monitor.unsupported') }}
+        <el-icon><WarningFilled /></el-icon> {{ $t('monitor.unsupported') }}
       </div>
       <div v-else-if="state === 'error'" class="panel-note warn">
-        <i class="el-icon-warning-outline"></i> {{ $t('monitor.error') }}
+        <el-icon><WarningFilled /></el-icon> {{ $t('monitor.error') }}
       </div>
       <div v-else-if="state === 'offline'" class="panel-note">
-        <i class="el-icon-warning-outline"></i> {{ $t('monitor.offline') }}
+        <el-icon><WarningFilled /></el-icon> {{ $t('monitor.offline') }}
       </div>
       <template v-else>
         <!-- 系统信息 -->
         <section class="card">
-          <div v-if="loading" class="card-mask"><i class="el-icon-loading"></i></div>
+          <div v-if="loading" class="card-mask"><el-icon><Loading /></el-icon></div>
           <div class="sys-line">
             <span v-if="osShort" class="os-badge">{{ osShort }}</span>
             <span class="sys-main mono">{{ sysMain }}</span>
@@ -50,9 +50,9 @@
 
         <!-- CPU -->
         <section class="card">
-          <div v-if="loading" class="card-mask"><i class="el-icon-loading"></i></div>
+          <div v-if="loading" class="card-mask"><el-icon><Loading /></el-icon></div>
           <div class="sec-head">
-            <i class="el-icon-cpu sec-icon"></i>
+            <el-icon class="sec-icon"><Cpu /></el-icon>
             <span class="sec-name">CPU</span>
             <span class="sec-badge mono">{{ cpuNowText }}</span>
           </div>
@@ -71,9 +71,9 @@
 
         <!-- 内存 -->
         <section class="card">
-          <div v-if="loading" class="card-mask"><i class="el-icon-loading"></i></div>
+          <div v-if="loading" class="card-mask"><el-icon><Loading /></el-icon></div>
           <div class="sec-head">
-            <i class="el-icon-coin sec-icon"></i>
+            <el-icon class="sec-icon"><Coin /></el-icon>
             <span class="sec-name">{{ $t('monitor.memory') }}</span>
             <span class="sec-note">/ {{ snap.mem.totalGB || 0 }} GB</span>
             <span class="sec-badge mono">{{ memPctText }}</span>
@@ -93,9 +93,9 @@
 
         <!-- 网络 -->
         <section class="card">
-          <div v-if="loading" class="card-mask"><i class="el-icon-loading"></i></div>
+          <div v-if="loading" class="card-mask"><el-icon><Loading /></el-icon></div>
           <div class="sec-head">
-            <i class="el-icon-connection sec-icon"></i>
+            <el-icon class="sec-icon"><Connection /></el-icon>
             <span class="sec-name">{{ $t('monitor.network') }}</span>
             <span class="sec-note mono">{{ (snap.net && snap.net.dev) || '' }}</span>
             <span class="sec-badge mono">{{ netNowText }}</span>
@@ -105,9 +105,9 @@
 
         <!-- 硬盘 -->
         <section class="card">
-          <div v-if="loading" class="card-mask"><i class="el-icon-loading"></i></div>
+          <div v-if="loading" class="card-mask"><el-icon><Loading /></el-icon></div>
           <div class="sec-head">
-            <i class="el-icon-postcard sec-icon"></i>
+            <el-icon class="sec-icon"><Postcard /></el-icon>
             <span class="sec-name">{{ $t('monitor.disk') }}</span>
             <span class="sec-note">{{ $t('monitor.partitions', { n: snap.disks.length }) }}</span>
             <span class="sec-badge mono">{{ diskTotalsText }}</span>
@@ -280,7 +280,7 @@ export default {
       this.$nextTick(() => this.renderCharts());
     }
   },
-  beforeDestroy() {
+  beforeUnmount() {
     if (this._tickTimer) clearInterval(this._tickTimer);
     if (this._ro) {
       this._ro.disconnect();
@@ -510,7 +510,8 @@ export default {
 }
 .refresh-set { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
 .refresh-label { font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
-.refresh-set :deep(.el-input-number--mini) { width: 92px; }
+/* small + controls-position=right 的左右内边距各 31px，留够两位数的文字区 */
+.refresh-set :deep(.el-input-number--small) { width: 100px; }
 .panel-close {
   flex: 0 0 auto;
   border: none;
@@ -560,7 +561,7 @@ export default {
   color: var(--accent);
   font-size: 20px;
 }
-.card-mask .el-icon-loading { animation: monitor-spin 1s linear infinite; }
+.card-mask .el-icon { animation: monitor-spin 1s linear infinite; }
 @keyframes monitor-spin { to { transform: rotate(360deg); } }
 
 .sec-head { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }

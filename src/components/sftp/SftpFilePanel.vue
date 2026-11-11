@@ -21,10 +21,9 @@
           <svg-icon name="home" />
         </button>
         <el-input
-          :value="pathInput"
-          size="mini"
+          :model-value="pathInput"
           @input="$emit('path-input', $event)"
-          @keyup.enter.native="$emit('navigate', pathInput, $event)"
+          @keyup.enter="$emit('navigate', pathInput, $event)"
         />
         <button
           type="button"
@@ -44,7 +43,7 @@
         :key="col.key"
         :class="[col.cls, { 'sort-on': sort.key === col.key }]"
         @click="$emit('sort-change', side, col.key)"
-      >{{ $t(col.label) }}<i class="sort-ico" :class="sortIcon(col.key)"></i></span>
+      >{{ $t(col.label) }}<el-icon class="sort-ico"><component :is="sortIcon(col.key)" /></el-icon></span>
     </div>
     <!-- Stop the native drop here so it cannot also reach the panel/root handlers. -->
     <div
@@ -116,18 +115,18 @@ export default {
     },
   },
   created() {
-    // Vue 2 does not proxy data keys beginning with an underscore.
+    // Vue does not proxy data keys beginning with an underscore.
     this._marquee = null;
     this._onMarqueeMove = null;
     this._onMarqueeUp = null;
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.detachMarquee();
   },
   methods: {
     sortIcon(key) {
-      if (!this.sort || this.sort.key !== key) return 'el-icon-d-caret';
-      return this.sort.dir === 'desc' ? 'el-icon-caret-bottom' : 'el-icon-caret-top';
+      if (!this.sort || this.sort.key !== key) return 'DCaret';
+      return this.sort.dir === 'desc' ? 'CaretBottom' : 'CaretTop';
     },
     // Rubber-band selection starts on empty list space only: rows carry draggable=true,
     // so a press there must stay a drag gesture instead of a selection sweep.

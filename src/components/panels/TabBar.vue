@@ -11,14 +11,14 @@
       :aria-label="$t('tab.toggleTree')"
       :title="$t('tab.toggleTree')"
       @click="$emit('toggle-tree')"
-    ><i :class="treeHidden ? 'el-icon-s-unfold' : 'el-icon-s-fold'"></i></button>
+    ><el-icon><Expand v-if="treeHidden" /><Fold v-else /></el-icon></button>
     <button
       v-show="tabOverflow"
       class="tab-arrow"
       :disabled="!tabScrollLeft"
       :aria-label="$t('tab.scrollLeft')"
       @click="scrollTabs(-1)"
-    ><i class="el-icon-arrow-left"></i></button>
+    ><el-icon><ArrowLeft /></el-icon></button>
     <div
       ref="tabbarWrap"
       class="tabbar-wrap"
@@ -28,10 +28,9 @@
       @drop="onTabDrop"
     >
       <div class="tabbar">
-        <template v-for="(t, index) in tabs">
-          <div v-if="dockGhostIndex === index" :key="'dock-ghost-' + t.id" class="tab tab-dock-ghost"></div>
+        <template v-for="(t, index) in tabs" :key="t.id">
+          <div v-if="dockGhostIndex === index" class="tab tab-dock-ghost"></div>
           <div
-            :key="t.id"
             class="tab"
             :class="{
               active: activeTab === t.id,
@@ -46,7 +45,7 @@
             @click="onTabClick(t)"
             @contextmenu.prevent="onTabContextmenu($event, t)"
           >
-            <i v-if="isGlyphIcon(t.icon)" class="tab-glyph" :class="t.icon" aria-hidden="true"></i>
+            <el-icon v-if="isEpIcon(t.icon)" class="tab-glyph"><component :is="t.icon" /></el-icon>
             <svg-icon v-else class="tab-glyph" :name="t.icon" />
             <span>{{ tabTitle(t) }}</span>
             <span
@@ -55,13 +54,11 @@
               :class="t.connState"
               :title="$t('conn.' + t.connState)"
             ></span>
-            <i
-              v-if="t.closable"
-              class="x el-icon-close"
+            <el-icon v-if="t.closable"
+              class="x"
               @mousedown.stop.prevent
               @dragstart.stop.prevent
-              @click.stop="closeTabById(t.id)"
-            ></i>
+              @click.stop="closeTabById(t.id)"><Close /></el-icon>
           </div>
           <div
             v-if="dockGhostIndex === tabs.length && index === tabs.length - 1"
@@ -77,7 +74,7 @@
       :disabled="!tabScrollRight"
       :aria-label="$t('tab.scrollRight')"
       @click="scrollTabs(1)"
-    ><i class="el-icon-arrow-right"></i></button>
+    ><el-icon><ArrowRight /></el-icon></button>
     <ctx-menu ref="tabCtxMenu" @select="onTabCtxSelect" />
     <div
       v-if="dragGhost.show"
@@ -96,6 +93,7 @@ import { store, closeTab, moveTab, refreshSessionTab, api, detachTab, moveTabToW
 import { t } from '../../i18n';
 import { TAB_DRAG_TYPE } from '../../constants';
 import { getProtocol } from '../../protocols';
+import { isElementIcon } from '../../lib/icons';
 
 /** Preview size of the detached-window outline shown while a tab is dragged out. */
 const GHOST_W = 320;
@@ -169,7 +167,7 @@ export default {
       this._offDockClear = api.onSessionDockClear(() => this.clearDockGhost());
     }
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.endTabDrag();
     if (this._tabResizeObs) this._tabResizeObs.disconnect();
     if (this._offDockClear) this._offDockClear();
@@ -177,8 +175,8 @@ export default {
     window.removeEventListener('resize', this.scheduleReportBounds);
   },
   methods: {
-    isGlyphIcon(icon) {
-      return typeof icon === 'string' && icon.startsWith('el-icon-');
+    isEpIcon(icon) {
+      return isElementIcon(icon);
     },
     tabTitle(tab) {
       // touch localeTick so the home tab label follows language switches
@@ -503,28 +501,28 @@ export default {
       const isHome = tab.id === 'home';
       const items = [];
       if (isSession) {
-        items.push({ label: t('tab.refresh'), icon: 'el-icon-refresh', action: 'refresh', tabId: tab.id });
+        items.push({ label: t('tab.refresh'), icon: 'Refresh', action: 'refresh', tabId: tab.id });
         if (tab.kind === 'ssh' && this.sshSessionTarget(tab)) {
-          items.push({ label: t('tab.copySession'), icon: 'el-icon-document-copy', action: 'copySession', tabId: tab.id });
+          items.push({ label: t('tab.copySession'), icon: 'DocumentCopy', action: 'copySession', tabId: tab.id });
         }
         if (this.detached) {
-          items.push({ label: t('tab.dockToHost'), icon: 'el-icon-position', action: 'dock', tabId: tab.id });
+          items.push({ label: t('tab.dockToHost'), icon: 'Position', action: 'dock', tabId: tab.id });
         }
         items.push(
-          { label: t('tab.detachToWindow'), icon: 'el-icon-rank', action: 'detach', tabId: tab.id },
+          { label: t('tab.detachToWindow'), icon: 'Rank', action: 'detach', tabId: tab.id },
           { sep: true }
         );
       }
       if (!isHome) {
-        items.push({ label: t('tab.closeCurrent'), icon: 'el-icon-close', action: 'closeCurrent', tabId: tab.id });
+        items.push({ label: t('tab.closeCurrent'), icon: 'Close', action: 'closeCurrent', tabId: tab.id });
       }
-      items.push({ label: t('tab.closeOthers'), icon: 'el-icon-circle-close', action: 'closeOthers', tabId: tab.id });
+      items.push({ label: t('tab.closeOthers'), icon: 'CircleClose', action: 'closeOthers', tabId: tab.id });
       if (!isHome) {
-        items.push({ label: t('tab.closeLeft'), icon: 'el-icon-back', action: 'closeLeft', tabId: tab.id });
+        items.push({ label: t('tab.closeLeft'), icon: 'Back', action: 'closeLeft', tabId: tab.id });
       }
       items.push(
-        { label: t('tab.closeRight'), icon: 'el-icon-right', action: 'closeRight', tabId: tab.id },
-        { label: t('tab.closeAll'), icon: 'el-icon-error', action: 'closeAll', tabId: tab.id }
+        { label: t('tab.closeRight'), icon: 'Right', action: 'closeRight', tabId: tab.id },
+        { label: t('tab.closeAll'), icon: 'CircleCloseFilled', action: 'closeAll', tabId: tab.id }
       );
       this.$refs.tabCtxMenu.open(event, items);
     },

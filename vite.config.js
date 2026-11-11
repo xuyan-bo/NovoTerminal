@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import vue from '@vitejs/plugin-vue2';
+import vue from '@vitejs/plugin-vue';
 import path from 'path';
 import { readFileSync } from 'fs';
 
@@ -24,7 +24,7 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('element-ui')) return 'element-ui';
+            if (id.includes('element-plus') || id.includes('@element-plus')) return 'element-plus';
             if (id.includes('echarts')) return 'echarts';
             if (id.includes('@xterm')) return 'xterm';
             if (id.includes('novnc')) return 'novnc';
@@ -39,5 +39,9 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     strictPort: true,
+  },
+  // 依赖预构建默认按 es2020 处理，@novnc/novnc 里有 top-level await；与 build.target 对齐。
+  optimizeDeps: {
+    esbuildOptions: { target: 'es2022' },
   },
 });

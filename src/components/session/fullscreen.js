@@ -71,7 +71,7 @@ export default function createFullscreenMixin({ fallbackClass, onResize, resizeO
       // Capture before xterm/noVNC, which can consume key events at the target.
       doc.addEventListener('keydown', this.onFallbackEscape, true);
     },
-    beforeDestroy() {
+    beforeUnmount() {
       const state = this._fullscreen;
       state.disposed = true;
       state.cancelled = true;

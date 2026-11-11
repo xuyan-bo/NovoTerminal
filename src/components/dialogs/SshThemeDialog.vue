@@ -1,14 +1,16 @@
 <template>
   <el-dialog
-    :visible.sync="visible"
+    v-model="visible"
     width="520px"
     top="10vh"
     :close-on-click-modal="false"
   >
-    <div slot="title" class="dlg-head">
-      <svg-icon name="palette" :size="16" class="dlg-icon" />
-      <span>{{ $t('theme.title') }}</span>
-    </div>
+    <template #header>
+      <div class="dlg-head">
+        <svg-icon name="palette" :size="16" class="dlg-icon" />
+        <span>{{ $t('theme.title') }}</span>
+      </div>
+    </template>
 
     <div class="theme-sec-title">{{ $t('theme.textColors') }}</div>
     <div class="theme-row" v-for="row in basicRows" :key="row.key">
@@ -16,8 +18,7 @@
       <el-color-picker
         v-model="form[row.key]"
         :predefine="predefine"
-        :append-to-body="!inFullscreen"
-        size="small"
+        :teleported="!inFullscreen"
       />
       <span class="theme-row-hex">{{ form[row.key] }}</span>
     </div>
@@ -32,16 +33,9 @@
       >
         <el-color-picker
           v-model="form.ansi[i]"
-          size="mini"
           :predefine="predefine"
-          :append-to-body="!inFullscreen"
-        >
-          <div
-            slot="trigger"
-            class="ansi-swatch"
-            :style="{ background: c }"
-          ></div>
-        </el-color-picker>
+          :teleported="!inFullscreen"
+        />
         <span class="ansi-idx">{{ i < 8 ? '0' : '1' }}{{ i % 8 }}</span>
       </div>
     </div>
@@ -62,9 +56,9 @@
     </div>
 
     <template #footer>
-      <el-button size="mini" @click="reset">{{ $t('theme.reset') }}</el-button>
-      <el-button size="mini" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
-      <el-button size="mini" type="primary" :loading="saving" @click="confirm">{{ $t('settings.save') }}</el-button>
+      <el-button @click="reset">{{ $t('theme.reset') }}</el-button>
+      <el-button @click="visible = false">{{ $t('settings.cancel') }}</el-button>
+      <el-button type="primary" :loading="saving" @click="confirm">{{ $t('settings.save') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -206,14 +200,6 @@ export default {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-}
-.ansi-swatch {
-  width: 26px;
-  height: 20px;
-  border-radius: 4px;
-  border: 1px solid rgba(128, 128, 128, 0.35);
-  cursor: pointer;
-  box-sizing: border-box;
 }
 .ansi-idx {
   font-family: Consolas, monospace;

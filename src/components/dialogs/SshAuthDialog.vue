@@ -1,34 +1,36 @@
 <template>
   <el-dialog
-    :visible="!!active"
+    :model-value="!!active"
     width="480px"
     append-to-body
     :close-on-click-modal="false"
     :before-close="cancel"
   >
-    <div slot="title" class="dlg-head">
-      <i class="dlg-icon el-icon-key"></i>
-      <span>{{ 'SSH · ' + $t('ssh.authTitle') }}</span>
-    </div>
+    <template #header>
+      <div class="dlg-head">
+        <el-icon class="dlg-icon"><Key /></el-icon>
+        <span>{{ 'SSH · ' + $t('ssh.authTitle') }}</span>
+      </div>
+    </template>
 
     <template v-if="active">
       <p>{{ active.host }}:{{ active.port }}</p>
       <p v-if="active.name">{{ active.name }}</p>
       <p v-if="active.instructions" class="instructions">{{ active.instructions }}</p>
-      <el-form @submit.native.prevent="submit">
+      <el-form @submit.prevent="submit">
         <el-form-item v-for="(prompt, index) in active.prompts" :key="index" :label="prompt.prompt">
           <el-input
             v-model="active.answers[index]"
             :type="prompt.echo ? 'text' : 'password'"
             autocomplete="off"
-            @keydown.enter.native.prevent="submit"
+            @keydown.enter.prevent="submit"
           />
         </el-form-item>
       </el-form>
     </template>
     <template #footer>
-      <el-button size="small" @click="cancel">{{ $t('msg.cancel') }}</el-button>
-      <el-button size="small" type="primary" @click="submit">{{ $t('msg.confirm') }}</el-button>
+      <el-button @click="cancel">{{ $t('msg.cancel') }}</el-button>
+      <el-button type="primary" @click="submit">{{ $t('msg.confirm') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -52,7 +54,7 @@ export default {
       this.requests = this.requests.filter((r) => r.requestId !== requestId);
     });
   },
-  beforeDestroy() {
+  beforeUnmount() {
     if (this._offPrompt) this._offPrompt();
     if (this._offCancel) this._offCancel();
     for (const req of this.requests) api.sshAuthReply(req.requestId, null).catch(() => {});

@@ -16,17 +16,19 @@
         <div class="stat-chips" ref="chipsEl">
           <span v-for="row in visibleTypes" :key="row.id" class="chip">
             <span class="type-dot" :style="{ background: row.color }"></span>
-            <i v-if="row.glyph" class="os-icon" :class="row.glyph" aria-hidden="true"></i>
+            <el-icon v-if="row.glyph" class="os-icon" aria-hidden="true"><component :is="row.glyph" /></el-icon>
             <span v-else class="os-icon" :class="'os-' + row.id" v-html="iconSvg(row.id)"></span>
             {{ $t(row.nameKey) }} <b>{{ row.count }}</b>
           </span>
           <el-tooltip v-if="hiddenTypes.length" placement="top">
-            <div slot="content">
-              <div v-for="row in hiddenTypes" :key="row.id" class="chip-more-row">
-                <span class="type-dot" :style="{ background: row.color }"></span>
-                {{ $t(row.nameKey) }} <b>{{ row.count }}</b>
+            <template #content>
+              <div>
+                <div v-for="row in hiddenTypes" :key="row.id" class="chip-more-row">
+                  <span class="type-dot" :style="{ background: row.color }"></span>
+                  {{ $t(row.nameKey) }} <b>{{ row.count }}</b>
+                </div>
               </div>
-            </div>
+            </template>
             <span class="chip chip-more">+{{ hiddenTypes.length }}</span>
           </el-tooltip>
         </div>
@@ -34,7 +36,7 @@
         <div class="stat-chips stat-chips-measure" ref="measureEl" aria-hidden="true">
           <span v-for="row in typeRows" :key="row.id" class="chip">
             <span class="type-dot" :style="{ background: row.color }"></span>
-            <i v-if="row.glyph" class="os-icon" :class="row.glyph"></i>
+            <el-icon v-if="row.glyph" class="os-icon"><component :is="row.glyph" /></el-icon>
             <span v-else class="os-icon" :class="'os-' + row.id" v-html="iconSvg(row.id)"></span>
             {{ $t(row.nameKey) }} <b>{{ row.count }}</b>
           </span>
@@ -51,7 +53,7 @@
           <el-scrollbar class="recent-scroll-wrap">
             <div class="recent-list">
               <div v-for="row in recentRows" :key="row.key" class="recent-item">
-                <i v-if="iconGlyph(row.icon)" class="os-icon" :class="iconGlyph(row.icon)"></i>
+                <el-icon v-if="iconGlyph(row.icon)" class="os-icon"><component :is="iconGlyph(row.icon)" /></el-icon>
                 <span v-else class="os-icon" :class="'os-' + row.icon" v-html="iconSvg(row.icon)"></span>
                 <div class="ri-main">
                   <div class="ri-name">{{ row.name }}</div>
@@ -70,7 +72,7 @@
                 </el-tooltip>
                 <el-tooltip :content="$t('home.removeRecent')" placement="top">
                   <button type="button" class="recent-delete-btn" @click="removeRecentRecord(row)">
-                    <i class="el-icon-delete"></i>
+                    <el-icon><Delete /></el-icon>
                   </button>
                 </el-tooltip>
               </div>
@@ -225,7 +227,7 @@ export default {
       this.nowMs = Date.now();
     }, 60000);
   },
-  beforeDestroy() {
+  beforeUnmount() {
     clearInterval(this._timeTimer);
     window.removeEventListener('resize', this.resizePie);
     if (this._chipsRO) {

@@ -1,13 +1,13 @@
-import Vue from 'vue';
+import { reactive } from 'vue';
 import { api, unwrap } from './api';
 import { applySettings, t } from './i18n';
 import { resolveAdvanced } from './constants';
 import { getProtocol } from './protocols';
 
-export const store = Vue.observable({
+export const store = reactive({
   snapshot: { groups: [], credentials: [], recent: [], settings: { theme: 'system', lang: 'zh', dataPath: '', zoom: 100, font: 'default' } },
   activeTab: 'home',
-  tabs: [{ id: 'home', title: '首页', closable: false, icon: 'el-icon-s-home', titleKey: 'nav.home' }],
+  tabs: [{ id: 'home', title: '首页', closable: false, icon: 'HomeFilled', titleKey: 'nav.home' }],
   activeAssetId: null,
   activeGroupId: null,
   settingsDialog: false,

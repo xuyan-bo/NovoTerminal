@@ -133,7 +133,7 @@ export default {
     this._authTries = 0;
     this.connect();
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this._disposed = true;
     if (this._resizeObserver) {
       this._resizeObserver.disconnect();
@@ -556,7 +556,7 @@ export default {
   position: relative;
   cursor: default;
 }
-.vnc-screen /deep/ canvas {
+.vnc-screen :deep(canvas) {
   display: block;
   margin: 0 auto;
   cursor: default !important;

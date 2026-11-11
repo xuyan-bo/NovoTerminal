@@ -1,25 +1,26 @@
 <template>
   <el-dialog
-    :visible.sync="modalVisible"
+    v-model="modalVisible"
     width="min(980px, 94vw)"
     top="8vh"
     :close-on-click-modal="false"
   >
-    <div slot="title" class="dlg-head">
-      <i class="dlg-icon el-icon-key"></i>
-      <span>{{ $t('cred.title') }}</span>
-    </div>
+    <template #header>
+      <div class="dlg-head">
+        <el-icon class="dlg-icon"><Key /></el-icon>
+        <span>{{ $t('cred.title') }}</span>
+      </div>
+    </template>
 
     <div class="cred-toolbar">
       <el-input
         v-model="keyword"
-        size="small"
         :placeholder="$t('cred.searchPh')"
         clearable
-        prefix-icon="el-icon-search"
+        prefix-icon="Search"
         style="width: 220px"
       />
-      <el-button size="small" type="primary" plain class="cred-add" icon="el-icon-plus" @click="openCreate">
+      <el-button type="primary" plain class="cred-add" icon="Plus" @click="openCreate">
         {{ $t('cred.new') }}
       </el-button>
     </div>
@@ -27,13 +28,12 @@
       <el-table
         :data="rows"
         stripe
-        size="small"
         height="min(440px, calc(100vh - 260px))"
         row-key="id"
         :row-class-name="dropRowClass"
       >
         <el-table-column width="40">
-          <template slot-scope="{ row }">
+          <template #default="{ row }">
             <span
               class="cred-handle"
               :class="{ 'is-off': !!keyword }"
@@ -41,33 +41,33 @@
               @dragstart="onDragStart(row, $event)"
               @dragend="onDragEnd"
             >
-              <i class="el-icon-rank"></i>
+              <el-icon><Rank /></el-icon>
             </span>
           </template>
         </el-table-column>
         <el-table-column :label="$t('cred.name')" prop="name" min-width="140" show-overflow-tooltip />
         <el-table-column :label="$t('cred.kind')" width="92">
-          <template slot-scope="{ row }">
+          <template #default="{ row }">
             <span class="pill" :class="row.kind === 'key' ? 'cred-kind-key' : 'cred-kind-pass'">
               {{ row.kind === 'key' ? $t('cred.kindKey') : $t('cred.kindPassword') }}
             </span>
           </template>
         </el-table-column>
         <el-table-column :label="$t('cred.user')" min-width="140" show-overflow-tooltip>
-          <template slot-scope="{ row }">{{ row.user || '—' }}</template>
+          <template #default="{ row }">{{ row.user || '—' }}</template>
         </el-table-column>
         <el-table-column :label="$t('cred.note')" min-width="150" show-overflow-tooltip>
-          <template slot-scope="{ row }">{{ row.note || '—' }}</template>
+          <template #default="{ row }">{{ row.note || '—' }}</template>
         </el-table-column>
-        <el-table-column :label="$t('cred.updated')" width="130">
-          <template slot-scope="{ row }">{{ fmtTime(row.updatedAt) }}</template>
+        <el-table-column :label="$t('cred.updated')" width="160" class-name="cred-time">
+          <template #default="{ row }">{{ fmtTime(row.updatedAt) }}</template>
         </el-table-column>
         <el-table-column :label="$t('cred.ops')" width="180" align="center" class-name="cred-ops">
-          <template slot-scope="{ row }">
-            <el-button type="text" size="mini" icon="el-icon-view" @click="openView(row)">
+          <template #default="{ row }">
+            <el-button type="text" size="small" icon="View" @click="openView(row)">
               {{ $t('cred.view') }}
             </el-button>
-            <el-button type="text" size="mini" icon="el-icon-edit" @click="openEdit(row)">
+            <el-button type="text" size="small" icon="Edit" @click="openEdit(row)">
               {{ $t('cred.edit') }}
             </el-button>
             <el-popconfirm
@@ -77,9 +77,11 @@
               :cancel-button-text="$t('settings.cancel')"
               @confirm="remove(row)"
             >
-              <el-button slot="reference" type="text" size="mini" class="cred-del" icon="el-icon-delete">
-                {{ $t('cred.del') }}
-              </el-button>
+              <template #reference>
+                <el-button type="text" size="small" class="cred-del" icon="Delete">
+                  {{ $t('cred.del') }}
+                </el-button>
+              </template>
             </el-popconfirm>
           </template>
         </el-table-column>
@@ -87,12 +89,12 @@
     </div>
 
     <template #footer>
-      <el-button size="mini" @click="modalVisible = false">{{ $t('settings.close') }}</el-button>
+      <el-button @click="modalVisible = false">{{ $t('settings.close') }}</el-button>
     </template>
 
     <el-dialog
       :title="formTitle"
-      :visible.sync="formOpen"
+      v-model="formOpen"
       width="min(560px, 92vw)"
       top="12vh"
       append-to-body
@@ -103,8 +105,7 @@
         :model="form"
         :rules="rules"
         label-width="100px"
-        size="small"
-        @submit.native.prevent
+        @submit.prevent
       >
         <el-form-item :label="$t('cred.name')" prop="name">
           <el-input
@@ -145,24 +146,24 @@
             :readonly="readonly"
             autocomplete="off"
           >
-            <button
-              slot="append"
-              type="button"
-              class="pass-reveal-btn"
-              :title="passVisible ? $t('auth.hidePass') : $t('auth.revealPass')"
-              @click="passVisible = !passVisible"
-            >
-              <svg-icon v-if="!passVisible" name="eye-open" :size="20" />
-              <svg-icon v-else name="eye-closed" :size="20" />
-            </button>
+            <template #append>
+              <button
+                type="button"
+                class="pass-reveal-btn"
+                :title="passVisible ? $t('auth.hidePass') : $t('auth.revealPass')"
+                @click="passVisible = !passVisible"
+              >
+                <svg-icon v-if="!passVisible" name="eye-open" :size="20" />
+                <svg-icon v-else name="eye-closed" :size="20" />
+              </button>
+            </template>
           </el-input>
         </el-form-item>
         <template v-else>
           <el-form-item :label="$t('cred.privateKey')" prop="privateKey">
             <el-button
               class="cred-pick"
-              size="mini"
-              icon="el-icon-folder-opened"
+              icon="FolderOpened"
               :disabled="readonly"
               @click="pickKeyFile"
             >
@@ -184,16 +185,17 @@
               :readonly="readonly"
               autocomplete="off"
             >
-              <button
-                slot="append"
-                type="button"
-                class="pass-reveal-btn"
-                :title="passphraseVisible ? $t('auth.hidePass') : $t('auth.revealPass')"
-                @click="passphraseVisible = !passphraseVisible"
-              >
-                <svg-icon v-if="!passphraseVisible" name="eye-open" :size="20" />
-                <svg-icon v-else name="eye-closed" :size="20" />
-              </button>
+              <template #append>
+                <button
+                  type="button"
+                  class="pass-reveal-btn"
+                  :title="passphraseVisible ? $t('auth.hidePass') : $t('auth.revealPass')"
+                  @click="passphraseVisible = !passphraseVisible"
+                >
+                  <svg-icon v-if="!passphraseVisible" name="eye-open" :size="20" />
+                  <svg-icon v-else name="eye-closed" :size="20" />
+                </button>
+              </template>
             </el-input>
           </el-form-item>
         </template>
@@ -209,12 +211,11 @@
       </el-form>
 
       <template #footer>
-        <el-button size="mini" @click="formOpen = false">
+        <el-button @click="formOpen = false">
           {{ readonly ? $t('settings.close') : $t('settings.cancel') }}
         </el-button>
         <el-button
           v-if="!readonly"
-          size="mini"
           type="primary"
           :loading="saving"
           :disabled="revealing"
@@ -427,7 +428,7 @@ export default {
         const picked = unwrap(await api.browseCredentialKey());
         if (!picked) return;
         this.form.privateKey = picked.content;
-        if (this.$refs.form) this.$refs.form.validateField('privateKey');
+        if (this.$refs.form) this.$refs.form.validateField('privateKey', () => {});
       } catch (e) {
         const code = e.code === 'KEY_TOO_LARGE' ? 'cred.keyTooLarge' : e.code === 'NOT_PRIVATE_KEY' ? 'cred.keyInvalid' : '';
         this.$message.error(code ? t(code) : e.message || t('cred.keyInvalid'));
@@ -571,10 +572,25 @@ export default {
   border-color: var(--accent);
   color: var(--accent);
 }
-.cred-table /deep/ td.cred-ops .el-popover__reference-wrapper {
-  margin-left: 10px;
+/* 14px 字号下 YYYY-MM-DD HH:mm 约 120px，130px 列会被折成两行 */
+.cred-table :deep(td.cred-time .cell) {
+  white-space: nowrap;
 }
-.cred-table /deep/ td.cred-ops .el-button [class*='el-icon-'] + span {
+/* 操作列固定 180px，Element Plus 默认相邻按钮 12px 间距会把三个文字按钮挤到第二行 */
+.cred-table :deep(td.cred-ops .cell) {
+  white-space: nowrap;
+}
+.cred-table :deep(td.cred-ops .el-button) {
+  padding-left: 0;
+  padding-right: 0;
+}
+.cred-table :deep(td.cred-ops .el-button + .el-button) {
+  margin-left: 6px;
+}
+.cred-table :deep(td.cred-ops .cred-del) {
+  margin-left: 6px;
+}
+.cred-table :deep(td.cred-ops .el-button .el-icon + span) {
   margin-left: 2px;
 }
 .cred-handle {
@@ -589,10 +605,10 @@ export default {
   cursor: default;
   opacity: 0.35;
 }
-.cred-table /deep/ .el-table__body tr.is-drop-row > td.el-table__cell {
+.cred-table :deep(.el-table__body tr.is-drop-row > td.el-table__cell) {
   box-shadow: inset 0 2px 0 var(--accent);
 }
-.cred-table /deep/ .el-table__body tr.is-drop-tail > td.el-table__cell {
+.cred-table :deep(.el-table__body tr.is-drop-tail > td.el-table__cell) {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 </style>

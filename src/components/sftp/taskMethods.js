@@ -1,4 +1,4 @@
-import Vue from 'vue';
+import { reactive } from 'vue';
 import { api, unwrap, connectionErrorMessage } from '../../store';
 import { t } from '../../i18n';
 import { formatSize, parentLocal, parentRemote, isTaskFinished, transferErrorText } from './utils';
@@ -19,7 +19,7 @@ export default {
   isTaskFinished,
   /** Rows are rendered lazily and updated in place, so they must be observable on their own. */
   makeTaskRow(s, fields) {
-    return Vue.observable(
+    return reactive(
       Object.assign(
         {
           xferId: null,

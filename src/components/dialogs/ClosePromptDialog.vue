@@ -1,24 +1,26 @@
 <template>
   <el-dialog
-    :visible.sync="visible"
+    v-model="visible"
     :title="title"
     width="400px"
     :close-on-click-modal="false"
     :show-close="true"
     append-to-body
-    custom-class="close-prompt-dialog"
+    class="close-prompt-dialog"
     @closed="onCloseFinished"
   >
     <el-radio-group v-model="choice" class="close-opts">
-      <el-radio label="minimize" class="close-opt">{{ $t('closePrompt.minimize') }}</el-radio>
-      <el-radio label="quit" class="close-opt">{{ $t('closePrompt.quit') }}</el-radio>
+      <el-radio value="minimize" class="close-opt">{{ $t('closePrompt.minimize') }}</el-radio>
+      <el-radio value="quit" class="close-opt">{{ $t('closePrompt.quit') }}</el-radio>
     </el-radio-group>
     <div class="close-remember">
       <el-checkbox v-model="remember">{{ $t('closePrompt.remember') }}</el-checkbox>
     </div>
-    <div slot="footer" class="dialog-footer">
-      <el-button size="mini" type="primary" @click="confirm">{{ $t('msg.confirm') }}</el-button>
-    </div>
+    <template #footer>
+      <div class="dialog-footer">
+        <el-button type="primary" @click="confirm">{{ $t('msg.confirm') }}</el-button>
+      </div>
+    </template>
   </el-dialog>
 </template>
 
@@ -46,7 +48,7 @@ export default {
       this.visible = true;
     });
   },
-  beforeDestroy() {
+  beforeUnmount() {
     if (this._off) this._off();
   },
   methods: {

@@ -1,29 +1,30 @@
 <template>
   <el-dialog
-    :visible.sync="visible"
+    v-model="visible"
     width="520px"
     top="14vh"
     append-to-body
     :close-on-click-modal="false"
   >
-    <div slot="title" class="dlg-head">
-      <i class="dlg-icon el-icon-key"></i>
-      <span>{{ $t('asset.authSettings') + ' · ' + dlg.methodName }}</span>
-    </div>
+    <template #header>
+      <div class="dlg-head">
+        <el-icon class="dlg-icon"><Key /></el-icon>
+        <span>{{ $t('asset.authSettings') + ' · ' + dlg.methodName }}</span>
+      </div>
+    </template>
 
     <el-form
       ref="form"
       :model="form"
       :rules="rules"
       label-width="92px"
-      size="small"
       :disabled="isView"
-      @submit.native.prevent
+      @submit.prevent
     >
       <el-form-item :label="$t('asset.authSource')">
         <el-radio-group v-model="use" @change="onUseChange">
-          <el-radio label="main" :disabled="!mainUsable">{{ $t('asset.useMainAuth') }}</el-radio>
-          <el-radio label="custom">{{ $t('asset.customAuth') }}</el-radio>
+          <el-radio value="main" :disabled="!mainUsable">{{ $t('asset.useMainAuth') }}</el-radio>
+          <el-radio value="custom">{{ $t('asset.customAuth') }}</el-radio>
         </el-radio-group>
         <div v-if="!mainUsable" class="hint main-off">{{ $t('asset.mainAuthUnavailable') }}</div>
       </el-form-item>
@@ -31,8 +32,8 @@
       <template v-if="use === 'custom'">
         <el-form-item :label="$t('asset.authPick')">
           <el-radio-group v-model="form.mode" @change="onModeChange">
-            <el-radio label="inline">{{ $t('asset.authInline') }}</el-radio>
-            <el-radio label="credential">{{ $t('asset.authCredential') }}</el-radio>
+            <el-radio value="inline">{{ $t('asset.authInline') }}</el-radio>
+            <el-radio value="credential">{{ $t('asset.authCredential') }}</el-radio>
           </el-radio-group>
         </el-form-item>
         <template v-if="form.mode === 'inline'">
@@ -45,18 +46,19 @@
               :type="passVisible ? 'text' : 'password'"
               :placeholder="$t('asset.passPh')"
             >
-              <button
-                slot="append"
-                type="button"
-                class="pass-reveal-btn"
-                :disabled="authChecking"
-                :title="authChecking ? $t('auth.verifying') : (passVisible ? $t('auth.hidePass') : $t('auth.revealPass'))"
-                @click="onTogglePassVisible"
-              >
-                <svg-icon v-if="authChecking" class="spin-icon" name="spinner" :size="14" />
-                <svg-icon v-else-if="!passVisible" name="eye-open" :size="20" />
-                <svg-icon v-else name="eye-closed" :size="20" />
-              </button>
+              <template #append>
+                <button
+                  type="button"
+                  class="pass-reveal-btn"
+                  :disabled="authChecking"
+                  :title="authChecking ? $t('auth.verifying') : (passVisible ? $t('auth.hidePass') : $t('auth.revealPass'))"
+                  @click="onTogglePassVisible"
+                >
+                  <svg-icon v-if="authChecking" class="spin-icon" name="spinner" :size="14" />
+                  <svg-icon v-else-if="!passVisible" name="eye-open" :size="20" />
+                  <svg-icon v-else name="eye-closed" :size="20" />
+                </button>
+              </template>
             </el-input>
           </el-form-item>
         </template>
@@ -74,10 +76,10 @@
     </el-form>
 
     <template #footer>
-      <el-button size="mini" @click="visible = false">
+      <el-button @click="visible = false">
         {{ isView ? $t('settings.close') : $t('settings.cancel') }}
       </el-button>
-      <el-button v-if="!isView" size="mini" type="primary" @click="confirm">{{ $t('msg.confirm') }}</el-button>
+      <el-button v-if="!isView" type="primary" @click="confirm">{{ $t('msg.confirm') }}</el-button>
     </template>
   </el-dialog>
 </template>

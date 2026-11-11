@@ -1,0 +1,37 @@
+html, body { margin: 0; height: 100%; background: #0f1419; }
+html.theme-light, html.theme-light body { background: #f5f7fa; }
+#boot {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: #0f1419;
+  color: #e6edf3;
+  font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  transition: opacity 0.24s ease;
+}
+html.theme-light #boot { background: #f5f7fa; color: #303133; }
+#boot.boot-out { opacity: 0; pointer-events: none; }
+.boot-logo { width: 46px; height: 46px; display: block; }
+.boot-name { font-size: 15px; letter-spacing: 0.4px; }
+.boot-bar { width: 116px; height: 2px; border-radius: 2px; overflow: hidden; background: rgba(139, 155, 176, 0.28); }
+html.theme-light .boot-bar { background: rgba(96, 98, 102, 0.2); }
+.boot-bar::after {
+  content: '';
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: 2px;
+  background: #409eff;
+  animation: boot-slide 1.15s ease-in-out infinite;
+}
+@keyframes boot-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(350%); }
+}
+#app { transition: opacity 0.24s ease; }
+#app.boot-enter { opacity: 0; }

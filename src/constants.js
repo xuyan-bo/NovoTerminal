@@ -47,7 +47,7 @@ export const ASSET_ICONS = [
   { id: 'router', nameKey: 'asset.iconRouter' },
   { id: 'nas', nameKey: 'asset.iconNas' },
   { id: 'firewall', nameKey: 'asset.iconFirewall' },
-  { id: 'generic', nameKey: 'asset.iconGeneric', glyph: 'el-icon-s-platform' },
+  { id: 'generic', nameKey: 'asset.iconGeneric', glyph: 'Platform' },
 ];
 
 export function assetIcon(id) {
@@ -55,7 +55,7 @@ export function assetIcon(id) {
 }
 
 export function assetIconGlyph(id) {
-  return id === 'generic' ? 'el-icon-s-platform' : '';
+  return id === 'generic' ? 'Platform' : '';
 }
 
 /**
@@ -436,9 +436,9 @@ export function sshThemeToXterm(colors) {
  * 文案由 i18n 的 ai.perm.<id> / ai.permDesc.<id> 承载。
  */
 export const AI_PERMISSIONS = [
-  { id: 'ask', icon: 'el-icon-question' },
-  { id: 'auto', icon: 'el-icon-check' },
-  { id: 'full', icon: 'el-icon-warning' },
+  { id: 'ask', icon: 'QuestionFilled' },
+  { id: 'auto', icon: 'Check' },
+  { id: 'full', icon: 'Warning' },
 ];
 
 export const AI_DEFAULTS = {

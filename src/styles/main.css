@@ -38,6 +38,66 @@ html.theme-light .app-root,
   --think-soft: rgba(123, 90, 166, 0.1);
 }
 
+/* Element Plus 变量映射：默认深色主题下让组件取项目 token，
+   浅色主题重算一遍，否则 --el-* 会在 :root 上先按深色 token 求值再继承下去。 */
+:root {
+  --el-bg-color: var(--bg-panel);
+  --el-bg-color-page: var(--bg-app);
+  --el-bg-color-overlay: var(--bg-elevated);
+  --el-text-color-primary: var(--text);
+  --el-text-color-regular: var(--text-2);
+  --el-text-color-secondary: var(--text-3);
+  --el-text-color-placeholder: var(--text-3);
+  --el-text-color-disabled: var(--text-3);
+  --el-border-color: var(--border);
+  --el-border-color-light: var(--border);
+  --el-border-color-lighter: var(--border);
+  --el-border-color-extra-light: var(--border);
+  --el-border-color-dark: var(--border);
+  --el-border-color-darker: var(--border);
+  --el-border-color-hover: var(--text-3);
+  --el-fill-color: var(--bg-elevated);
+  --el-fill-color-light: var(--bg-elevated);
+  --el-fill-color-lighter: var(--bg-panel);
+  --el-fill-color-extra-light: var(--bg-panel);
+  --el-fill-color-dark: var(--bg-hover);
+  --el-fill-color-darker: var(--bg-hover);
+  --el-fill-color-blank: var(--bg-panel);
+  --el-disabled-bg-color: var(--bg-elevated);
+  --el-disabled-text-color: var(--text-3);
+  --el-disabled-border-color: var(--border);
+  --el-color-danger: var(--danger);
+}
+
+html.theme-light {
+  --el-bg-color: var(--bg-panel);
+  --el-bg-color-page: var(--bg-app);
+  --el-bg-color-overlay: var(--bg-elevated);
+  --el-text-color-primary: var(--text);
+  --el-text-color-regular: var(--text-2);
+  --el-text-color-secondary: var(--text-3);
+  --el-text-color-placeholder: var(--text-3);
+  --el-text-color-disabled: var(--text-3);
+  --el-border-color: var(--border);
+  --el-border-color-light: var(--border);
+  --el-border-color-lighter: var(--border);
+  --el-border-color-extra-light: var(--border);
+  --el-border-color-dark: var(--border);
+  --el-border-color-darker: var(--border);
+  --el-border-color-hover: var(--text-3);
+  --el-fill-color: var(--bg-elevated);
+  --el-fill-color-light: var(--bg-elevated);
+  --el-fill-color-lighter: var(--bg-panel);
+  --el-fill-color-extra-light: var(--bg-panel);
+  --el-fill-color-dark: var(--bg-hover);
+  --el-fill-color-darker: var(--bg-hover);
+  --el-fill-color-blank: var(--bg-panel);
+  --el-disabled-bg-color: var(--bg-elevated);
+  --el-disabled-text-color: var(--text-3);
+  --el-disabled-border-color: var(--border);
+  --el-color-danger: var(--danger);
+}
+
 html.theme-light,
 html.theme-light body {
   background: var(--bg-app);
@@ -46,25 +106,7 @@ html.theme-light body {
 
 html.theme-light .el-dialog,
 html.theme-light .el-message-box {
-  background: #fff !important;
-}
-
-html.theme-light .el-button--default {
-  background: var(--bg-elevated);
-  border-color: var(--border);
-  color: var(--text);
-}
-
-/* append/prepend 内嵌按钮必须保持 Element 的无边框嵌入样式，否则被上面的默认按钮样式盖成浮块 */
-.el-input-group__append button.el-button--default,
-.el-input-group__prepend button.el-button--default {
-  background: transparent;
-  border-color: transparent;
-  color: inherit;
-}
-.el-input-group__append button.el-button--default:hover,
-.el-input-group__prepend button.el-button--default:hover {
-  color: var(--accent);
+  background: var(--bg-panel) !important;
 }
 
 * {
@@ -98,8 +140,8 @@ button {
   --el-button-border-color: var(--accent);
 }
 
-/* Keep scroll inside the dialog — wrapper must not scroll the whole window */
-.el-dialog__wrapper {
+/* Keep scroll inside the dialog — overlay-dialog must not scroll the whole window */
+.el-overlay-dialog {
   overflow: hidden !important;
   display: flex;
   align-items: center;
@@ -111,7 +153,6 @@ button {
   background: var(--bg-elevated) !important;
   border: 1px solid var(--border);
   margin: 0 !important;
-  top: 0 !important;
   max-height: calc(100vh - 40px);
   max-width: calc(100vw - 40px);
   display: flex;
@@ -128,6 +169,7 @@ button {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  padding: 16px var(--el-dialog-padding-primary);
 }
 
 .el-dialog__body::-webkit-scrollbar {
@@ -167,9 +209,8 @@ button {
 }
 
 /* ===== el-table（日志弹窗与 SFTP 传输队列共用）=====
-   Element 把表格底色、斑马纹、悬停与边框全写死成浅色值（#FFF/#FAFAFA/#F5F7FA/#EBEEF5），
-   深色主题下整张表是白的。浅色主题下这些 token 与 Element 原值几乎一致，观感不变。
-   选择器必须与 Element 原规则同权重并排在它之后（main.css 在 theme-chalk 之后引入）才压得住。 */
+   Element Plus 已把表格底色与边框改成 --el-table-* 变量（由上面的 --el-* 映射接管），
+   这里的覆盖只为保留项目自己的斑马纹与悬停色；选择器须与官方规则同权重且排在其后。 */
 .el-table,
 .el-table tr,
 .el-table th.el-table__cell,
@@ -207,10 +248,11 @@ button {
   border-color: var(--border);
 }
 
-/* 右、下两条外框是伪元素画的，不吃 border-color */
+/* 外框线是四条伪元素画的，不吃 border-color；2.14 分别挂在 --border 与 __inner-wrapper 上 */
 .el-table--border::after,
-.el-table--group::after,
-.el-table::before {
+.el-table--border::before,
+.el-table--border .el-table__inner-wrapper::after,
+.el-table__inner-wrapper::before {
   background-color: var(--border);
 }
 
@@ -242,9 +284,12 @@ button {
   color: var(--text-2);
 }
 
-/* disabled 的 #C0C4CC 在暗底上反而比正文更亮，换成 --text-3 才读得出「不可点」 */
+/* disabled 的 #C0C4CC 在暗底上反而比正文更亮，换成 --text-3 才读得出「不可点」；
+   2.14 的禁用态是 :disabled 与 .is-disabled，不再是 .disabled */
 .el-pagination button:disabled,
-.el-pagination .el-pager li.disabled {
+.el-pagination button.is-disabled,
+.el-pagination .el-pager li:disabled,
+.el-pagination .el-pager li.is-disabled {
   color: var(--text-3);
   background-color: transparent;
 }
@@ -254,11 +299,6 @@ button {
 .el-loading-mask {
   background-color: transparent;
 }
-/* Element 还会在挂上 loading 父类时把外框 border-color 清成 transparent（它假定遮罩不透明），
-   上、左两条外框就此消失，右、下由伪元素画所以还在。底色既然透明，外框也要留着。 */
-.el-table--border.el-loading-parent--relative {
-  border-color: var(--border);
-}
 
 .el-dialog__title,
 .el-dialog__body {
@@ -266,7 +306,7 @@ button {
 }
 
 /* 弹框标题：图标取「打开它的入口按钮」那一个，上色与 AI/监控面板头部同为 --accent。
-   slot="title" 会整颗替换掉 .el-dialog__title，所以字号行高要和 Element 默认的 18px/24px 对齐。 */
+   #header 插槽会整颗替换掉 .el-dialog__title，所以字号行高要和 Element Plus 默认的 18px/24px 对齐。 */
 .dlg-head {
   display: flex;
   align-items: center;
@@ -294,7 +334,14 @@ button {
   color: var(--text-2) !important;
 }
 
-.el-form-item.is-required:not(.is-no-asterisk) > .el-form-item__label::before {
+/* label 在 Element Plus 是 inline-flex + align-items:flex-start，#label 插槽里的提示图标会贴顶；
+   flex 容器会吞掉模板里的空白，图标所以要自己留一点间距 */
+.el-form-item__label .el-tooltip__trigger {
+  align-self: center;
+  margin-left: 4px;
+}
+
+.el-form-item.is-required:not(.is-no-asterisk).asterisk-left > .el-form-item__label::before {
   content: '*';
   color: var(--danger);
   font-family: inherit;
@@ -302,30 +349,21 @@ button {
   font-weight: 600;
 }
 
-.el-form-item__error,
-.el-form-item.is-error .el-form-item__error {
+.el-form-item__error {
   color: var(--danger) !important;
 }
 
-.el-form-item.is-error .el-input__inner,
-.el-form-item.is-error .el-textarea__inner,
-.el-form-item.is-error .el-select .el-input__inner {
-  border-color: var(--danger) !important;
-}
-
+/* 边框由 .el-input__wrapper 的 box-shadow 绘制、底色由 --el-* 映射接管，错误态官方已覆盖
+   wrapper / textarea / select；裸 input 上只保留输入值的颜色 */
 .el-input__inner,
-.el-textarea__inner,
-.el-select .el-input__inner {
-  background: var(--bg-panel) !important;
-  border-color: var(--border) !important;
+.el-textarea__inner {
   color: var(--text) !important;
 }
 
-/* append/prepend 槽跟随主题：Element 把它写死成浅灰 #F5F7FA，深色主题下会在暗输入框末端留一块亮斑 */
+/* append/prepend 的边框同样是 box-shadow，这里只跟随主题改底色与文字 */
 .el-input-group__append,
 .el-input-group__prepend {
   background: var(--bg-elevated);
-  border-color: var(--border);
   color: var(--text-2);
 }
 
@@ -474,6 +512,10 @@ button {
   padding: 3px 12px;
   border-bottom: 1px solid var(--border);
 }
+/* 输入框默认 32px 会把这一行撑到 39px，比页签栏高 4px；收回 28px 保持 3 + 28 + 3 + 1 = 35px */
+.side-search .el-input {
+  --el-input-height: 28px;
+}
 
 .tree-scroll {
   flex: 1;
@@ -522,10 +564,6 @@ button {
 
 .tree .el-tree__drop-indicator {
   background-color: var(--accent);
-}
-
-.tree .el-tree-node.is-drag-src > .el-tree-node__content {
-  opacity: 0.45;
 }
 
 .tn {
@@ -1190,7 +1228,7 @@ button {
   background: rgba(245, 108, 108, 0.12);
 }
 
-.recent-delete-btn i {
+.recent-delete-btn .el-icon {
   font-size: 14px;
   line-height: 1;
 }

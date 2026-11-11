@@ -1,14 +1,16 @@
 <template>
   <el-dialog
-    :visible.sync="visible"
+    v-model="visible"
     width="760px"
     top="5vh"
     :close-on-click-modal="false"
   >
-    <div slot="title" class="dlg-head">
-      <i class="dlg-icon" :class="dialogIcon"></i>
-      <span>{{ dialogTitle }}</span>
-    </div>
+    <template #header>
+      <div class="dlg-head">
+        <el-icon class="dlg-icon"><component :is="dialogIcon" /></el-icon>
+        <span>{{ dialogTitle }}</span>
+      </div>
+    </template>
 
     <el-divider content-position="left" class="section-divider">{{ $t('asset.info') }}</el-divider>
 
@@ -18,9 +20,8 @@
       :rules="rules"
       :disabled="isView"
       label-width="100px"
-      size="small"
       style="margin-bottom:8px"
-      @submit.native.prevent
+      @submit.prevent
     >
       <el-form-item :label="$t('asset.iconLabel')">
         <el-tooltip v-for="ic in icons" :key="ic.id" :content="$t(ic.nameKey)" placement="top">
@@ -29,7 +30,7 @@
             :class="{ on: form.icon === ic.id, disabled: isView }"
             @click="!isView && (form.icon = ic.id)"
           >
-            <i v-if="ic.glyph" class="glyph" :class="ic.glyph" aria-hidden="true"></i>
+            <el-icon v-if="ic.glyph" class="glyph" aria-hidden="true"><component :is="ic.glyph" /></el-icon>
             <span v-else class="slot" :class="ic.id" v-html="iconSvg(ic.id)"></span>
           </div>
         </el-tooltip>
@@ -54,9 +55,9 @@
       <!-- 红星只按 label 渲染，所以挂在这段有 label 的行上；不用 el-form-item 的 required 属性——这一段没有 prop，Element 会把它当校验规则塞进去 -->
       <el-form-item :label="$t('asset.mainAuth')" class="auth-row" :class="{ 'is-required': form.auth.mode !== 'none' }">
         <el-radio-group v-model="form.auth.mode" class="auth-modes" @change="onMainModeChange">
-          <el-radio label="inline">{{ $t('asset.mainInline') }}</el-radio>
-          <el-radio label="credential">{{ $t('asset.mainCredential') }}</el-radio>
-          <el-radio label="none">{{ $t('asset.mainNone') }}</el-radio>
+          <el-radio value="inline">{{ $t('asset.mainInline') }}</el-radio>
+          <el-radio value="credential">{{ $t('asset.mainCredential') }}</el-radio>
+          <el-radio value="none">{{ $t('asset.mainNone') }}</el-radio>
         </el-radio-group>
       </el-form-item>
       <!-- 用户名与凭证各占一个 form-item：必填提示才会落在自己那一格下面，而不是整组的最末行 -->
@@ -69,18 +70,19 @@
           :type="passVisible ? 'text' : 'password'"
           :placeholder="$t('asset.passPh')"
         >
-          <button
-            slot="append"
-            type="button"
-            class="pass-reveal-btn"
-            :disabled="authChecking"
-            :title="authChecking ? $t('auth.verifying') : (passVisible ? $t('auth.hidePass') : $t('auth.revealPass'))"
-            @click="onTogglePassVisible"
-          >
-            <svg-icon v-if="authChecking" class="spin-icon" name="spinner" :size="14" />
-            <svg-icon v-else-if="!passVisible" name="eye-open" :size="20" />
-            <svg-icon v-else name="eye-closed" :size="20" />
-          </button>
+          <template #append>
+            <button
+              type="button"
+              class="pass-reveal-btn"
+              :disabled="authChecking"
+              :title="authChecking ? $t('auth.verifying') : (passVisible ? $t('auth.hidePass') : $t('auth.revealPass'))"
+              @click="onTogglePassVisible"
+            >
+              <svg-icon v-if="authChecking" class="spin-icon" name="spinner" :size="14" />
+              <svg-icon v-else-if="!passVisible" name="eye-open" :size="20" />
+              <svg-icon v-else name="eye-closed" :size="20" />
+            </button>
+          </template>
         </el-input>
       </el-form-item>
       <el-form-item v-if="form.auth.mode === 'credential'" prop="auth.credentialId">
@@ -116,10 +118,10 @@
 
     <template #footer>
       <span style="float:left;color:var(--text-3);font-size:11px;line-height:28px" v-if="!isView">{{ summary }}</span>
-      <el-button size="mini" @click="visible = false">
+      <el-button @click="visible = false">
         {{ isView ? $t('settings.close') : $t('settings.cancel') }}
       </el-button>
-      <el-button size="mini" type="primary" :loading="saving" @click="save" v-if="!isView">
+      <el-button type="primary" :loading="saving" @click="save" v-if="!isView">
         {{ $t('asset.save') }}
       </el-button>
     </template>
@@ -326,9 +328,9 @@ export default {
       return this.isClone ? this.$t('asset.dialogClone') : this.$t('asset.dialogNew');
     },
     dialogIcon() {
-      if (this.isView) return 'el-icon-view';
-      if (this.isEdit) return 'el-icon-edit';
-      return this.isClone ? 'el-icon-document-copy' : 'el-icon-plus';
+      if (this.isView) return 'View';
+      if (this.isEdit) return 'Edit';
+      return this.isClone ? 'DocumentCopy' : 'Plus';
     },
     groups() {
       return store.snapshot.groups || [];
@@ -382,7 +384,7 @@ export default {
       if (!r || !this.visible) return;
       const row = this.draft[r.methodId];
       if (row) {
-        this.$set(row, 'advanced', r.advanced);
+        row.advanced = r.advanced;
         this.draft = { ...this.draft };
       }
     },
@@ -390,7 +392,7 @@ export default {
       if (!r || !this.visible) return;
       const row = this.draft[r.methodId];
       if (row) {
-        this.$set(row, 'auth', r.auth);
+        row.auth = r.auth;
         this.draft = { ...this.draft };
       }
     },
@@ -415,7 +417,7 @@ export default {
     addMethod(id) {
       const protocol = getProtocol(id);
       if (!protocol || this.draft[id]) return;
-      this.$set(this.draft, id, { port: protocol.defaultPort });
+      this.draft[id] = { port: protocol.defaultPort };
       this.draft = { ...this.draft };
       this.validateMethods();
     },
@@ -430,7 +432,7 @@ export default {
       const conf = this.draft[row.id];
       if (!conf) return;
       // 清空数字框时 Element 给出 undefined，回落到协议默认端口
-      this.$set(conf, 'port', normalizePort(port, row.meta.defaultPort));
+      conf.port = normalizePort(port, row.meta.defaultPort);
     },
     openAdvanced(row) {
       openMethodAdvanced({
@@ -452,7 +454,7 @@ export default {
     },
     validateMethods() {
       if (!this.$refs.form) return;
-      this.$refs.form.validateField('methods');
+      this.$refs.form.validateField('methods', () => {});
     },
     /** Chrome-style: system identity check before revealing saved password */
     async onTogglePassVisible() {
@@ -513,7 +515,7 @@ export default {
           path: folderIdPath(this.groups, hit.group.id),
           host: a.host,
           note: a.note || '',
-          // auth 必须跟着这次整体赋值一起进 form：后挂上去的属性在 Vue 2 里不是响应式的，单选点了不会重绘
+          // auth 必须跟着这次整体赋值一起进 form，避免表单草稿与打开时的快照脱节
           auth: {
             mode: auth.mode || 'none',
             user: auth.user || '',
@@ -526,7 +528,7 @@ export default {
         Object.keys(this.draft).forEach((id) => {
           const protocol = getProtocol(id);
           const row = this.draft[id];
-          if (protocol && row) this.$set(row, 'port', normalizePort(row.port, protocol.defaultPort));
+          if (protocol && row) row.port = normalizePort(row.port, protocol.defaultPort);
         });
       } else {
         // 源资产已不在快照里时按新增表单打开，不留下一次编辑的残留内容
@@ -564,8 +566,8 @@ export default {
       let done = 0;
       const valid = await new Promise((resolve) => {
         props.forEach((prop) => {
-          this.$refs.form.validateField(prop, (err) => {
-            if (err) failed += 1;
+          this.$refs.form.validateField(prop, (ok) => {
+            if (!ok) failed += 1;
             done += 1;
             if (done === props.length) resolve(!failed);
           });
@@ -679,7 +681,7 @@ export default {
   margin: 4px 0 16px;
   background-color: var(--border);
 }
-.section-divider /deep/ .el-divider__text {
+.section-divider :deep(.el-divider__text) {
   background: var(--bg-panel);
   color: var(--text);
   font-size: 13px;
@@ -703,7 +705,7 @@ export default {
   display: grid;
   place-items: center;
 }
-.icon-cell .slot /deep/ svg {
+.icon-cell .slot :deep(svg) {
   width: 20px;
   height: 20px;
   display: block;
@@ -737,11 +739,13 @@ export default {
   cursor: default;
   opacity: 0.5;
 }
+/* radio-group 在 Element Plus 是 inline-flex，横排靠 flex-wrap；radio 自带 32px 行高 */
 .auth-modes {
-  display: block;
-  line-height: 32px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
 }
-/* 单选这行自己没有报错位，收紧到 6px；下面几格保留 Element 默认 22px，那正是必填提示那一行的位置 */
+/* 单选这行自己没有报错位，收紧到 6px；下面几格保留 Element Plus 默认 18px，那正是必填提示那一行的位置 */
 .auth-row {
   margin-bottom: 6px;
 }
@@ -751,18 +755,16 @@ export default {
 .methods-item {
   width: 100%;
 }
-.methods-item /deep/ .el-form-item__label {
-  float: none;
+.methods-item :deep(.el-form-item__label) {
   display: none;
   width: 0;
   padding: 0;
   margin: 0;
 }
-.methods-item /deep/ .el-form-item__content {
-  margin-left: 0 !important;
+.methods-item :deep(.el-form-item__content) {
   line-height: normal;
 }
-.methods-item /deep/ .el-form-item__error {
+.methods-item :deep(.el-form-item__error) {
   position: static;
   margin-top: 6px;
   padding-top: 0;

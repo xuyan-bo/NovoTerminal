@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     :title="state.title"
-    :visible.sync="visible"
+    v-model="visible"
     width="380px"
     append-to-body
     :close-on-click-modal="false"
@@ -12,17 +12,18 @@
       :model="form"
       :rules="rules"
       label-width="84px"
-      size="small"
-      @submit.native.prevent
+      @submit.prevent
     >
       <el-form-item :label="state.label" prop="name">
-        <el-input ref="input" v-model="form.name" maxlength="255" @keyup.enter.native="submit" />
+        <el-input ref="input" v-model="form.name" maxlength="255" @keyup.enter="submit" />
       </el-form-item>
     </el-form>
-    <div slot="footer" class="name-footer">
-      <el-button size="mini" @click="visible = false">{{ $t('msg.cancel') }}</el-button>
-      <el-button size="mini" type="primary" @click="submit">{{ $t('msg.confirm') }}</el-button>
-    </div>
+    <template #footer>
+      <div class="name-footer">
+        <el-button @click="visible = false">{{ $t('msg.cancel') }}</el-button>
+        <el-button type="primary" @click="submit">{{ $t('msg.confirm') }}</el-button>
+      </div>
+    </template>
   </el-dialog>
 </template>
 

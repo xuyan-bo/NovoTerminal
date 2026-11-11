@@ -18,7 +18,8 @@
     "pack:mac": "npm run build:renderer && cross-env ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --mac --arm64 --x64",
     "pack:win": "npm run build:renderer && cross-env ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win --x64 --arm64",
     "pack:linux": "npm run build:renderer && cross-env ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --linux --x64 --arm64",
-    "lint": "echo \"no lint configured\""
+    "lint": "echo \"no lint configured\"",
+    "test": "vitest run"
   },
   "dependencies": {
     "iconv-lite": "0.6.3",
@@ -27,8 +28,9 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
     "@novnc/novnc": "^1.7.0",
-    "@vitejs/plugin-vue2": "^2.3.3",
+    "@vitejs/plugin-vue": "^5.2.1",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/addon-search": "0.15.0",
     "@xterm/xterm": "5.5.0",
@@ -36,11 +38,12 @@
     "echarts": "^6.1.0",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
-    "element-ui": "^2.15.14",
+    "element-plus": "^2.11.1",
     "ironrdp-wasm": "^1.1.0",
     "marked": "^18.0.14",
     "vite": "^5.4.11",
-    "vue": "^2.7.16"
+    "vitest": "^2.1.9",
+    "vue": "^3.5.13"
   },
   "build": {
     "appId": "com.novoterminal.app",

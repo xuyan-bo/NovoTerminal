@@ -25,7 +25,7 @@
 | 分类 | 选型 |
 | --- | --- |
 | 运行时 | Electron · Node.js |
-| 前端 | Vue · Element UI |
+| 前端 | Vue 3 · Element Plus |
 | 构建 | Vite |
 | SSH 终端 | xterm.js · ssh2 |
 | RDP 引擎 | IronRDP (WASM) |
@@ -198,7 +198,7 @@ Server resources scattered across projects are messy and usually need several to
 | Category | Choice |
 | --- | --- |
 | Runtime | Electron · Node.js |
-| Frontend | Vue · Element UI |
+| Frontend | Vue 3 · Element Plus |
 | Build | Vite |
 | SSH terminal | xterm.js · ssh2 |
 | RDP engine | IronRDP (WASM) |

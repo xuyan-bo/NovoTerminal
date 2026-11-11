@@ -1,22 +1,23 @@
 <template>
   <el-dialog
-    :visible.sync="visible"
+    v-model="visible"
     width="440px"
     top="5vh"
     :close-on-click-modal="false"
   >
-    <div slot="title" class="dlg-head">
-      <i class="dlg-icon" :class="isEdit ? 'el-icon-edit' : 'el-icon-folder-add'"></i>
-      <span>{{ isEdit ? $t('group.dialogEdit') : $t('group.dialogNew') }}</span>
-    </div>
+    <template #header>
+      <div class="dlg-head">
+        <el-icon class="dlg-icon"><Edit v-if="isEdit" /><FolderAdd v-else /></el-icon>
+        <span>{{ isEdit ? $t('group.dialogEdit') : $t('group.dialogNew') }}</span>
+      </div>
+    </template>
 
     <el-form
       ref="form"
       :model="form"
       :rules="rules"
       label-width="80px"
-      size="small"
-      @submit.native.prevent
+      @submit.prevent
     >
       <el-form-item :label="$t('group.name')" prop="name">
         <el-input
@@ -24,7 +25,7 @@
           :placeholder="$t('group.namePh')"
           maxlength="64"
           clearable
-          @keyup.enter.native="save"
+          @keyup.enter="save"
         />
       </el-form-item>
       <el-form-item :label="$t('group.parent')">
@@ -57,8 +58,8 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button size="mini" @click="visible = false">{{ $t('group.cancel') }}</el-button>
-      <el-button size="mini" type="primary" :loading="saving" @click="save">
+      <el-button @click="visible = false">{{ $t('group.cancel') }}</el-button>
+      <el-button type="primary" :loading="saving" @click="save">
         {{ isEdit ? $t('group.save') : $t('group.create') }}
       </el-button>
     </template>
@@ -197,7 +198,7 @@ export default {
     normalizeColor() {
       this.form.color = normalizeHex(this.form.color);
       if (this.$refs.form) {
-        this.$refs.form.validateField('color');
+        this.$refs.form.validateField('color', () => {});
       }
     },
     save() {
@@ -259,11 +260,13 @@ function normalizeHex(v) {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
+  min-width: 0;
 }
 .hex-input {
   width: 120px;
 }
-.hex-input /deep/ .el-input__inner {
+.hex-input :deep(.el-input__inner) {
   font-family: Consolas, monospace;
   text-transform: uppercase;
 }

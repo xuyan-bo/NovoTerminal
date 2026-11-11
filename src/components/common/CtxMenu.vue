@@ -6,17 +6,16 @@
     :aria-hidden="!visible"
     @click.stop
   >
-    <template v-for="(item, index) in items">
-      <div v-if="item.sep" :key="index" class="ctx-sep"></div>
-      <div v-else-if="item.title" :key="index" class="ctx-title">{{ item.label }}</div>
+    <template v-for="(item, index) in items" :key="index">
+      <div v-if="item.sep" class="ctx-sep"></div>
+      <div v-else-if="item.title" class="ctx-title">{{ item.label }}</div>
       <div
         v-else
-        :key="index"
         class="ctx-item"
         :class="{ danger: item.danger, disabled: item.disabled }"
         :title="item.disabled ? item.hint || '' : ''"
         @click="select(item)"
-      ><i v-if="item.icon" :class="['ctx-icon', item.icon]" aria-hidden="true"></i>{{ item.label }}</div>
+      ><el-icon v-if="item.icon" class="ctx-icon"><component :is="item.icon" /></el-icon>{{ item.label }}</div>
     </template>
   </div>
 </template>
@@ -32,7 +31,7 @@ export default {
     // 菜单项自身的按下由 closeOutside 的 contains 判断放行。
     document.addEventListener('mousedown', this.closeOutside, true);
   },
-  beforeDestroy() {
+  beforeUnmount() {
     document.removeEventListener('mousedown', this.closeOutside, true);
   },
   methods: {

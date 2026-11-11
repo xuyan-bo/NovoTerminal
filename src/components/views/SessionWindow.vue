@@ -101,7 +101,7 @@ export default {
     }
     this.loadGroup();
   },
-  beforeDestroy() {
+  beforeUnmount() {
     if (this._offGroup) this._offGroup();
     if (this._offHandover) this._offHandover();
     if (this._offConfirm) this._offConfirm();

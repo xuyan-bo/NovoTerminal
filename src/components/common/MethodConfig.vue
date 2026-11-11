@@ -8,9 +8,8 @@
       <div class="port-cell">
         <span class="hint port-label">{{ $t('asset.port') }}</span>
         <el-input-number
-          :value="row.conf.port"
+          :model-value="row.conf.port"
           class="port-input"
-          size="mini"
           :min="1"
           :max="65535"
           controls-position="right"
@@ -27,7 +26,7 @@
             :class="{ customized: row.source !== 'main' }"
             @click="$emit('auth', row)"
           >
-            <i class="el-icon-key" aria-hidden="true"></i>
+            <el-icon aria-hidden="true"><Key /></el-icon>
           </button>
         </el-tooltip>
         <el-tooltip :content="$t('adv.gearTip')" placement="top">
@@ -59,11 +58,12 @@
         :cancel-button-text="$t('settings.cancel')"
         @confirm="$emit('remove', row)"
       >
-        <el-tooltip slot="reference" :content="$t('asset.removeMethod')" placement="top">
-          <button type="button" class="gear-icon-btn danger">
+        <template #reference>
+          <!-- reference 必须直接是可点击元素：包一层 el-tooltip 后 Element Plus 只把事件绑到内层提示，确认框不弹 -->
+          <button type="button" class="gear-icon-btn danger" :title="$t('asset.removeMethod')">
             <svg-icon name="trash" />
           </button>
-        </el-tooltip>
+        </template>
       </el-popconfirm>
     </div>
     <el-dropdown
@@ -72,16 +72,18 @@
       class="add-method"
       @command="(id) => $emit('add', id)"
     >
-      <el-button size="mini" plain>
-        <i class="el-icon-plus" aria-hidden="true"></i>
+      <el-button plain>
+        <el-icon aria-hidden="true"><Plus /></el-icon>
         <span>{{ $t('asset.addMethod') }}</span>
       </el-button>
-      <el-dropdown-menu slot="dropdown">
-        <el-dropdown-item v-for="item in menu" :key="item.id" :command="item.id" :disabled="item.added">
-          <span class="mi-name">{{ item.label }}</span>
-          <span class="hint">{{ item.added ? $t('asset.methodAdded') : item.defaultPort }}</span>
-        </el-dropdown-item>
-      </el-dropdown-menu>
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item v-for="item in menu" :key="item.id" :command="item.id" :disabled="item.added">
+            <span class="mi-name">{{ item.label }}</span>
+            <span class="hint">{{ item.added ? $t('asset.methodAdded') : item.defaultPort }}</span>
+          </el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
     </el-dropdown>
   </div>
 </template>
@@ -157,7 +159,7 @@ export default {
   white-space: nowrap;
 }
 .port-input {
-  /* el-input-number--mini 主题宽 130px，右侧箭头要占 50px 内边距，低于 101px 时 5 位端口会被裁掉 */
+  /* 默认尺寸的 controls-position=right 数字框左右留白共 57px，五位端口需约 45px 文字区 */
   width: 110px;
   flex-shrink: 0;
 }
@@ -204,7 +206,7 @@ export default {
 .add-method {
   margin-top: 2px;
 }
-.add-method .el-icon-plus {
+.add-method .el-icon {
   margin-right: 4px;
 }
 .mi-name {

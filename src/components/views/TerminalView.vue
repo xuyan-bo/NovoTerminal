@@ -81,14 +81,14 @@
             @keydown.esc.prevent="closeFind"
           />
           <span class="find-count" :class="{ 'no-match': findMiss }">{{ findCountText }}</span>
-          <button type="button" class="find-btn" :title="$t('term.findPrevTip')" @click="runFind(true)"><i class="el-icon-arrow-up" aria-hidden="true"></i></button>
-          <button type="button" class="find-btn" :title="$t('term.findNextTip')" @click="runFind(false)"><i class="el-icon-arrow-down" aria-hidden="true"></i></button>
+          <button type="button" class="find-btn" :title="$t('term.findPrevTip')" @click="runFind(true)"><el-icon aria-hidden="true"><ArrowUp /></el-icon></button>
+          <button type="button" class="find-btn" :title="$t('term.findNextTip')" @click="runFind(false)"><el-icon aria-hidden="true"><ArrowDown /></el-icon></button>
           <span class="find-sep"></span>
           <button type="button" class="find-btn" :class="{ active: findCase }" :title="$t('term.findCaseTip')" @click="toggleFindCase">Cc</button>
           <button type="button" class="find-btn" :class="{ active: findWord }" :title="$t('term.findWordTip')" @click="toggleFindWord">W</button>
           <button type="button" class="find-btn" :class="{ active: findRegex }" :title="$t('term.findRegexTip')" @click="toggleFindRegex">.*</button>
           <span class="find-sep"></span>
-          <button type="button" class="find-btn" :title="$t('term.findCloseTip')" @click="closeFind"><i class="el-icon-close" aria-hidden="true"></i></button>
+          <button type="button" class="find-btn" :title="$t('term.findCloseTip')" @click="closeFind"><el-icon aria-hidden="true"><Close /></el-icon></button>
         </div>
       </div>
       <div class="ssh-monitor-host" :class="{ open: sideOpen, dragging: monitorDragging || sideDragging }" :style="monitorHostStyle">
@@ -143,6 +143,7 @@
 </template>
 
 <script>
+import { defineAsyncComponent } from 'vue';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
@@ -164,8 +165,8 @@ export default {
   components: {
     SshThemeDialog,
     CtxMenu,
-    SshMonitorPanel: () => import('../panels/SshMonitorPanel.vue'),
-    AiAssistantPanel: () => import('../panels/AiAssistantPanel.vue'),
+    SshMonitorPanel: defineAsyncComponent(() => import('../panels/SshMonitorPanel.vue')),
+    AiAssistantPanel: defineAsyncComponent(() => import('../panels/AiAssistantPanel.vue')),
   },
   mixins: [createFullscreenMixin({
     fallbackClass: 'is-terminal-fullscreen',
@@ -345,7 +346,7 @@ export default {
   activated() {
     this.scheduleFit();
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this._disposed = true;
     window.removeEventListener('resize', this.scheduleFit);
     if (this._fitTimer) clearTimeout(this._fitTimer);
@@ -512,12 +513,12 @@ export default {
       const clip = await this.readClipboardText();
       if (this._disposed || !this.$refs.termCtx) return;
       this.$refs.termCtx.open(e, [
-        { label: t('term.find'), icon: 'el-icon-search', action: 'find' },
+        { label: t('term.find'), icon: 'Search', action: 'find' },
         { sep: true },
-        { label: t('term.copy'), icon: 'el-icon-document-copy', action: 'copy', disabled: !hasSel, hint: t('term.copyNoSel') },
-        { label: t('term.paste'), icon: 'el-icon-document-add', action: 'paste', disabled: clip === '', hint: t('clipboard.empty') },
-        { label: t('term.selectAll'), icon: 'el-icon-finished', action: 'selectAll' },
-        { label: t('term.clear'), icon: 'el-icon-delete', action: 'clear' },
+        { label: t('term.copy'), icon: 'DocumentCopy', action: 'copy', disabled: !hasSel, hint: t('term.copyNoSel') },
+        { label: t('term.paste'), icon: 'DocumentAdd', action: 'paste', disabled: clip === '', hint: t('clipboard.empty') },
+        { label: t('term.selectAll'), icon: 'Finished', action: 'selectAll' },
+        { label: t('term.clear'), icon: 'Delete', action: 'clear' },
       ]);
     },
     onTermCtxSelect(item) {
@@ -1303,7 +1304,7 @@ export default {
       this._connectVersion += 1;
       if (this._rsTimer) clearTimeout(this._rsTimer);
       const sid = this.liveSessionId;
-      // 监控要先停：sid 置空后 status 监听与 beforeDestroy 都拿不到会话，runner 只能空转到下一轮
+      // 监控要先停：sid 置空后 status 监听与 beforeUnmount 都拿不到会话，runner 只能空转到下一轮
       if (this.monitorOpen) this.stopMonitor();
       this.liveSessionId = null;
       // 重连后旧目录已无意义，交给下次 OSC 7 或主进程探测重新确定
@@ -1396,7 +1397,7 @@ export default {
   flex: 0 0 auto;
   overflow: hidden;
 }
-/* Element UI adds margin-left between sibling buttons; keep only flex gap */
+/* Element Plus adds margin-left between sibling buttons; keep only flex gap */
 .ssh-toolbar .el-button + .el-button {
   margin-left: 0;
 }
@@ -1588,7 +1589,7 @@ export default {
 .side-hsplit:hover i {
   background: var(--accent, #409eff);
 }
-.ssh-term /deep/ .xterm {
+.ssh-term :deep(.xterm) {
   height: 100%;
   width: 100%;
   box-sizing: border-box;
@@ -1596,15 +1597,15 @@ export default {
   padding: 4px 6px 6px;
   background: transparent;
 }
-.ssh-term /deep/ .xterm-viewport {
+.ssh-term :deep(.xterm-viewport) {
   overflow-y: auto !important;
   overflow-x: hidden !important;
   background-color: var(--ssh-bg, #000000);
 }
-.ssh-term /deep/ .xterm-screen {
+.ssh-term :deep(.xterm-screen) {
   background: transparent;
 }
-.ssh-term /deep/ .xterm-screen canvas {
+.ssh-term :deep(.xterm-screen canvas) {
   background: transparent;
 }
 /* 查找条：悬浮在终端右上角，right 让开右侧半圆监控/AI 按钮（27px 宽贴右缘） */

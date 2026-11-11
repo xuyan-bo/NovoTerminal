@@ -4,7 +4,6 @@
     <div class="tasks-table-wrap">
       <el-table
         :data="tasks"
-        size="mini"
         height="100%"
         border
         stripe
@@ -18,8 +17,8 @@
         @expand-change="onExpandChange"
       >
         <el-table-column prop="name" :label="$t('sftp.colName')" min-width="140" show-overflow-tooltip>
-          <template slot-scope="scope">
-            <i v-if="scope.row.isFolder || scope.row.isDir" class="folder-tag el-icon-folder" aria-hidden="true"></i>
+          <template #default="scope">
+            <el-icon v-if="scope.row.isFolder || scope.row.isDir" class="folder-tag" aria-hidden="true"><Folder /></el-icon>
             {{ scope.row.name }}
             <span v-if="scope.row.isFolder || scope.row.isDir" class="folder-count">
               ({{ scope.row.doneCount || 0 }}/{{ scope.row.fileCount || 0 }})
@@ -29,7 +28,7 @@
         <el-table-column prop="sessionName" :label="$t('sftp.colSession')" width="110" show-overflow-tooltip />
         <el-table-column prop="sizeText" :label="$t('sftp.colSize')" width="80" />
         <el-table-column :label="$t('sftp.colProgress')" min-width="160">
-          <template slot-scope="scope">
+          <template #default="scope">
             <div class="prog-line">
               <div class="prog-wrap">
                 <div class="prog-bar" :style="{ width: (scope.row.percent || 0) + '%' }"></div>
@@ -45,7 +44,7 @@
         <el-table-column prop="sourcePath" :label="$t('sftp.colSource')" min-width="120" show-overflow-tooltip />
         <el-table-column prop="targetPath" :label="$t('sftp.colTarget')" min-width="120" show-overflow-tooltip />
         <el-table-column :label="$t('sftp.colAction')" width="100" align="center">
-          <template slot-scope="scope">
+          <template #default="scope">
             <template v-if="!scope.row.isDir">
               <el-tooltip :content="scope.row.status === 'paused' ? $t('sftp.resume') : $t('sftp.pause')" placement="top">
                 <button

@@ -46,7 +46,7 @@
             :aria-label="$t('tab.scrollLeft')"
             :title="$t('tab.scrollLeft')"
             @click="scrollTabs(-1)"
-          ><i class="el-icon-arrow-left"></i></button>
+          ><el-icon><ArrowLeft /></el-icon></button>
           <div ref="tabbar" class="sftp-tabbar tabbar-wrap" @scroll.passive="updateTabArrows">
             <div class="tabbar">
               <div
@@ -67,15 +67,13 @@
                 @click="onTabClick(s)"
                 @contextmenu.prevent="onTabContextmenu($event, s)"
               >
-                <i class="tab-glyph el-icon-files" aria-hidden="true"></i>
+                <el-icon class="tab-glyph" aria-hidden="true"><Files /></el-icon>
                 <span class="c-name">{{ s.label }}</span>
                 <span class="conn-dot" :class="s.status"></span>
-                <i
-                  class="x el-icon-close"
+                <el-icon class="x"
                   @mousedown.stop.prevent
                   @dragstart.stop.prevent
-                  @click.stop="closeTab(s)"
-                ></i>
+                  @click.stop="closeTab(s)"><Close /></el-icon>
               </div>
             </div>
           </div>
@@ -87,7 +85,7 @@
             :aria-label="$t('tab.scrollRight')"
             :title="$t('tab.scrollRight')"
             @click="scrollTabs(1)"
-          ><i class="el-icon-arrow-right"></i></button>
+          ><el-icon><ArrowRight /></el-icon></button>
         </div>
 
         <div class="sftp-remote-area">
@@ -125,14 +123,16 @@
               @drag-leave="dropHi = ''"
               @zone-drop="onZoneDrop"
             >
-              <span slot="connection" class="conn-meta">
-                <span class="conn-tag" :class="s.status">{{ statusText(s) }}</span>
-                <span class="conn-host">{{ s.host }}:{{ s.port }}</span>
-              </span>
+              <template #connection>
+                <span class="conn-meta">
+                  <span class="conn-tag" :class="s.status">{{ statusText(s) }}</span>
+                  <span class="conn-host">{{ s.host }}:{{ s.port }}</span>
+                </span>
+              </template>
             </sftp-file-panel>
             <div v-if="s.status === 'error'" class="sftp-session-error">
               <span class="err-text">{{ s.error || $t('conn.error') }}</span>
-              <el-button size="mini" @click="bootSession(s)">{{ $t('sftp.retry') }}</el-button>
+              <el-button @click="bootSession(s)">{{ $t('sftp.retry') }}</el-button>
             </div>
           </div>
           <div v-if="!sessions.length" class="sftp-empty">{{ $t('sftp.tabs.empty') }}</div>
@@ -162,7 +162,7 @@
         class="sftp-ctx-item"
         :class="{ danger: it.danger, disabled: it.disabled }"
         @click="!it.disabled && runCtx(it)"
-      ><i v-if="it.icon" :class="['ctx-icon', it.icon]" aria-hidden="true"></i>{{ it.label }}</div>
+      ><el-icon v-if="it.icon" class="ctx-icon"><component :is="it.icon" /></el-icon>{{ it.label }}</div>
     </div>
 
     <sftp-name-dialog ref="nameDialog" />
@@ -294,7 +294,7 @@ export default {
     },
   },
   created() {
-    // Vue 2 does not proxy data keys beginning with an underscore.
+    // Vue does not proxy data keys beginning with an underscore.
     this._dropLock = {};
     this._pasting = false;
     this._lastDrag = null;
@@ -400,7 +400,7 @@ export default {
     }, 1000);
     window.addEventListener('beforeunload', this.onUnload);
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this._destroyed = true;
     this.endSessionDrag();
     window.removeEventListener('beforeunload', this.onUnload);
@@ -739,14 +739,14 @@ export default {
     /* ---- 页签右键菜单：与主标签栏同一套操作 ---- */
     onTabContextmenu(e, s) {
       const items = [
-        { label: t('tab.refresh'), icon: 'el-icon-refresh', act: 'refresh', id: s.id },
-        { label: t('tab.copySession'), icon: 'el-icon-document-copy', act: 'copy', id: s.id },
+        { label: t('tab.refresh'), icon: 'Refresh', act: 'refresh', id: s.id },
+        { label: t('tab.copySession'), icon: 'DocumentCopy', act: 'copy', id: s.id },
         { sep: true },
-        { label: t('tab.closeCurrent'), icon: 'el-icon-close', act: 'closeCurrent', id: s.id },
-        { label: t('tab.closeOthers'), icon: 'el-icon-circle-close', act: 'closeOthers', id: s.id },
-        { label: t('tab.closeLeft'), icon: 'el-icon-back', act: 'closeLeft', id: s.id },
-        { label: t('tab.closeRight'), icon: 'el-icon-right', act: 'closeRight', id: s.id },
-        { label: t('tab.closeAll'), icon: 'el-icon-error', act: 'closeAll', id: s.id },
+        { label: t('tab.closeCurrent'), icon: 'Close', act: 'closeCurrent', id: s.id },
+        { label: t('tab.closeOthers'), icon: 'CircleClose', act: 'closeOthers', id: s.id },
+        { label: t('tab.closeLeft'), icon: 'Back', act: 'closeLeft', id: s.id },
+        { label: t('tab.closeRight'), icon: 'Right', act: 'closeRight', id: s.id },
+        { label: t('tab.closeAll'), icon: 'CircleCloseFilled', act: 'closeAll', id: s.id },
       ];
       this.$refs.tabCtxMenu.open(e, items);
     },
@@ -921,14 +921,14 @@ export default {
       const computerView = side === 'local' && this.localComputer;
       const items = [];
       if (!computerView) {
-        items.push({ act: 'mkdir', label: t('sftp.mkdir'), icon: 'el-icon-folder-add' });
-        items.push({ act: 'mkfile', label: t('sftp.mkfile'), icon: 'el-icon-document' });
+        items.push({ act: 'mkdir', label: t('sftp.mkdir'), icon: 'FolderAdd' });
+        items.push({ act: 'mkfile', label: t('sftp.mkfile'), icon: 'Document' });
       }
       if (side === 'remote') {
-        items.push({ act: 'paste', label: t('sftp.paste'), icon: 'el-icon-document-add', disabled: !this.clipHasFiles });
+        items.push({ act: 'paste', label: t('sftp.paste'), icon: 'DocumentAdd', disabled: !this.clipHasFiles });
       }
-      items.push({ act: 'refresh', label: t('sftp.refresh'), icon: 'el-icon-refresh' });
-      if (!computerView) items.push({ act: 'select-all', label: t('sftp.selectAll'), icon: 'el-icon-finished' });
+      items.push({ act: 'refresh', label: t('sftp.refresh'), icon: 'Refresh' });
+      if (!computerView) items.push({ act: 'select-all', label: t('sftp.selectAll'), icon: 'Finished' });
       this.openCtxAt(e, side, null, items);
       if (side === 'remote') this.refreshClipFiles();
     },
@@ -970,21 +970,21 @@ export default {
       const many = targets.length > 1;
       const items = [];
       if (side === 'local') {
-        if (many) items.push({ act: 'upload-selected', label: t('sftp.uploadSelected'), icon: 'el-icon-upload2' });
-        else if (f.isDir) items.push({ act: 'upload-folder', label: t('sftp.uploadFolder'), icon: 'el-icon-upload2' });
-        else items.push({ act: 'upload-file', label: t('sftp.uploadFile'), icon: 'el-icon-upload2' });
+        if (many) items.push({ act: 'upload-selected', label: t('sftp.uploadSelected'), icon: 'Upload' });
+        else if (f.isDir) items.push({ act: 'upload-folder', label: t('sftp.uploadFolder'), icon: 'Upload' });
+        else items.push({ act: 'upload-file', label: t('sftp.uploadFile'), icon: 'Upload' });
       } else if (many || !f.isDir) {
-        items.push({ act: 'download-here', label: t('sftp.downloadHere'), icon: 'el-icon-download' });
-        items.push({ act: 'download-to', label: t('sftp.downloadTo'), icon: 'el-icon-download' });
+        items.push({ act: 'download-here', label: t('sftp.downloadHere'), icon: 'Download' });
+        items.push({ act: 'download-to', label: t('sftp.downloadTo'), icon: 'Download' });
       } else {
-        items.push({ act: 'download-folder', label: t('sftp.downloadFolder'), icon: 'el-icon-download' });
+        items.push({ act: 'download-folder', label: t('sftp.downloadFolder'), icon: 'Download' });
       }
       if (!many) {
-        if (!f.isDir) items.push({ act: 'edit', label: t('sftp.edit'), icon: 'el-icon-edit' });
-        items.push({ act: 'rename', label: t('sftp.rename'), icon: 'el-icon-edit-outline' });
-        if (side === 'remote') items.push({ act: 'chmod', label: t('sftp.chmod'), icon: 'el-icon-setting' });
+        if (!f.isDir) items.push({ act: 'edit', label: t('sftp.edit'), icon: 'Edit' });
+        items.push({ act: 'rename', label: t('sftp.rename'), icon: 'EditPen' });
+        if (side === 'remote') items.push({ act: 'chmod', label: t('sftp.chmod'), icon: 'Setting' });
       }
-      items.push({ act: 'delete', label: t('sftp.delete'), icon: 'el-icon-delete', danger: true });
+      items.push({ act: 'delete', label: t('sftp.delete'), icon: 'Delete', danger: true });
       this.openCtxAt(e, side, f, items);
     },
     /** 远端侧（以及本机→远端的上传）要先有连接；本机侧操作不该依赖有没有页签。 */

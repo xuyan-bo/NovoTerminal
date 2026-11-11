@@ -219,7 +219,7 @@ export default {
     this._lastAuthError = false;
     this.connect();
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this._disposed = true;
     if (this._resizeObserver) {
       this._resizeObserver.disconnect();

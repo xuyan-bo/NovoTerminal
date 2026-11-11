@@ -1,28 +1,29 @@
 <template>
   <el-dialog
-    :visible.sync="visible"
+    v-model="visible"
     width="480px"
     top="12vh"
     append-to-body
     :close-on-click-modal="false"
   >
-    <div slot="title" class="dlg-head">
-      <i class="dlg-icon" :class="mode === 'export' ? 'el-icon-download' : 'el-icon-upload2'"></i>
-      <span>{{ mode === 'export' ? $t('backup.exportTitle') : $t('backup.importTitle') }}</span>
-    </div>
+    <template #header>
+      <div class="dlg-head">
+        <el-icon class="dlg-icon"><Download v-if="mode === 'export'" /><Upload v-else /></el-icon>
+        <span>{{ mode === 'export' ? $t('backup.exportTitle') : $t('backup.importTitle') }}</span>
+      </div>
+    </template>
 
     <div v-if="mode === 'export'" class="bk-body">
       <div class="bk-label">{{ $t('backup.contentLabel') }}</div>
       <el-checkbox-group v-model="include" class="bk-cats">
-        <el-checkbox label="settings">{{ $t('backup.catSettings') }}</el-checkbox>
-        <el-checkbox label="assets">{{ $t('backup.catAssets') }}</el-checkbox>
-        <el-checkbox label="credentials">{{ $t('backup.catCredentials') }}</el-checkbox>
-        <el-checkbox label="ai">{{ $t('backup.catAi') }}</el-checkbox>
+        <el-checkbox value="settings">{{ $t('backup.catSettings') }}</el-checkbox>
+        <el-checkbox value="assets">{{ $t('backup.catAssets') }}</el-checkbox>
+        <el-checkbox value="credentials">{{ $t('backup.catCredentials') }}</el-checkbox>
+        <el-checkbox value="ai">{{ $t('backup.catAi') }}</el-checkbox>
       </el-checkbox-group>
       <div class="bk-label">{{ $t('backup.passwordLabel') }}</div>
       <el-input
         v-model="password"
-        size="small"
         show-password
         maxlength="256"
         autocomplete="new-password"
@@ -30,7 +31,6 @@
       />
       <el-input
         v-model="password2"
-        size="small"
         class="bk-again"
         show-password
         maxlength="256"
@@ -42,7 +42,7 @@
     <div v-else class="bk-body">
       <div class="bk-label">{{ $t('backup.fileLabel') }}</div>
       <div class="bk-file">
-        <el-button size="small" @click="pickFile">{{ $t('backup.chooseFile') }}</el-button>
+        <el-button @click="pickFile">{{ $t('backup.chooseFile') }}</el-button>
         <span class="bk-file-name" :class="{ empty: !file }" :title="fileName">
           {{ fileName || $t('backup.noFile') }}
         </span>
@@ -51,7 +51,6 @@
       <div class="bk-label bk-gap">{{ $t('backup.passwordLabel') }}</div>
       <el-input
         v-model="password"
-        size="small"
         show-password
         maxlength="256"
         autocomplete="new-password"
@@ -60,8 +59,8 @@
     </div>
 
     <template #footer>
-      <el-button size="mini" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
-      <el-button size="mini" type="primary" :loading="busy" @click="submit">
+      <el-button @click="visible = false">{{ $t('settings.cancel') }}</el-button>
+      <el-button type="primary" :loading="busy" @click="submit">
         {{ $t('backup.confirm') }}
       </el-button>
     </template>
@@ -221,7 +220,7 @@ export default {
   flex-direction: column;
   gap: 2px;
 }
-.bk-cats /deep/ .el-checkbox {
+.bk-cats :deep(.el-checkbox) {
   margin-right: 0;
 }
 .bk-again {

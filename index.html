@@ -7,9 +7,18 @@
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:*;" />
     <title>NovoTerminal</title>
+    <script src="./boot-theme.js"></script>
+    <link rel="stylesheet" href="/src/styles/boot.css" />
   </head>
   <body>
-    <div id="app"></div>
+    <div id="boot">
+      <img class="boot-logo" src="./favicon.svg" alt="" />
+      <div class="boot-name">NovoTerminal</div>
+      <div class="boot-bar"></div>
+    </div>
+    <!-- opacity 内联写死：启动画面是第一帧，主页必须等挂载完成后再出现。
+         只靠 boot.css 的 .boot-enter 的话，样式表晚一拍就会先露出主页。 -->
+    <div id="app" class="boot-enter" style="opacity: 0"></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

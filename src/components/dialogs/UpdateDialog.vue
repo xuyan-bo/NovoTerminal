@@ -1,15 +1,17 @@
 <template>
   <el-dialog
-    :visible.sync="visible"
+    v-model="visible"
     width="520px"
     append-to-body
     :close-on-click-modal="false"
     @close="onClose"
   >
-    <div slot="title" class="dlg-head">
-      <i class="dlg-icon el-icon-refresh"></i>
-      <span>{{ $t('update.title') }}</span>
-    </div>
+    <template #header>
+      <div class="dlg-head">
+        <el-icon class="dlg-icon"><Refresh /></el-icon>
+        <span>{{ $t('update.title') }}</span>
+      </div>
+    </template>
 
     <div class="update-line">
       <span class="update-badge">{{ $t('update.newVersion', { version: info.latest }) }}</span>
@@ -22,8 +24,8 @@
     <div class="update-footer">
       <el-checkbox v-model="ignoreChecked">{{ $t('update.ignoreVersion') }}</el-checkbox>
       <div class="update-footer-actions">
-        <el-button size="mini" @click="visible = false">{{ $t('msg.cancel') }}</el-button>
-        <el-button size="mini" type="primary" @click="goRelease">{{ $t('settings.aboutReleases') }}</el-button>
+        <el-button @click="visible = false">{{ $t('msg.cancel') }}</el-button>
+        <el-button type="primary" @click="goRelease">{{ $t('settings.aboutReleases') }}</el-button>
       </div>
     </div>
   </el-dialog>

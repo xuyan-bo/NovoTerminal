@@ -1,14 +1,16 @@
 <template>
   <el-dialog
-    :visible.sync="visible"
+    v-model="visible"
     width="1120px"
     top="5vh"
     :close-on-click-modal="false"
   >
-    <div slot="title" class="dlg-head">
+    <template #header>
+    <div class="dlg-head">
       <svg-icon name="gear" :size="16" class="dlg-icon" />
       <span>{{ $t('settings.title') }}</span>
     </div>
+    </template>
 
     <div class="settings-layout">
       <div class="settings-nav">
@@ -21,7 +23,7 @@
           @click="activeMenu = sec.id"
         >
           <svg-icon v-if="sec.svg" :name="sec.svg" :size="13" />
-          <i v-else :class="sec.icon"></i>
+          <el-icon v-else><component :is="sec.icon" /></el-icon>
           <span>{{ $t('settings.' + sec.id) }}</span>
         </button>
       </div>
@@ -31,8 +33,7 @@
           :model="form"
           :rules="rules"
           label-width="150px"
-          size="small"
-          @submit.native.prevent
+          @submit.prevent
         >
         <div v-show="activeMenu === 'general'" class="set-section">
           <el-form-item :label="$t('settings.homeWelcome')">
@@ -87,24 +88,23 @@
           </el-form-item>
           <el-form-item :label="$t('settings.closeAction')">
             <el-radio-group v-model="form.closeAction">
-              <el-radio :label="'ask'">{{ $t('settings.closeActionAsk') }}</el-radio>
-              <el-radio :label="'minimize'">{{ $t('settings.closeActionMin') }}</el-radio>
-              <el-radio :label="'quit'">{{ $t('settings.closeActionQuit') }}</el-radio>
+              <el-radio value="ask">{{ $t('settings.closeActionAsk') }}</el-radio>
+              <el-radio value="minimize">{{ $t('settings.closeActionMin') }}</el-radio>
+              <el-radio value="quit">{{ $t('settings.closeActionQuit') }}</el-radio>
             </el-radio-group>
           </el-form-item>
         </div>
 
         <div v-show="activeMenu === 'data'" class="set-section">
           <el-form-item>
-            <template slot="label">
+            <template #label>
               {{ $t('settings.recentLimit') }}
               <el-tooltip :content="$t('settings.recentLimitTip')" placement="top">
-                <i class="el-icon-info"></i>
+                <el-icon><InfoFilled /></el-icon>
               </el-tooltip>
             </template>
             <el-input-number
               v-model="form.recentLimit"
-              size="mini"
               :min="1"
               :max="RECENT_LIMIT_MAX"
               :step="1"
@@ -112,15 +112,14 @@
             />
           </el-form-item>
           <el-form-item>
-            <template slot="label">
+            <template #label>
               {{ $t('settings.logTotal') }}
               <el-tooltip :content="$t('settings.logTotalTip')" placement="top">
-                <i class="el-icon-info"></i>
+                <el-icon><InfoFilled /></el-icon>
               </el-tooltip>
             </template>
             <el-input-number
               v-model="form.logTotalMb"
-              size="mini"
               :min="LOG_TOTAL_MIN_MB"
               :max="LOG_TOTAL_MAX_MB"
               :step="5"
@@ -128,10 +127,10 @@
             />
           </el-form-item>
           <el-form-item>
-            <template slot="label">
+            <template #label>
               {{ $t('settings.dataPath') }}
               <el-tooltip :content="$t('settings.dataPathTip')" placement="top">
-                <i class="el-icon-info"></i>
+                <el-icon><InfoFilled /></el-icon>
               </el-tooltip>
             </template>
             <div class="path-row">
@@ -140,10 +139,10 @@
             </div>
           </el-form-item>
           <el-form-item>
-            <template slot="label">
+            <template #label>
               {{ $t('settings.fileEditor') }}
               <el-tooltip :content="$t('settings.fileEditorTip')" placement="top">
-                <i class="el-icon-info"></i>
+                <el-icon><InfoFilled /></el-icon>
               </el-tooltip>
             </template>
             <div class="path-row">
@@ -152,75 +151,75 @@
             </div>
           </el-form-item>
           <el-form-item :label="$t('settings.backup')">
-            <el-button size="mini" icon="el-icon-download" @click="openBackup('export')">{{ $t('settings.exportCfg') }}</el-button>
-            <el-button size="mini" icon="el-icon-upload2" @click="openBackup('import')">{{ $t('settings.importCfg') }}</el-button>
+            <el-button icon="Download" @click="openBackup('export')">{{ $t('settings.exportCfg') }}</el-button>
+            <el-button icon="Upload" @click="openBackup('import')">{{ $t('settings.importCfg') }}</el-button>
           </el-form-item>
         </div>
 
         <div v-show="activeMenu === 'ai'" class="set-section">
           <el-form-item>
-            <template slot="label">
+            <template #label>
               {{ $t('settings.ai.enabled') }}
-              <el-tooltip :content="$t('settings.ai.enabledTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+              <el-tooltip :content="$t('settings.ai.enabledTip')" placement="top"><el-icon><InfoFilled /></el-icon></el-tooltip>
             </template>
             <el-switch v-model="ai.enabled" />
           </el-form-item>
 
           <el-form-item>
-            <template slot="label">
+            <template #label>
               {{ $t('settings.ai.permission') }}
-              <el-tooltip :content="$t('settings.ai.permissionTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+              <el-tooltip :content="$t('settings.ai.permissionTip')" placement="top"><el-icon><InfoFilled /></el-icon></el-tooltip>
             </template>
-            <el-radio-group :value="ai.permission" @input="setAiPermission">
-              <el-radio v-for="p in permissions" :key="p.id" :label="p.id">
+            <el-radio-group :model-value="ai.permission" @change="setAiPermission">
+              <el-radio v-for="p in permissions" :key="p.id" :value="p.id">
                 {{ $t('ai.perm.' + p.id) }}
-                <el-tooltip :content="$t('ai.permDesc.' + p.id)" placement="top"><i class="el-icon-info"></i></el-tooltip>
+                <el-tooltip :content="$t('ai.permDesc.' + p.id)" placement="top"><el-icon><InfoFilled /></el-icon></el-tooltip>
               </el-radio>
             </el-radio-group>
           </el-form-item>
           <el-form-item>
-            <template slot="label">
+            <template #label>
               {{ $t('settings.ai.readScreen') }}
-              <el-tooltip :content="$t('settings.ai.readScreenTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+              <el-tooltip :content="$t('settings.ai.readScreenTip')" placement="top"><el-icon><InfoFilled /></el-icon></el-tooltip>
             </template>
             <el-switch v-model="ai.readScreen" />
           </el-form-item>
           <el-form-item>
-            <template slot="label">
+            <template #label>
               {{ $t('settings.ai.temperature') }}
-              <el-tooltip :content="$t('settings.ai.temperatureTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+              <el-tooltip :content="$t('settings.ai.temperatureTip')" placement="top"><el-icon><InfoFilled /></el-icon></el-tooltip>
             </template>
-            <el-input-number v-model="ai.temperature" size="mini" :min="AI_LIMITS.temperature[0]" :max="AI_LIMITS.temperature[1]" :step="0.1" :precision="1" controls-position="right" />
+            <el-input-number v-model="ai.temperature" :min="AI_LIMITS.temperature[0]" :max="AI_LIMITS.temperature[1]" :step="0.1" :precision="1" controls-position="right" />
           </el-form-item>
           <el-form-item>
-            <template slot="label">
+            <template #label>
               {{ $t('settings.ai.timeout') }}
-              <el-tooltip :content="$t('settings.ai.timeoutTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+              <el-tooltip :content="$t('settings.ai.timeoutTip')" placement="top"><el-icon><InfoFilled /></el-icon></el-tooltip>
             </template>
-            <el-input-number v-model="ai.commandTimeoutSec" size="mini" :min="AI_LIMITS.commandTimeoutSec[0]" :max="AI_LIMITS.commandTimeoutSec[1]" :step="10" controls-position="right" />
+            <el-input-number v-model="ai.commandTimeoutSec" :min="AI_LIMITS.commandTimeoutSec[0]" :max="AI_LIMITS.commandTimeoutSec[1]" :step="10" controls-position="right" />
           </el-form-item>
           <el-form-item>
-            <template slot="label">
+            <template #label>
               {{ $t('settings.ai.turns') }}
-              <el-tooltip :content="$t('settings.ai.turnsTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+              <el-tooltip :content="$t('settings.ai.turnsTip')" placement="top"><el-icon><InfoFilled /></el-icon></el-tooltip>
             </template>
-            <el-input-number v-model="ai.maxTurns" size="mini" :min="AI_LIMITS.maxTurns[0]" :max="AI_LIMITS.maxTurns[1]" controls-position="right" />
+            <el-input-number v-model="ai.maxTurns" :min="AI_LIMITS.maxTurns[0]" :max="AI_LIMITS.maxTurns[1]" controls-position="right" />
           </el-form-item>
 
           <el-form-item>
-            <template slot="label">
+            <template #label>
               {{ $t('settings.ai.services') }}
-              <el-tooltip :content="$t('settings.ai.servicesTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+              <el-tooltip :content="$t('settings.ai.servicesTip')" placement="top"><el-icon><InfoFilled /></el-icon></el-tooltip>
             </template>
             <div class="svc-list">
               <div v-for="(svc, i) in ai.services" :key="svc.id" class="svc-card" :class="{ 'is-bad': svc._bad }">
                 <div class="svc-top">
-                  <el-input v-model="svc.name" size="mini" class="svc-name" maxlength="60" :placeholder="$t('settings.ai.serviceName')" />
+                  <el-input v-model="svc.name" class="svc-name" maxlength="60" :placeholder="$t('settings.ai.serviceName')" />
                   <el-tooltip v-if="svc.test" :content="svc.test.text" placement="top">
                     <span class="svc-tag" :class="svc.test.ok ? 'ok' : 'bad'">{{ svc.test.text }}</span>
                   </el-tooltip>
                   <span class="svc-ops">
-                    <el-button size="mini" type="text" :loading="!!svc.testing" @click="testService(svc)">
+                    <el-button type="text" :loading="!!svc.testing" @click="testService(svc)">
                       {{ $t('settings.ai.test') }}
                     </el-button>
                     <el-popconfirm
@@ -230,44 +229,46 @@
                       :cancel-button-text="$t('settings.cancel')"
                       @confirm="removeService(i)"
                     >
-                      <el-button slot="reference" size="mini" type="text" class="svc-del">{{ $t('settings.ai.deleteService') }}</el-button>
+                      <template #reference>
+                        <el-button type="text" class="svc-del">{{ $t('settings.ai.deleteService') }}</el-button>
+                      </template>
                     </el-popconfirm>
                   </span>
                 </div>
                 <div class="svc-grid">
                   <label class="svc-field">
                     <span>{{ $t('settings.ai.baseUrl') }}</span>
-                    <el-input v-model="svc.baseUrl" size="mini" class="mono" maxlength="300" placeholder="https://api.example.com/v1" @input="svc._bad = false" />
+                    <el-input v-model="svc.baseUrl" class="mono" maxlength="300" placeholder="https://api.example.com/v1" @input="svc._bad = false" />
                     <span v-if="isInsecureUrl(svc.baseUrl)" class="svc-warn">{{ $t('settings.ai.baseUrlInsecure') }}</span>
                   </label>
                   <label class="svc-field">
                     <span>{{ $t('settings.ai.apiKey') }}</span>
-                    <el-input v-model="svc.apiKey" size="mini" class="mono" maxlength="400" autocomplete="off"
+                    <el-input v-model="svc.apiKey" class="mono" maxlength="400" autocomplete="off"
                               :type="svc._keyVisible ? 'text' : 'password'" clearable>
-                      <button
-                        slot="append"
-                        type="button"
-                        class="svc-key-reveal"
-                        :disabled="svc._keyChecking"
-                        :title="svc._keyChecking ? $t('auth.verifying') : (svc._keyVisible ? $t('auth.hidePass') : $t('auth.revealPass'))"
-                        @click="onToggleKeyVisible(svc)"
-                      >
-                        <svg-icon v-if="svc._keyChecking" class="spin-icon" name="spinner" :size="14" />
-                        <svg-icon v-else-if="!svc._keyVisible" name="eye-open" :size="18" />
-                        <svg-icon v-else name="eye-closed" :size="18" />
-                      </button>
+                      <template #append>
+                        <button
+                          type="button"
+                          class="svc-key-reveal"
+                          :disabled="svc._keyChecking"
+                          :title="svc._keyChecking ? $t('auth.verifying') : (svc._keyVisible ? $t('auth.hidePass') : $t('auth.revealPass'))"
+                          @click="onToggleKeyVisible(svc)"
+                        >
+                          <svg-icon v-if="svc._keyChecking" class="spin-icon" name="spinner" :size="14" />
+                          <svg-icon v-else-if="!svc._keyVisible" name="eye-open" :size="18" />
+                          <svg-icon v-else name="eye-closed" :size="18" />
+                        </button>
+                      </template>
                     </el-input>
                   </label>
                 </div>
                 <div class="svc-models">
                   <div class="svc-models-head">
                     {{ $t('settings.ai.models') }}
-                    <el-tooltip :content="$t('settings.ai.modelsTip')" placement="top"><i class="el-icon-info"></i></el-tooltip>
+                    <el-tooltip :content="$t('settings.ai.modelsTip')" placement="top"><el-icon><InfoFilled /></el-icon></el-tooltip>
                     <el-button
                       class="head-plus"
-                      size="mini"
                       type="text"
-                      icon="el-icon-plus"
+                      icon="Plus"
                       :loading="!!svc.picking"
                       :title="$t('settings.ai.pickModels')"
                       @click="openModelPicker(svc)"
@@ -292,31 +293,27 @@
                     @dragover="onModelDragOver($event, svc, j)"
                     @drop="onModelDrop($event, svc)"
                   >
-                    <i
-                      class="model-handle el-icon-rank"
+                    <el-icon class="model-handle"
                       draggable="true"
                       @dragstart="onModelDragStart($event, svc, j)"
-                      @dragend="endModelDrag"
-                    ></i>
+                      @dragend="endModelDrag"><Rank /></el-icon>
                     <span class="model-id mono" :title="m.id">{{ m.id }}</span>
                     <template v-if="editing[svc.id + '#' + m.id]">
                       <el-input
                         v-model="editing[svc.id + '#' + m.id].alias"
-                        size="mini"
                         class="model-alias-input"
                         maxlength="60"
                         :placeholder="m.id"
-                        @keyup.enter.native="commitModelEdit(svc, m)"
+                        @keyup.enter="commitModelEdit(svc, m)"
                       />
                       <el-input-number
                         v-model="editing[svc.id + '#' + m.id].contextK"
-                        size="mini"
                         class="model-ctx-input"
                         :min="AI_LIMITS.contextK[0]"
                         :max="AI_LIMITS.contextK[1]"
                         :step="8"
                         controls-position="right"
-                        @keyup.enter.native="commitModelEdit(svc, m)"
+                        @keyup.enter="commitModelEdit(svc, m)"
                       />
                     </template>
                     <template v-else>
@@ -328,22 +325,20 @@
                         :content="$t(isDefaultModel(svc, m) ? 'settings.ai.unsetDefaultModel' : 'settings.ai.setDefaultModel')"
                         placement="top"
                       >
-                        <i
+                        <el-icon
                           class="model-star"
-                          :class="isDefaultModel(svc, m) ? 'el-icon-star-on on' : 'el-icon-star-off'"
+                          :class="{ on: isDefaultModel(svc, m) }"
                           @click="toggleDefaultModel(svc, m)"
-                        ></i>
+                        ><StarFilled v-if="isDefaultModel(svc, m)" /><Star v-else /></el-icon>
                       </el-tooltip>
                       <el-button
                         v-if="editing[svc.id + '#' + m.id]"
-                        size="mini"
                         type="text"
                         @click="commitModelEdit(svc, m)"
                       >{{ $t('settings.ai.confirm') }}</el-button>
-                      <el-button v-else size="mini" type="text" @click="startModelEdit(svc, m)">{{ $t('settings.ai.editAlias') }}</el-button>
+                      <el-button v-else type="text" @click="startModelEdit(svc, m)">{{ $t('settings.ai.editAlias') }}</el-button>
                       <el-button
                         v-if="editing[svc.id + '#' + m.id]"
-                        size="mini"
                         type="text"
                         @click="cancelModelEdit(svc, m)"
                       >{{ $t('settings.cancel') }}</el-button>
@@ -355,39 +350,40 @@
                         :cancel-button-text="$t('settings.cancel')"
                         @confirm="removeModel(svc, j)"
                       >
-                        <el-button slot="reference" size="mini" type="text" class="svc-del">
-                          {{ $t('settings.ai.deleteModel') }}
-                        </el-button>
+                        <template #reference>
+                          <el-button type="text" class="svc-del">
+                            {{ $t('settings.ai.deleteModel') }}
+                          </el-button>
+                        </template>
                       </el-popconfirm>
                     </span>
                   </div>
                   <div v-if="!svc.models.length" class="model-empty">{{ $t('settings.ai.modelsEmpty') }}</div>
                   <div v-if="manual[svc.id]" class="model-row model-add">
                     <span></span>
-                    <el-input v-model="draft[svc.id].id" size="mini" class="mono" maxlength="120" :placeholder="$t('settings.ai.modelId')" @input="onDraftId(svc)" @keyup.enter.native="addModel(svc)" />
-                    <el-input v-model="draft[svc.id].alias" size="mini" maxlength="60" :placeholder="$t('settings.ai.modelAlias')" @keyup.enter.native="addModel(svc)" />
+                    <el-input v-model="draft[svc.id].id" class="mono" maxlength="120" :placeholder="$t('settings.ai.modelId')" @input="onDraftId(svc)" @keyup.enter="addModel(svc)" />
+                    <el-input v-model="draft[svc.id].alias" maxlength="60" :placeholder="$t('settings.ai.modelAlias')" @keyup.enter="addModel(svc)" />
                     <el-input-number
                       v-model="draft[svc.id].contextK"
-                      size="mini"
                       class="add-ctx"
                       :min="AI_LIMITS.contextK[0]"
                       :max="AI_LIMITS.contextK[1]"
                       :step="8"
                       controls-position="right"
                       @change="markCtxTouched(svc)"
-                      @keyup.enter.native="addModel(svc)"
+                      @keyup.enter="addModel(svc)"
                     />
                     <span class="model-ops">
-                      <el-button size="mini" @click="addModel(svc)">{{ $t('settings.ai.addModel') }}</el-button>
-                      <el-button size="mini" type="text" @click="closeManual(svc)">{{ $t('settings.cancel') }}</el-button>
+                      <el-button @click="addModel(svc)">{{ $t('settings.ai.addModel') }}</el-button>
+                      <el-button type="text" @click="closeManual(svc)">{{ $t('settings.cancel') }}</el-button>
                     </span>
                   </div>
-                  <el-button v-else size="mini" type="text" icon="el-icon-plus" @click="openManual(svc)">
+                  <el-button v-else type="text" icon="Plus" @click="openManual(svc)">
                     {{ $t('settings.ai.manualAdd') }}
                   </el-button>
                 </div>
               </div>
-              <el-button size="mini" icon="el-icon-plus" @click="addService">{{ $t('settings.ai.addService') }}</el-button>
+              <el-button icon="Plus" @click="addService">{{ $t('settings.ai.addService') }}</el-button>
             </div>
           </el-form-item>
         </div>
@@ -425,7 +421,7 @@
               <dt>{{ $t('settings.aboutRuntime') }}</dt>
               <dd>Electron · Node.js</dd>
               <dt>{{ $t('settings.aboutFrontend') }}</dt>
-              <dd>Vue · Element UI</dd>
+              <dd>Vue 3 · Element Plus</dd>
               <dt>{{ $t('settings.aboutBuild') }}</dt>
               <dd>Vite</dd>
               <dt>{{ $t('settings.aboutSsh') }}</dt>
@@ -438,13 +434,12 @@
           </div>
 
           <div class="about-actions">
-            <el-button size="small" icon="el-icon-refresh" :loading="checkingUpdate" @click="checkUpdate">
+            <el-button icon="Refresh" :loading="checkingUpdate" @click="checkUpdate">
               {{ $t('settings.aboutCheckUpdate') }}
             </el-button>
             <el-button
-              size="small"
               type="primary"
-              icon="el-icon-upload2"
+              icon="Upload"
               @click="openUrl(releasesUrl)"
             >
               {{ $t('settings.aboutReleases') }}
@@ -461,7 +456,7 @@
 
     <el-dialog
       :title="$t('settings.ai.pickModels')"
-      :visible.sync="picker.visible"
+      v-model="picker.visible"
       width="620px"
       append-to-body
       :close-on-click-modal="false"
@@ -469,12 +464,11 @@
       <div class="pick-head">
         <el-input
           v-model="picker.filter"
-          size="mini"
           :placeholder="$t('settings.ai.pickFilter')"
           clearable
         />
       </div>
-      <div v-if="picker.loading" class="pick-state"><i class="el-icon-loading"></i> {{ $t('settings.ai.pickLoading') }}</div>
+      <div v-if="picker.loading" class="pick-state"><el-icon><Loading /></el-icon> {{ $t('settings.ai.pickLoading') }}</div>
       <div v-else-if="picker.error" class="pick-state bad">{{ picker.error }}</div>
       <div v-else class="pick-list">
         <div class="pick-row is-head">
@@ -489,24 +483,23 @@
             <span class="pick-id mono" :title="row.id">{{ row.id }}</span>
             <span v-if="row.added" class="pick-added">{{ $t('settings.ai.pickAdded') }}</span>
           </span>
-          <el-input v-model="row.alias" size="mini" maxlength="60" :placeholder="row.id" :disabled="row.added" />
+          <el-input v-model="row.alias" maxlength="60" :placeholder="row.id" :disabled="row.added" />
           <el-input-number
             v-model="row.contextK"
-            size="mini"
             class="pick-ctx"
             :min="AI_LIMITS.contextK[0]"
             :max="AI_LIMITS.contextK[1]"
             :step="8"
             controls-position="right"
             :disabled="row.added"
-            @keyup.enter.native="confirmPick"
+            @keyup.enter="confirmPick"
           />
         </div>
         <div v-if="!filteredPickRows.length" class="pick-state">{{ $t('settings.ai.pickEmpty') }}</div>
       </div>
       <template #footer>
-        <el-button size="mini" @click="picker.visible = false">{{ $t('settings.cancel') }}</el-button>
-        <el-button size="mini" type="primary" :disabled="!pickedCount" @click="confirmPick">
+        <el-button @click="picker.visible = false">{{ $t('settings.cancel') }}</el-button>
+        <el-button type="primary" :disabled="!pickedCount" @click="confirmPick">
           {{ $t('settings.ai.pickConfirm') }}{{ pickedCount ? ' (' + pickedCount + ')' : '' }}
         </el-button>
       </template>
@@ -516,8 +509,8 @@
       <span style="float:left;color:var(--text-3);font-size:11px;line-height:28px">
         {{ $t('settings.summary', { theme: themeLabel, lang: form.lang === 'zh' ? '中文' : 'English' }) }}
       </span>
-      <el-button size="mini" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
-      <el-button size="mini" type="primary" :loading="saving" @click="save">
+      <el-button @click="visible = false">{{ $t('settings.cancel') }}</el-button>
+      <el-button type="primary" :loading="saving" @click="save">
         {{ $t('settings.save') }}
       </el-button>
     </template>
@@ -610,10 +603,10 @@ export default {
       picker: { visible: false, service: null, loading: false, error: '', filter: '', rows: [] },
       ai: { ...AI_DEFAULTS, services: [], defaultRef: null },
       sections: [
-        { id: 'general', icon: 'el-icon-setting' },
-        { id: 'data', icon: 'el-icon-folder' },
+        { id: 'general', icon: 'Setting' },
+        { id: 'data', icon: 'Folder' },
         { id: 'ai', icon: '', svg: 'ai' },
-        { id: 'about', icon: 'el-icon-info' },
+        { id: 'about', icon: 'InfoFilled' },
       ],
       themes: [{ id: 'dark' }, { id: 'light' }, { id: 'system' }],
       fonts: UI_FONTS,
@@ -809,12 +802,12 @@ export default {
     onTheme(id) {
       this.form.theme = id;
       this.applyAppearance(this.form);
-      if (this.$refs.form) this.$refs.form.validateField('theme');
+      if (this.$refs.form) this.$refs.form.validateField('theme', () => {});
     },
     onLang(lang) {
       this.form.lang = lang;
       this.applyAppearance(this.form);
-      if (this.$refs.form) this.$refs.form.validateField('lang');
+      if (this.$refs.form) this.$refs.form.validateField('lang', () => {});
     },
     async browse() {
       if (!api.browseDataPath) {
@@ -851,34 +844,34 @@ export default {
     /* ---- AI 服务与模型：与终端面板共用同一份 settings.ai ---- */
     ensureDrafts() {
       for (const svc of this.ai.services) {
-        if (!this.draft[svc.id]) this.$set(this.draft, svc.id, newModelDraft());
+        if (!this.draft[svc.id]) this.draft[svc.id] = newModelDraft();
       }
     },
     addService() {
       const id = 'svc-' + crypto.randomUUID();
       this.ai.services = [...this.ai.services, { id, name: '', baseUrl: '', apiKey: '', models: [] }];
-      this.$set(this.draft, id, newModelDraft());
+      this.draft[id] = newModelDraft();
       this.newSvcIds.add(id);
     },
     async onToggleKeyVisible(svc) {
       if (svc._keyChecking) return;
       if (svc._keyVisible) {
-        this.$set(svc, '_keyVisible', false);
+        svc._keyVisible = false;
         return;
       }
       if (!String(svc.apiKey || '').trim() || this.newSvcIds.has(svc.id)) {
-        this.$set(svc, '_keyVisible', true);
+        svc._keyVisible = true;
         return;
       }
       if (!api.verifySystemAuth) {
         this.$message.error(t('auth.needElectron'));
         return;
       }
-      this.$set(svc, '_keyChecking', true);
+      svc._keyChecking = true;
       try {
         const r = unwrap(await api.verifySystemAuth(t('auth.viewKeyReason')));
         if (r && r.ok) {
-          this.$set(svc, '_keyVisible', true);
+          svc._keyVisible = true;
         } else {
           const code = (r && r.code) || '';
           let msg = t('auth.failed');
@@ -894,17 +887,17 @@ export default {
         else if (/NotConfigured/i.test(code)) msg = t('auth.notConfigured');
         this.$message.error(msg);
       } finally {
-        this.$set(svc, '_keyChecking', false);
+        svc._keyChecking = false;
       }
     },
     removeService(i) {
       const [gone] = this.ai.services.splice(i, 1);
       if (!gone) return;
-      this.$delete(this.draft, gone.id);
-      this.$delete(this.manual, gone.id);
-      this.$delete(this.ctxTouched, gone.id);
+      delete this.draft[gone.id];
+      delete this.manual[gone.id];
+      delete this.ctxTouched[gone.id];
       this.newSvcIds.delete(gone.id);
-      for (const m of gone.models) this.$delete(this.editing, gone.id + '#' + m.id);
+      for (const m of gone.models) delete this.editing[gone.id + '#' + m.id];
       if (this.ai.defaultRef && this.ai.defaultRef.serviceId === gone.id) this.ai.defaultRef = null;
       if (this.picker.service && this.picker.service.id === gone.id) this.picker.visible = false;
     },
@@ -917,27 +910,27 @@ export default {
       this.ai.defaultRef = this.isDefaultModel(svc, model) ? null : { serviceId: svc.id, modelId: model.id };
     },
     openManual(svc) {
-      if (!this.draft[svc.id]) this.$set(this.draft, svc.id, newModelDraft());
-      this.$set(this.manual, svc.id, true);
+      if (!this.draft[svc.id]) this.draft[svc.id] = newModelDraft();
+      this.manual[svc.id] = true;
     },
     closeManual(svc) {
-      this.$set(this.draft, svc.id, newModelDraft());
-      this.$set(this.ctxTouched, svc.id, false);
-      this.$set(this.manual, svc.id, false);
+      this.draft[svc.id] = newModelDraft();
+      this.ctxTouched[svc.id] = false;
+      this.manual[svc.id] = false;
     },
     startModelEdit(svc, model) {
-      this.$set(this.editing, svc.id + '#' + model.id, {
+      this.editing[svc.id + '#' + model.id] = {
         alias: model.alias || model.id,
         contextK: contextK(model.contextTokens, model.id),
-      });
+      };
     },
     cancelModelEdit(svc, model) {
-      this.$delete(this.editing, svc.id + '#' + model.id);
+      delete this.editing[svc.id + '#' + model.id];
     },
     /** 一次编辑同时收别名与上下文窗口，避免模型行堆两对按钮。 */
     applyModelEdit(model, box) {
       model.alias = String(box.alias || '').trim() || model.id;
-      this.$set(model, 'contextTokens', toTokens(box.contextK, model.id));
+      model.contextTokens = toTokens(box.contextK, model.id);
     },
     commitModelEdit(svc, model) {
       const box = this.editing[svc.id + '#' + model.id];
@@ -954,12 +947,12 @@ export default {
       if (box && !this.ctxTouched[svc.id]) box.contextK = presetContextK(box.id);
     },
     markCtxTouched(svc) {
-      this.$set(this.ctxTouched, svc.id, true);
+      this.ctxTouched[svc.id] = true;
     },
     removeModel(svc, j) {
       const [gone] = svc.models.splice(j, 1);
       if (!gone) return;
-      this.$delete(this.editing, svc.id + '#' + gone.id);
+      delete this.editing[svc.id + '#' + gone.id];
       const ref = this.ai.defaultRef;
       if (ref && ref.serviceId === svc.id && ref.modelId === gone.id) this.ai.defaultRef = null;
     },
@@ -1029,7 +1022,7 @@ export default {
         return;
       }
       const existing = new Set((svc.models || []).map((m) => m.id));
-      this.$set(svc, 'picking', true);
+      svc.picking = true;
       this.picker = { visible: true, service: svc, loading: true, error: '', filter: '', rows: [] };
       try {
         const r = unwrap(await api.aiModels({ baseUrl: svc.baseUrl, apiKey: svc.apiKey }));
@@ -1041,7 +1034,7 @@ export default {
         this.picker.error = this.aiErrorText(e);
       } finally {
         this.picker.loading = false;
-        this.$set(svc, 'picking', false);
+        svc.picking = false;
       }
     },
     confirmPick() {
@@ -1064,18 +1057,18 @@ export default {
         return;
       }
       if (!String(svc.baseUrl || '').trim() || !String(svc.apiKey || '').trim()) {
-        this.$set(svc, 'test', { ok: false, text: t('settings.ai.testIncomplete') });
+        svc.test = { ok: false, text: t('settings.ai.testIncomplete') };
         return;
       }
-      this.$set(svc, 'testing', true);
-      this.$set(svc, 'test', null);
+      svc.testing = true;
+      svc.test = null;
       try {
         const r = unwrap(await api.aiTest({ baseUrl: svc.baseUrl, apiKey: svc.apiKey, model: svc.models[0] ? svc.models[0].id : '' }));
-        this.$set(svc, 'test', { ok: true, text: t('settings.ai.testOk', { ms: r.ms }) });
+        svc.test = { ok: true, text: t('settings.ai.testOk', { ms: r.ms }) };
       } catch (e) {
-        this.$set(svc, 'test', { ok: false, text: this.aiErrorText(e) });
+        svc.test = { ok: false, text: this.aiErrorText(e) };
       } finally {
-        this.$set(svc, 'testing', false);
+        svc.testing = false;
       }
     },
     /** 主进程错误码优先翻成产品文案，没有对应译文时回退原始 message。 */
@@ -1153,7 +1146,7 @@ export default {
       for (const svc of this.ai.services) {
         const ok = isEmptyService(svc) || /^https?:\/\//i.test(String(svc.baseUrl || '').trim());
         if (!ok && !bad) bad = svc;
-        this.$set(svc, '_bad', !ok);
+        svc._bad = !ok;
       }
       if (!bad) return true;
       const name = String(bad.name || '').trim();
@@ -1275,14 +1268,20 @@ export default {
 .path-row .el-input {
   flex: 1;
 }
+/* .el-form-item__content 在 Element Plus 是 flex，自定义行必须显式占满，否则按内容收缩 */
 .zoom-row {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
   max-width: 360px;
 }
 .mono { font-family: Consolas, "Courier New", monospace; }
-.svc-list { display: flex; flex-direction: column; gap: 10px; }
+.svc-list { display: flex; flex-direction: column; gap: 10px; width: 100%; min-width: 0; }
+/* 卡片要撑满整列，末尾的「添加服务商」按钮只按内容宽 */
+.svc-list > .el-button { align-self: flex-start; }
 .svc-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 .svc-card.is-bad { border-color: var(--danger); }
 .svc-top { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
@@ -1332,7 +1331,7 @@ export default {
 .model-alias { color: var(--text-2); font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-alias-input { width: 100%; min-width: 0; }
 .model-ctx-input { width: 100%; margin-top: 0; }
-.model-ctx-input /deep/ .el-input__inner { text-align: left; font-size: 11.5px; }
+.model-ctx-input :deep(.el-input__inner) { text-align: left; font-size: 11.5px; }
 .model-ctx {
   justify-self: start;
   min-width: 52px;
@@ -1351,7 +1350,7 @@ export default {
 .model-empty { font-size: 11.5px; color: var(--text-3); padding: 2px 0 4px; }
 .model-add { margin-top: 4px; }
 .model-add .add-ctx { width: 100%; margin-top: 0; }
-.model-add .add-ctx /deep/ .el-input__inner { text-align: left; font-size: 11.5px; }
+.model-add .add-ctx :deep(.el-input__inner) { text-align: left; font-size: 11.5px; }
 .pick-head { margin-bottom: 8px; }
 .pick-list { max-height: 44vh; overflow-y: auto; }
 .pick-list::-webkit-scrollbar { width: 6px; }
@@ -1375,26 +1374,30 @@ export default {
   letter-spacing: 0.4px;
   color: var(--text-3);
 }
-/* 列头左对齐到单元格里的文字：mini 输入框与数字框的文字都内缩 15px（浏览器实测） */
-.pick-row.is-head .is-alias { padding-left: 15px; }
+/* 列头左对齐到单元格文字：el-input__wrapper 左内边距 11px + 1px 线，
+   controls-position=right 的数字框是 15px */
+.pick-row.is-head .is-alias { padding-left: 12px; }
 .pick-row.is-head .is-ctx { padding-left: 15px; }
 .pick-row.added { opacity: 0.55; }
-.pick-row /deep/ .el-checkbox { margin-right: 0; }
+.pick-row :deep(.el-checkbox) { margin-right: 0; }
 .pick-ctx { width: 100%; margin-top: 0; }
-.pick-ctx /deep/ .el-input__inner { text-align: left; font-size: 11.5px; }
+.pick-ctx :deep(.el-input__inner) { text-align: left; font-size: 11.5px; }
 .pick-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pick-id { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pick-added { font-size: 10px; color: var(--text-3); flex: none; }
 .pick-state { font-size: 12px; color: var(--text-3); padding: 10px 0; }
 .pick-state.bad { color: var(--danger); }
-.el-radio-group .el-radio { display: block; margin-right: 0; line-height: 1.9; }
-.el-radio-group .el-radio i.el-icon-info { color: var(--text-3); cursor: help; }
-.el-radio-group .el-radio i.el-icon-info:hover { color: var(--accent); }
+/* Element Plus 的 radio-group 是 inline-flex，竖排要在容器上改方向；radio 自带 32px 行高 */
+.el-radio-group { display: inline-flex; flex-direction: column; align-items: flex-start; }
+.el-radio-group .el-radio { margin-right: 0; }
+.el-radio-group .el-radio .el-icon { color: var(--text-3); cursor: help; }
+.el-radio-group .el-radio .el-icon:hover { color: var(--accent); }
 .zoom-row .el-slider {
   flex: 1;
-  margin-top: -6px;
+  min-width: 0;
 }
 .zoom-val {
+  flex: none;
   width: 44px;
   text-align: right;
   font-size: 12px;

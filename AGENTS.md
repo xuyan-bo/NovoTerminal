@@ -16,11 +16,11 @@
 
 ## 2. 技术栈与职责边界
 
-当前采用 Electron、Vue 2.7 Options API、Element UI、Vite；渲染进程使用 ESM，Electron 代码使用 CommonJS。状态集中于 `Vue.observable`，没有 Vuex、Pinia 或 vue-router。
+当前采用 Electron、Vue 3.5 Options API、Element Plus、Vite；渲染进程使用 ESM，Electron 代码使用 CommonJS。状态集中于 `reactive`，没有 Vuex、Pinia 或 vue-router。
 
 | 位置 | 职责与约束 |
 | --- | --- |
-| `src/main.js` | Vue 启动、Element UI 和全局 `$t`；组件不重复定义同名翻译方法 |
+| `src/main.js` | Vue 3 `createApp`、Element Plus、Element 图标与自有 `SvgIcon` 全局注册、全局 `$t`；组件不重复定义同名翻译方法 |
 | `src/App.vue` | 页面/页签编排、关闭确认、应用布局；不堆放协议实现 |
 | `src/store.js` | 共享界面状态、资产操作、连接入口、页签管理；不直接访问文件系统或网络套接字 |
 | `src/api.js` | 使用 preload 桥接 API；无 Electron 时仅提供有限预览，不伪造真实连接成功 |
@@ -63,25 +63,25 @@
   - 连接失败：`this.log.error('rdp', 'session connect failed', { host, port, code: e.code, message: e.message })`
   - meta 一律禁止 password、私钥、vnc pass 等敏感字段，脱敏交给 `logStore` 兜底仍不应依赖。
 - **滚动条样式**：所有可滚动区域统一使用 Element 的细滚动条（约 6px、圆角，滑块用 `--border`，hover 变 `--text-3`，轨道透明），不出现粗的原生滚动条。SSH 的 `.xterm-viewport`、VNC 及会话视图 `.view` 超出宽高时的右侧/底部滚动条已在此约定内；新增可滚动容器应复用并用 `::webkit-scrollbar` 收敛宽度，避免另起更粗样式。
-- **图标规范**：通用 UI 图标（箭头、刷新、关闭等）首选 Element 内置的 `el-icon-*` 字体图标类，使用前须在已安装的 `element-ui/lib/theme-chalk/index.css` 中核对类名确实存在；`el-icon-*` 中没有合适图标时，告知用户并由用户提供 SVG，图标文件（单色、白色填充/描边）放入 `public/icons/`，页面统一通过全局 `<svg-icon name="…" :size="…">` 组件引用（亮度遮罩 + `currentColor` 跟随主题），组件模板内禁止硬编码内联 `<svg>`；不允许自行用 `‹ › ✕ ＋` 之类的文本字符充当图标，也不引入外部图标库；操作系统等品牌图标作为数据集中在 `src/constants.js` 内渲染，是唯一例外。图标符号不得写进 i18n 文案，菜单图标用菜单项的 `icon` 类名字段承载。
+- **图标规范**：通用 UI 图标（箭头、刷新、关闭等）统一使用 `@element-plus/icons-vue`——`main.js` 已按组件名全局注册，模板写 `<el-icon><Close /></el-icon>`，数据里的图标字段存 Element Plus 组件名（如 `HomeFilled`、`Files`），需要判别时用 `src/lib/icons.js` 的 `isElementIcon(name)`。`@element-plus/icons-vue` 中没有合适图标时，告知用户并由用户提供 SVG，图标文件（单色、白色填充/描边）放入 `public/icons/`，页面统一通过全局 `<svg-icon name="…" :size="…">` 组件引用（亮度遮罩 + `currentColor` 跟随主题），组件模板内禁止硬编码内联 `<svg>`；不允许自行用 `‹ › ✕ ＋` 之类的文本字符充当图标，也不引入外部图标库；操作系统等品牌图标作为数据集中在 `src/constants.js` 内渲染，是唯一例外。图标符号不得写进 i18n 文案，菜单图标用菜单项的 `icon` 类名字段承载。
 
 ## 4. Vue 组件与状态所有权
 
 - 一个业务状态只有一个所有者：页面持有草稿、连接和任务状态，展示组件通过 props 接收，通过事件通知修改。
 - 子组件不得直接修改 props 或嵌套对象；复用 `MethodConfig`、`SftpFilePanel`、`SftpTransferQueue` 时保持此边界。
-- Vue 2 新增对象属性、替换数组项时使用 `$set` 或替换整个引用，不能套用 Vue 3 的响应式假设。
+- Vue 3 的响应式基于 Proxy，新增对象属性直接赋值即可；替换数组项或整体对象时仍建议换新引用，不要沿用 Vue 2 的 `$set`/`$delete`。
 - 以下划线开头的实例字段不会从 `data` 代理到 `this`；非响应式资源、锁和计时器在 `created` 中显式初始化。
 - DOM 事件跨组件传递时保留原 event 对象、多参数顺序及同步调用语义，尤其是拖放事件的 target、默认行为和传播控制。
 - 按职责复用组件，差异通过少量明确 props、events、slots 表达；不要将协议专有行为塞进通用 UI 组件。
 - 新增用户可见文案使用 `t`/`$t` 并补齐中英文；校验文案在校验时翻译，不能因初始化时缓存导致切换语言后不更新。
-- 输入控件按值的语义选型：数值项一律使用带上下界的 `el-input-number`（`:min`/`:max`，保留 `controls-position="right"` 步进箭头，不写 `:controls="false"`，也不用 `el-input type="number"` 这类拦不住输入的写法），枚举用 `el-select`、布尔用 `el-switch`、连续量用 `el-slider`。控件宽度要实测：`el-input-number--mini` 在 `controls-position="right"` 下内边距为 `15px/50px`，五位数字至少 101px 才不被裁。
+- 输入控件按值的语义选型：数值项一律使用带上下界的 `el-input-number`（`:min`/`:max`，保留 `controls-position="right"` 步进箭头，不写 `:controls="false"`，也不用 `el-input type="number"` 这类拦不住输入的写法），枚举用 `el-select`、布尔用 `el-switch`、连续量用 `el-slider`。控件宽度要实测：`el-input-number--small` 在 `controls-position="right"` 下内边距为 `31px`（主题默认宽 120px），五位数字至少 101px 才不被裁。
 - 校验以 `el-form` 的 `rules` 加 `validate` 为主，必填、格式、跨字段约束都写成规则并指定 `blur`/`change` 触发；控件层面已经避开的非法值（例如端口越界）不再补写报错文案，只在读取持久化数据时把脏值、空值归一化回落到默认值。不得绕过 `rules` 在提交函数里用 `if` 判断加 `$message` 自行报错。
 - 不得自行在页面上添加解释性、说明性描述文字（表单 hint、段落提示、空态引导语等）：界面只保留标签、占位符、按钮和必要的错误/确认文案；确实需要补充说明时，先征得用户同意。
 - 界面上的领域术语沿用既有文案，不因内部实现命名（例如数据字段、方法名）而改动；新文案落笔前先核对 `src/i18n.js` 里的同类词条。
 - 新样式优先使用主题变量；组件私有样式使用 scoped，全局规则只承载真实公共需求。兼顾明暗主题及禁用、加载、错误状态。
 - **明暗双主题**：主题只有深色（默认，token 挂在 `:root`）与浅色（`html.theme-light`）两套，共用同一批变量（`--bg-app/--bg-panel/--bg-elevated/--bg-hover/--border/--text/--text-2/--text-3`）。新增样式不得写只属于单套主题的裸色值（`#FFF`、`#303133`、`#EBEEF5` 等），一律取 token；仅状态底色这类半透明叠加（`rgba(245,108,108,.15)` 之类）允许直接写值，且必须两套底色下都看得清。
-- **Element 写死色要成对覆盖**：theme-chalk 把 `el-table`、`el-pagination` 等组件的底色、文字、边框全写成浅色字面量，深色主题下整块发白。这类覆盖统一写在 `src/styles/main.css`（它在 `theme-chalk/index.css` 之后引入，同权重才压得住），选择器必须与 Element 原规则同权重或更高——斑马纹 `.el-table--striped … td.el-table__cell`、`th.el-table__cell.is-leaf` 都是 (0,3~4,1~2)，用「容器类 + 裸元素」的写法改了不生效。底色与文字色必须同一条规则里一起改：白底去掉后原来写死的深色文字（分页数字 `#303133`）会在暗底上消失。teleport 到 `body` 的浮层（`el-select` 下拉、popper、tooltip）scoped 样式够不到，只能走全局规则。
-- **主题改动的取证**：交付前把该组件真实渲染出的 DOM 结构连 `theme-chalk/index.css` 与改后的 `main.css` 一起加载，深、浅各**重新加载页面**读 `getComputedStyle`，逐条核对底色、文字、边框与禁用态（同一脚本里改 `html` 类名不会重算样式）。浅色 token 多数与 Element 原值同值（`--text` = `#303133`、`--text-2` = `#606266`、`--text-3` = `#909399`），不同值的覆盖（边框 `#EBEEF5` → `--border #dcdfe6`、斑马 `#FAFAFA` → `--bg-elevated`）要在交付说明里点出来。
+- **Element Plus 写死色要成对覆盖**：Element Plus 把 `el-table`、`el-pagination` 等组件的部分底色、文字、边框写成字面量，深色主题下会整块发白。组件级主题优先通过 `main.css` 顶部的 `--el-*` 变量映射（`:root` 深色、`html.theme-light` 浅色各一套）解决；仍写死的规则统一在 `src/styles/main.css`（它在 `element-plus/dist/index.css` 之后引入，同权重才压得住），选择器必须与 Element Plus 原规则同权重或更高——斑马纹 `.el-table--striped … td.el-table__cell`、`th.el-table__cell.is-leaf` 都是 (0,3~4,1~2)，用「容器类 + 裸元素」的写法改了不生效。底色与文字色必须同一条规则里一起改：白底去掉后原来写死的深色文字（分页数字 `#303133`）会在暗底上消失。teleport 到 `body` 的浮层（`el-select` 下拉、popper、tooltip）scoped 样式够不到，只能走全局规则。
+- **主题改动的取证**：交付前把该组件真实渲染出的 DOM 结构连 `element-plus/dist/index.css` 与改后的 `main.css` 一起加载，深、浅各**重新加载页面**读 `getComputedStyle`，逐条核对底色、文字、边框与禁用态（同一脚本里改 `html` 类名不会重算样式）。浅色 token 多数与 Element 原值同值（`--text` = `#303133`、`--text-2` = `#606266`、`--text-3` = `#909399`），不同值的覆盖（边框 `#EBEEF5` → `--border #dcdfe6`、斑马 `#FAFAFA` → `--bg-elevated`）要在交付说明里点出来。
 - 资产名称、主机、路径、菜单标签等外部内容默认使用文本插值；禁止拼接为 `innerHTML` 或未经处理的 `v-html`。
 
 ## 5. 新增或修改访问协议
@@ -173,9 +173,10 @@
 | `npm run pack:win` | 构建并打包 Windows x64 与 arm64 的 nsis 安装程序与 zip 绿色包；非普通修改的默认检查步骤 |
 | `npm run pack:linux` | 在 Linux 构建并打包 deb / rpm / AppImage / tar.xz（x64 与 arm64）；须在 Linux 物理机或虚拟机执行，产物落 `release/`（已 gitignore）；仓库不配置 CI，三平台一律手工打包后人工验证 |
 | `npm run lint` | 当前仅打印占位消息，不能作为静态检查通过的证据 |
+| `npm test` | Vitest 单测；node 环境，只覆盖渲染端纯函数模块（`*.test.js` 与源码同目录），不启动 Electron、不验证 IPC、UI 或真实连接 |
 
 - 打包体积依赖 `package.json` 两处约定，改动协议或新组件时必须同步：`dependencies` 只允许主进程真正 `require` 的模块（现为 `iconv-lite`、`openai`、`ssh2`、`ws`），渲染端依赖一律放 `devDependencies`，否则 electron-builder 会把 Vite 已打进 `dist/` 的包再复制进 `app.asar`；`scripts/afterPack.cjs` 在 Windows 与 Linux 打包后只保留 `locales/` 里的 `en-US.pak`、`zh-CN.pak`（约省 39 MB），macOS 走 `.lproj` 且涉及签名，钩子对 darwin 直接返回不裁剪。
-- 当前没有 `npm test` 或项目测试套件入口；`electron/session/testers.js` 是产品联网探测，不能当作离线测试运行。
+- `npm test` 只跑 Vitest 纯逻辑单测（node 环境，测试文件与源码同目录、命名 `*.test.js`），不覆盖 Electron IPC、系统身份验证、UI 与真实 SSH/VNC/SFTP 连接；`electron/session/testers.js` 是产品联网探测，不能当作离线测试运行。
 - `scripts/gen-os-icons.js` 会生成/改写资源和代码，不属于检查命令，不为验证代码而运行。
 - 依赖必须有实际需要，并且按第 3 节的流程先经用户批准才能引入；变更依赖时同步锁文件，不为执行一次检查擅自安装工具或升级依赖。
 - 默认完成代码复审与轻量静态检查，真实环境手测由用户完成；只有当前任务或上级指令要求时，才执行相应浏览器验证、测试、构建或打包。

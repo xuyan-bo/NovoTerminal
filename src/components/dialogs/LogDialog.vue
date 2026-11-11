@@ -1,20 +1,21 @@
 <template>
   <el-dialog
-    :visible.sync="modalVisible"
+    v-model="modalVisible"
     width="min(1120px, 94vw)"
     top="7vh"
     :close-on-click-modal="false"
     class="log-dialog"
   >
-    <div slot="title" class="dlg-head">
-      <svg-icon name="doc-log" :size="16" class="dlg-icon" />
-      <span>{{ $t('log.title') }}</span>
-    </div>
+    <template #header>
+      <div class="dlg-head">
+        <svg-icon name="doc-log" :size="16" class="dlg-icon" />
+        <span>{{ $t('log.title') }}</span>
+      </div>
+    </template>
 
     <div class="log-toolbar">
       <el-select
         v-model="level"
-        size="small"
         style="width: 120px"
         :placeholder="$t('log.allLevels')"
         @change="reload"
@@ -26,17 +27,16 @@
       </el-select>
       <el-input
         v-model="keyword"
-        size="small"
         :placeholder="$t('log.keyword')"
         clearable
-        prefix-icon="el-icon-search"
+        prefix-icon="Search"
         style="width: 240px"
-        @keyup.enter.native="reload"
+        @keyup.enter="reload"
         @clear="reload"
       />
-      <el-button size="small" @click="load">{{ $t('log.refresh') }}</el-button>
+      <el-button @click="load">{{ $t('log.refresh') }}</el-button>
       <div class="spacer"></div>
-      <el-button size="small" type="danger" plain icon="el-icon-delete" :disabled="!total" @click="onClear">
+      <el-button type="danger" plain icon="Delete" :disabled="!total" @click="onClear">
         {{ $t('log.clear') }}
       </el-button>
     </div>
@@ -47,7 +47,6 @@
       :data="rows"
       border
       stripe
-      size="small"
       height="min(600px, calc(100vh - 300px))"
       class="log-table"
       :default-sort="{ prop: 'time', order: 'descending' }"
@@ -61,18 +60,18 @@
         sortable="custom"
         :sort-orders="['ascending', 'descending']"
       >
-        <template slot-scope="{ row }">{{ fmtTime(row.time) }}</template>
+        <template #default="{ row }">{{ fmtTime(row.time) }}</template>
       </el-table-column>
       <el-table-column :label="$t('log.colLevel')" width="80" align="center">
-        <template slot-scope="{ row }">
+        <template #default="{ row }">
           <span class="log-level" :class="'lv-' + row.level">{{ row.level }}</span>
         </template>
       </el-table-column>
       <el-table-column :label="$t('log.colSource')" width="98">
-        <template slot-scope="{ row }">{{ row.source }}</template>
+        <template #default="{ row }">{{ row.source }}</template>
       </el-table-column>
       <el-table-column :label="$t('log.colMessage')" min-width="360" show-overflow-tooltip>
-        <template slot-scope="{ row }">
+        <template #default="{ row }">
           {{ row.message }}<template v-if="metaText(row)"><span class="log-meta">{{ metaText(row) }}</span></template>
         </template>
       </el-table-column>
@@ -93,7 +92,7 @@
     <ctx-menu ref="ctxMenu" @select="onCtxSelect" />
 
     <template #footer>
-      <el-button size="mini" @click="modalVisible = false">{{ $t('log.close') }}</el-button>
+      <el-button @click="modalVisible = false">{{ $t('log.close') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -141,7 +140,7 @@ export default {
   mounted() {
     this._offLog = api.onLog && api.onLog((entry) => this.push(entry));
   },
-  beforeDestroy() {
+  beforeUnmount() {
     if (this._offLog) this._offLog();
   },
   methods: {

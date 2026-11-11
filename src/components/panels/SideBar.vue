@@ -1,9 +1,9 @@
 <template>
   <aside class="sidebar">
     <div class="side-search">
-      <el-input v-model="filter" size="mini" :placeholder="$t('sidebar.search')" clearable prefix-icon="el-icon-search" />
+      <el-input v-model="filter" :placeholder="$t('sidebar.search')" clearable prefix-icon="Search" />
     </div>
-    <el-scrollbar class="tree-scroll" @contextmenu.native.prevent="onBlankCtx">
+    <el-scrollbar class="tree-scroll" @contextmenu.prevent="onBlankCtx">
       <div class="tree">
         <el-tree
           ref="tree"
@@ -31,7 +31,7 @@
               <span class="pill">{{ data.count }}</span>
             </div>
             <div v-else class="tn tn-asset" @dblclick="onDblAsset(data)">
-              <i v-if="iconGlyph(data.raw.icon)" class="os-icon" :class="iconGlyph(data.raw.icon)"></i>
+              <el-icon v-if="iconGlyph(data.raw.icon)" class="os-icon"><component :is="iconGlyph(data.raw.icon)" /></el-icon>
               <span v-else class="os-icon" :class="'os-' + data.raw.icon" v-html="iconSvg(data.raw.icon)"></span>
               <div class="tn-meta">
                 <div class="tn-name" :title="data.raw.name">{{ data.raw.name }}</div>
@@ -59,7 +59,7 @@
         type="button"
         class="gear-btn"
         :title="$t('nav.settings')"
-        @click="$root.$emit('open-settings')"
+        @click="openSettingsDialog"
       >
         <svg-icon name="gear" :size="16" />
       </button>
@@ -69,7 +69,7 @@
         :title="$t('nav.credentials')"
         @click="openCredentials"
       >
-        <i class="el-icon-key gear-icon"></i>
+        <el-icon class="gear-icon"><Key /></el-icon>
       </button>
       <button
         type="button"
@@ -166,17 +166,15 @@ export default {
     this._filterTimer = null;
   },
   mounted() {
-    this._openSettings = () => {
-      store.settingsDialog = true;
-    };
-    this.$root.$on('open-settings', this._openSettings);
     this.syncExpansion();
   },
-  beforeDestroy() {
+  beforeUnmount() {
     clearTimeout(this._filterTimer);
-    this.$root.$off('open-settings', this._openSettings);
   },
   methods: {
+    openSettingsDialog() {
+      store.settingsDialog = true;
+    },
     iconSvg(icon) {
       return assetIcon(icon);
     },
@@ -328,8 +326,8 @@ export default {
     },
     onBlankCtx(e) {
       this.showMenu(e, [
-        { label: t('ctx.newAsset'), icon: 'el-icon-plus', act: 'new-asset', disabled: !this.groups.length, hint: t('sidebar.needGroup') },
-        { label: t('ctx.newGroup'), icon: 'el-icon-folder-add', act: 'new-group' },
+        { label: t('ctx.newAsset'), icon: 'Plus', act: 'new-asset', disabled: !this.groups.length, hint: t('sidebar.needGroup') },
+        { label: t('ctx.newGroup'), icon: 'FolderAdd', act: 'new-group' },
       ]);
     },
     onNodeCtx(e, data) {
@@ -341,26 +339,26 @@ export default {
       const methods = enabledMethods(data.raw);
       const items = [{ label: `${t('ctx.asset')} · ${data.name}`, title: true }];
       methods.forEach((m) => {
-        items.push({ label: t('ctx.connectWith', { name: t(m.nameKey) }), icon: 'el-icon-video-play', act: 'connect', aid: data.id, mid: m.id });
+        items.push({ label: t('ctx.connectWith', { name: t(m.nameKey) }), icon: 'VideoPlay', act: 'connect', aid: data.id, mid: m.id });
       });
       items.push({ sep: true });
-      items.push({ label: t('ctx.edit'), icon: 'el-icon-edit', act: 'edit', aid: data.id });
-      items.push({ label: t('ctx.clone'), icon: 'el-icon-document-copy', act: 'clone', aid: data.id });
+      items.push({ label: t('ctx.edit'), icon: 'Edit', act: 'edit', aid: data.id });
+      items.push({ label: t('ctx.clone'), icon: 'DocumentCopy', act: 'clone', aid: data.id });
       items.push({ sep: true });
-      items.push({ label: t('ctx.del'), icon: 'el-icon-delete', act: 'del', aid: data.id, danger: true });
+      items.push({ label: t('ctx.del'), icon: 'Delete', act: 'del', aid: data.id, danger: true });
       this.showMenu(e, items);
     },
     folderMenu(e, data) {
       const occupied = data.count + data.folderCount > 0;
       this.showMenu(e, [
         { label: t('sidebar.groupTitle', { name: data.name }), title: true },
-        { label: t('ctx.inGroupNew'), icon: 'el-icon-plus', act: 'new-asset-g', gid: data.gid },
-        { label: t('ctx.newSubGroup'), icon: 'el-icon-folder-add', act: 'new-group-in', gid: data.gid },
-        { label: t('ctx.editGroup'), icon: 'el-icon-edit', act: 'edit-group', gid: data.gid },
+        { label: t('ctx.inGroupNew'), icon: 'Plus', act: 'new-asset-g', gid: data.gid },
+        { label: t('ctx.newSubGroup'), icon: 'FolderAdd', act: 'new-group-in', gid: data.gid },
+        { label: t('ctx.editGroup'), icon: 'Edit', act: 'edit-group', gid: data.gid },
         { sep: true },
         {
           label: t('ctx.delGroup'),
-          icon: 'el-icon-delete',
+          icon: 'Delete',
           act: 'del-group',
           gid: data.gid,
           danger: true,

@@ -1,24 +1,25 @@
 <template>
   <el-dialog
-    :visible.sync="visible"
+    v-model="visible"
     width="620px"
     top="8vh"
     :close-on-click-modal="false"
     append-to-body
   >
-    <div slot="title" class="dlg-head">
-      <svg-icon name="gear" :size="16" class="dlg-icon" />
-      <span>{{ title }}</span>
-    </div>
+    <template #header>
+      <div class="dlg-head">
+        <svg-icon name="gear" :size="16" class="dlg-icon" />
+        <span>{{ title }}</span>
+      </div>
+    </template>
 
     <el-form
       ref="advForm"
       :model="form"
       :rules="formRules"
       label-width="186px"
-      size="small"
       :disabled="isView"
-      @submit.native.prevent
+      @submit.prevent
     >
       <el-form-item
           v-for="f in fields"
@@ -29,8 +30,10 @@
           <template #label>
             {{ fieldLabel(f) }}
             <el-tooltip v-if="f.hintKey" placement="top">
-              <span slot="content" class="adv-field-hint">{{ $t(f.hintKey) }}</span>
-              <i class="el-icon-info" tabindex="0" :aria-label="$t(f.hintKey)"></i>
+              <template #content>
+                <span class="adv-field-hint">{{ $t(f.hintKey) }}</span>
+              </template>
+              <el-icon tabindex="0" :aria-label="$t(f.hintKey)"><InfoFilled /></el-icon>
             </el-tooltip>
           </template>
           <el-radio-group
@@ -38,7 +41,7 @@
             v-model="form[f.key]"
             class="adv-engine"
           >
-            <el-radio v-for="opt in f.options" :key="opt.value" :label="opt.value">
+            <el-radio v-for="opt in f.options" :key="opt.value" :value="opt.value">
               {{ optLabel(opt) }}
             </el-radio>
           </el-radio-group>
@@ -69,8 +72,8 @@
                 clearable
                 :placeholder="ph(f)"
               >
-                <template slot="append">
-                  <el-button icon="el-icon-search" :disabled="isView || !canBrowse" @click="runClientBrowse">
+                <template #append>
+                  <el-button icon="Search" :disabled="isView || !canBrowse" @click="runClientBrowse">
                     {{ $t('adv.rdp.clientPath.browse') }}
                   </el-button>
                 </template>
@@ -110,7 +113,6 @@
         <el-input-number
           v-else-if="f.type === 'number'"
           v-model="form[f.key]"
-          size="mini"
           :min="f.min"
           :max="f.max"
           :step="1"
@@ -128,12 +130,12 @@
     </el-form>
     <template #footer>
       <template v-if="isView">
-        <el-button size="mini" @click="visible = false">{{ $t('settings.close') }}</el-button>
+        <el-button @click="visible = false">{{ $t('settings.close') }}</el-button>
       </template>
       <template v-else>
-        <el-button size="mini" @click="reset">{{ $t('adv.reset') }}</el-button>
-        <el-button size="mini" @click="visible = false">{{ $t('settings.cancel') }}</el-button>
-        <el-button size="mini" type="primary" @click="confirm">{{ $t('settings.save') }}</el-button>
+        <el-button @click="reset">{{ $t('adv.reset') }}</el-button>
+        <el-button @click="visible = false">{{ $t('settings.cancel') }}</el-button>
+        <el-button type="primary" @click="confirm">{{ $t('settings.save') }}</el-button>
       </template>
     </template>
   </el-dialog>
@@ -397,10 +399,14 @@ export default {
 .client-select {
   width: 100%;
 }
+/* .el-form-item__content 是 flex，行容器要显式占满才能让里面的 el-input 拿到宽度 */
 .client-path-row {
   display: flex;
   align-items: stretch;
   gap: 8px;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
 }
 .client-path-row .client-path-probe {
   flex: 0 0 auto;
