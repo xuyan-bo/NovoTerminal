@@ -335,6 +335,9 @@ function createSshConnection({ host, port = 22, username = '', password = '', pr
     armTimeout(readyTimeout);
     try {
       client.connect(options);
+      // ssh2 不会自己开 TCP_NODELAY，默认的 Nagle 与对端延迟 ACK 叠加后，
+      // 每个小包（握手包、SFTP 请求）在高延迟链路上都要多等一个 ACK 周期。
+      client.setNoDelay(true);
     } catch (error) {
       stop(error);
     }

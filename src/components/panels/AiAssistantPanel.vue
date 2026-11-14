@@ -340,6 +340,7 @@
 </template>
 
 <script>
+import { reactive } from 'vue';
 import { api, unwrap, store } from '../../store';
 import { t } from '../../i18n';
 import { AI_PERMISSIONS } from '../../constants';
@@ -368,11 +369,12 @@ const fmtK = (n) => (n >= 1000 ? Math.round(n / 100) / 10 + 'k' : String(n || 0)
 /** 圆环水位的空值：形状与主进程 context 事件一致，五处清零共用一份，避免漏掉某个字段。 */
 const EMPTY_CTX = Object.freeze({ window: 0, used: 0, pct: 0, parts: null, reserve: 0 });
 
+/** startTurn 会把回合返回给调用方继续写字段，必须是响应式代理，否则异步写入不触发重渲染。 */
 function newTurn(turnId) {
-  return {
+  return reactive({
     key: nextKey(), kind: 'turn', turnId, nodes: [], blk: {},
     running: true, ms: null, usage: null, label: '', live: '', liveStart: 0, truncated: false,
-  };
+  });
 }
 
 /**

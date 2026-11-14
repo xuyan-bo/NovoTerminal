@@ -45,6 +45,8 @@ const DIR_CACHE_MAX = 20000;
 const CLEANUP_POOL = 16;
 /** Ceiling for a head read, so a caller asking for megabytes still costs one small round trip. */
 const HEAD_MAX_BYTES = 64 * 1024;
+/** A directory read must answer within this, or the panel spins forever on a wedged remote mount. */
+const LIST_TIMEOUT_MS = 20000;
 
 function tunedInt(value, min, max, fallback) {
   const n = Number(value);
@@ -345,6 +347,7 @@ class SftpManager {
   }
 
   list(connId, remotePath) {
+    const started = Date.now();
     return new Promise((resolve, reject) => {
       let c;
       try {
@@ -353,61 +356,90 @@ class SftpManager {
         return reject(e);
       }
       const target = remotePath || '/';
-      c.sftp.readdir(target, (err, list) => {
-        if (err) {
-          return reject(this._remoteError('LIST', err, 'sftp list failed', { connId, host: c.host, port: c.port }));
-        }
-        const items = (list || [])
-          .map((it) => {
-            const attrs = it.attrs || {};
-            const isDir = attrs.isDirectory ? attrs.isDirectory() : false;
-            return {
-              name: it.filename,
-              isDir,
-              size: Number(attrs.size) || 0,
-              sizeText: isDir ? '—' : formatSize(attrs.size),
-              mtime: attrs.mtime ? new Date(attrs.mtime * 1000).toLocaleString() : '',
-              mtimeMs: attrs.mtime ? Number(attrs.mtime) * 1000 : 0,
-              mode: attrs.mode || 0,
-            };
-          })
-          .sort((a, b) => {
-            if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-            return String(a.name).localeCompare(String(b.name));
-          });
-        resolve({ path: target, items });
+      const meta = { connId, host: c.host, port: c.port, path: target };
+      // 远端目录在卡死的挂载点上、或这条通道已经不收包时，readdir 永远不会回调，
+      // 面板就一直转圈且没有任何日志可查：到点按失败收尾，把耗时和路径记下来。
+      // 超时后晚到的回调必须丢弃，否则会再打一条 list done，日志自相矛盾。
+      let settled = false;
+      let timer;
+      const settle = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+      const failed = (err) => this._remoteError('LIST', err, 'sftp list failed', {
+        ...meta, ms: Date.now() - started,
       });
+      timer = setTimeout(() => {
+        if (settled) return;
+        this.log &&
+          this.log.warn('sftp', 'sftp list timed out', { ...meta, ms: Date.now() - started });
+        settle(reject, Object.assign(new Error('Remote directory listing timed out'), { code: 'SFTP_LIST_TIMEOUT' }));
+      }, LIST_TIMEOUT_MS);
+      try {
+        c.sftp.readdir(target, (err, list) => {
+          if (settled) return;
+          if (err) return settle(reject, failed(err));
+          const items = (list || [])
+            .map((it) => {
+              const attrs = it.attrs || {};
+              const isDir = attrs.isDirectory ? attrs.isDirectory() : false;
+              return {
+                name: it.filename,
+                isDir,
+                size: Number(attrs.size) || 0,
+                sizeText: isDir ? '—' : formatSize(attrs.size),
+                mtime: attrs.mtime ? new Date(attrs.mtime * 1000).toLocaleString() : '',
+                mtimeMs: attrs.mtime ? Number(attrs.mtime) * 1000 : 0,
+                mode: attrs.mode || 0,
+              };
+            })
+            .sort((a, b) => {
+              if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+              return String(a.name).localeCompare(String(b.name));
+            });
+          this.log &&
+            this.log.info('sftp', 'sftp list done', { ...meta, count: items.length, ms: Date.now() - started });
+          settle(resolve, { path: target, items });
+        });
+      } catch (error) {
+        settle(reject, failed(error));
+      }
     });
   }
 
-  localList(localPath) {
+  /**
+   * 本地目录改用异步 IO：原来逐项 statSync 会在主进程事件循环上阻塞，
+   * 大目录（尤其是被实时扫描的盘符）会把同一条循环里的 SSH/SFTP 收包一起卡住。
+   */
+  async localList(localPath) {
     const dir = localPath || os.homedir();
     try {
-      const names = fs.readdirSync(dir, { withFileTypes: true });
-      const items = names
-        .map((d) => {
-          let size = 0;
-          let mtime = '';
-          let mtimeMs = 0;
-          try {
-            const st = fs.statSync(path.join(dir, d.name));
-            size = st.size;
-            mtime = st.mtime.toLocaleString();
-            mtimeMs = st.mtimeMs || 0;
-          } catch (_) {}
-          return {
-            name: d.name,
-            isDir: d.isDirectory(),
-            size,
-            sizeText: d.isDirectory() ? '—' : formatSize(size),
-            mtime,
-            mtimeMs,
-          };
-        })
-        .sort((a, b) => {
-          if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-          return String(a.name).localeCompare(String(b.name));
-        });
+      const names = await fs.promises.readdir(dir, { withFileTypes: true });
+      const items = await Promise.all(names.map(async (d) => {
+        let size = 0;
+        let mtime = '';
+        let mtimeMs = 0;
+        try {
+          const st = await fs.promises.stat(path.join(dir, d.name));
+          size = st.size;
+          mtime = st.mtime.toLocaleString();
+          mtimeMs = st.mtimeMs || 0;
+        } catch (_) {}
+        return {
+          name: d.name,
+          isDir: d.isDirectory(),
+          size,
+          sizeText: d.isDirectory() ? '—' : formatSize(size),
+          mtime,
+          mtimeMs,
+        };
+      }));
+      items.sort((a, b) => {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        return String(a.name).localeCompare(String(b.name));
+      });
       return { path: dir, items, home: os.homedir() };
     } catch (e) {
       this.log && this.log.error('sftp', 'local list failed', { path: dir, code: e.code, message: e.message });

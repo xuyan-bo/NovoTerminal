@@ -289,12 +289,18 @@ async function resolveSftpInitialPath(sender, req, assetId) {
   const started = Date.now();
   const meta = { sessionId, host: target.host, port: target.port };
   let timer;
+  let deadline = false;
   try {
     const cwd = await Promise.race([
       probeRemoteCwd(target).finally(() => clearTimeout(timer)),
-      new Promise((resolve) => { timer = setTimeout(() => resolve(null), SFTP_CWD_DEADLINE_MS); }),
+      new Promise((resolve) => {
+        timer = setTimeout(() => {
+          deadline = true;
+          resolve(null);
+        }, SFTP_CWD_DEADLINE_MS);
+      }),
     ]);
-    logger.info('ssh', 'sftp initial cwd probe', { ...meta, found: !!cwd, ms: Date.now() - started });
+    logger.info('ssh', 'sftp initial cwd probe', { ...meta, found: !!cwd, deadline, ms: Date.now() - started });
     return cwd;
   } catch (error) {
     logger.warn('ssh', 'sftp initial cwd probe failed', {
@@ -2121,18 +2127,22 @@ function registerIpc() {
     if (!assetId) throw new Error('assetId required');
     const hit = store.findAsset(assetId);
     if (!hit) throw Object.assign(new Error('asset not found'), { code: 'SFTP_NO_ASSET' });
+    const started = Date.now();
+    const reuse = !!sftpPanel && !sftpPanel.isDestroyed();
+    logger.info('sftp', 'sftp open requested', { assetId, host: hit.asset.host, reused: reuse, fromTerminal: !!req.sshSessionId });
     const meta = sftpManager.sessionMeta(hit.asset);
     store.pushRecent(hit.asset, { id: 'sftp', port: meta.port });
     send('store:changed', { reason: 'recent' });
     // 目录探测与建窗/加载并行；探测本身出任何问题都不能挡住面板打开
     const initialPath = resolveSftpInitialPath(sender, req, assetId).catch(() => null);
 
-    if (sftpPanel && !sftpPanel.isDestroyed()) {
+    if (reuse) {
       // 复用面板时绝不重载页面：现有会话可能正在传输，重载会全部断开
       sftpPanel.show();
       sftpPanel.focus();
       meta.initialPath = await initialPath;
       deliverSftpSession(meta);
+      logger.info('sftp', 'sftp session delivered', { assetId, reused: true, ms: Date.now() - started });
       return { ok: true, reused: true };
     }
 
@@ -2196,6 +2206,7 @@ function registerIpc() {
     });
     meta.initialPath = await initialPath;
     deliverSftpSession(meta);
+    logger.info('sftp', 'sftp session delivered', { assetId, reused: false, ms: Date.now() - started });
     await loading;
     if (loadError) {
       // 留着一个空白面板会让后续打开一直复用它，会话就此丢失

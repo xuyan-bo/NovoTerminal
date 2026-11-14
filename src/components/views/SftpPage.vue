@@ -170,6 +170,7 @@
 </template>
 
 <script>
+import { reactive } from 'vue';
 import { api, unwrap, connectionErrorMessage, refresh } from '../../store';
 import { t } from '../../i18n';
 import CtxMenu from '../common/CtxMenu.vue';
@@ -187,10 +188,13 @@ const TAB_DRAG_TYPE = 'application/x-novoterminal-sftp-tab';
 /** 主进程认证类失败码：只有这些才值得下一次重连时弹凭证窗（SSH 与 SFTP 共用同一条连接实现） */
 const AUTH_ASK_AGAIN = new Set(['SSH_AUTH_FAILED', 'SSH_KEY_PARSE', 'AUTH_CANCELED', 'AUTH_REQUIRED']);
 
-/** One tab per SFTP session: an asset can be opened several times, like SSH. */
+/**
+ * 会话对象要自己就是响应式代理：push 进响应式数组后代码仍持有这个引用去改
+ * status/remoteItems，Vue 3 只跟踪经过 proxy 的写入，普通对象不会触发重渲染。
+ */
 function createSession(meta, id, seq) {
   const name = meta.name || meta.host || '';
-  return {
+  return reactive({
     id,
     assetId: meta.assetId,
     name,
@@ -221,7 +225,7 @@ function createSession(meta, id, seq) {
     rowByXferId: new Map(),
     recalcPending: new Set(),
     recalcTimer: null,
-  };
+  });
 }
 
 export default {
