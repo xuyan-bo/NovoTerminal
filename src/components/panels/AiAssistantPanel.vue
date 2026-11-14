@@ -63,36 +63,45 @@
                   <span class="h-count">{{ blkCount(seg) }}</span>
                   <el-icon class="h-caret"><ArrowDown v-if="blkOpen(row, seg)" /><ArrowRight v-else /></el-icon>
                 </button>
-                <div v-show="blkOpen(row, seg)" class="turn-body" :data-live="blkLive(row, seg) ? '1' : ''" :style="capStyle">
-                  <div v-for="n in seg.nodes" :key="n.key" class="act" :class="actClass(n)">
-                    <button type="button" class="act-head" @click="toggleNode(n)">
-                      <el-icon class="a-ico"><component :is="nodeIcon(n)" /></el-icon>
-                      <span class="a-title" :class="{ mono: n.nk === 'cmd' || n.nk === 'ask' }">{{ nodeTitle(n) }}</span>
-                      <span class="a-stat mono">{{ nodeStat(n) }}</span>
-                      <el-icon class="a-caret"><ArrowDown v-if="n.open" /><ArrowRight v-else /></el-icon>
-                    </button>
-                    <div v-show="n.open" class="act-detail">
-                      <div v-if="n.nk === 'think'" class="think-text mono" :class="{ typing: n.running }" :style="capStyle">{{ n.text }}</div>
-                      <template v-else>
-                        <div v-if="n.nk !== 'choice'" class="cmd-line mono">{{ n.nk === 'ask' ? n.command : n.command || toolName(n.name) }}</div>
-                        <div v-if="n.nk === 'cmd' && n.auto" class="step-note">{{ $t('ai.autoRanNote') }}</div>
-                        <div v-if="n.reason" class="step-note">{{ n.reason }}</div>
-                        <div v-if="n.nk === 'cmd' && n.output" class="cmd-out mono" :style="capStyle">{{ n.output }}</div>
-                        <div v-if="n.nk === 'choice'" class="choice-list">
-                          <div class="choice-q">{{ n.question }}</div>
-                          <div
-                            v-for="(o, i) in n.options"
-                            :key="o"
-                            class="choice is-static"
-                            :class="{ 'is-picked': n.picked === o, 'is-dim': !!n.picked && n.picked !== o }"
-                          >
-                            <span class="k">{{ i + 1 }}</span>{{ o }}
-                          </div>
-                          <div v-if="n.picked && !n.options.includes(n.picked)" class="choice-custom mono">
-                            {{ $t('ai.choiceCustom') }}{{ n.picked }}
+                <!-- 折叠体不用 v-show：收起时走高度与透明度过渡，过程段不会「啪」地消失 -->
+                <div class="fold" :class="{ 'is-open': blkOpen(row, seg) }">
+                  <div class="fold-inner">
+                    <div class="turn-body" :data-live="blkLive(row, seg) ? '1' : ''" :style="capStyle">
+                      <div v-for="n in seg.nodes" :key="n.key" class="act" :class="actClass(n)">
+                        <button type="button" class="act-head" @click="toggleNode(n)">
+                          <el-icon class="a-ico"><component :is="nodeIcon(n)" /></el-icon>
+                          <span class="a-title" :class="{ mono: n.nk === 'cmd' || n.nk === 'ask' }">{{ nodeTitle(n) }}</span>
+                          <span class="a-stat mono">{{ nodeStat(n) }}</span>
+                          <el-icon class="a-caret"><ArrowDown v-if="n.open" /><ArrowRight v-else /></el-icon>
+                        </button>
+                        <div class="fold" :class="{ 'is-open': n.open }">
+                          <div class="fold-inner">
+                            <div class="act-detail">
+                              <div v-if="n.nk === 'think'" class="think-text mono" :class="{ typing: n.running }" :style="capStyle">{{ n.text }}</div>
+                              <template v-else>
+                                <div v-if="n.nk !== 'choice'" class="cmd-line mono">{{ n.nk === 'ask' ? n.command : n.command || toolName(n.name) }}</div>
+                                <div v-if="n.nk === 'cmd' && n.auto" class="step-note">{{ $t('ai.autoRanNote') }}</div>
+                                <div v-if="n.reason" class="step-note">{{ n.reason }}</div>
+                                <div v-if="n.nk === 'cmd' && n.output" class="cmd-out mono" :style="capStyle">{{ n.output }}</div>
+                                <div v-if="n.nk === 'choice'" class="choice-list">
+                                  <div class="choice-q">{{ n.question }}</div>
+                                  <div
+                                    v-for="(o, i) in n.options"
+                                    :key="o"
+                                    class="choice is-static"
+                                    :class="{ 'is-picked': n.picked === o, 'is-dim': !!n.picked && n.picked !== o }"
+                                  >
+                                    <span class="k">{{ i + 1 }}</span>{{ o }}
+                                  </div>
+                                  <div v-if="n.picked && !n.options.includes(n.picked)" class="choice-custom mono">
+                                    {{ $t('ai.choiceCustom') }}{{ n.picked }}
+                                  </div>
+                                </div>
+                              </template>
+                            </div>
                           </div>
                         </div>
-                      </template>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -810,7 +819,7 @@ export default {
         if (n.nk === 'think' && n.running) {
           n.running = false;
           n.ms = Date.now() - n.startedAt;
-          n.open = false;
+          // 思考过程结束后保持展开：默认可读，需要时再手动收起
         }
       }
     },
@@ -859,7 +868,6 @@ export default {
           if (open) {
             open.running = false;
             open.ms = ev.ms;
-            open.open = false;
           }
           this.busy(turn, this.$t('ai.liveRequest'));
           return;
@@ -891,7 +899,7 @@ export default {
           node = {
             key: nextKey(), nk: 'cmd', callId: ev.callId, name: ev.name, command: ev.command || '',
             channel: ev.channel || 'exec', state: 'running', auto: !!ev.auto, output: '',
-            exitCode: null, ms: null, open: true,
+            exitCode: null, ms: null, open: false,
           };
           turn.nodes.push(node);
         }
@@ -904,7 +912,6 @@ export default {
           node.exitCode = ev.exitCode == null ? node.exitCode : ev.exitCode;
           node.ms = ev.ms;
           node.output = ev.output || node.output;
-          node.open = false;
           this.busy(turn, this.$t('ai.liveNext'));
         }
         this.stick();
@@ -1646,6 +1653,24 @@ export default {
   display: flex; flex-direction: column; gap: 5px;
 }
 .blk { display: flex; flex-direction: column; }
+/* 折叠体：grid-template-rows 0fr→1fr 走高度过渡，内容高度未知也能平滑收放。
+   收起动画结束后才 visibility:hidden，动画期间仍可见，收起后内部按钮不进 Tab 键顺序。 */
+.fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows 0.22s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.18s ease,
+    visibility 0s linear 0.22s;
+}
+.fold.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition: grid-template-rows 0.22s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.22s ease,
+    visibility 0s linear 0s;
+}
+.fold-inner { min-height: 0; overflow: hidden; }
 .turn-head {
   display: flex; align-items: center; gap: 6px; width: 100%; padding: 2px 0;
   border: none; background: none; color: var(--text-3); cursor: pointer; font-size: 11.5px; text-align: left;
@@ -1664,6 +1689,11 @@ export default {
   display: flex; flex-direction: column; gap: 3px; overflow-y: auto;
 }
 .turn-body > * { flex: none; }
+.act { animation: ai-act-in 0.2s ease-out both; }
+@keyframes ai-act-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
 .act-head {
   display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 4px; border-radius: 5px;
   border: none; background: none; color: var(--text-2); font-size: 11.5px; cursor: pointer; text-align: left;
@@ -1689,6 +1719,44 @@ export default {
   padding: 5px 8px; margin-bottom: 5px; background: var(--bg-elevated);
   border: 1px solid var(--border); border-radius: 5px;
   font-size: 11.5px; color: var(--text); white-space: pre-wrap; word-break: break-all;
+}
+/* 正在执行的那条命令：高光扫过它的标题，扫读时先被眼睛抓住。
+   标题用 background-clip:text 上色，渐变两端与基色同色且必须平铺——一旦背景滚出盒子，
+   就没有像素可裁，color:transparent 会让那段标题直接消失（no-repeat + 位移过大时会踩到）。 */
+.act.is-live .a-title.mono {
+  background-image: linear-gradient(100deg,
+    var(--text) 40%,
+    color-mix(in srgb, var(--accent) 80%, var(--text)) 48%,
+    color-mix(in srgb, var(--accent) 20%, #fff) 50%,
+    color-mix(in srgb, var(--accent) 80%, var(--text)) 52%,
+    var(--text) 60%);
+  background-repeat: repeat;
+  background-size: 240% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ai-title-sheen 2s linear infinite;
+}
+/* 浅色主题下白底 + 浅蓝会糊掉，峰值退回饱和蓝，靠色相而不是亮度提神 */
+html.theme-light .act.is-live .a-title.mono,
+#app.theme-light .act.is-live .a-title.mono {
+  background-image: linear-gradient(100deg,
+    var(--text) 40%,
+    color-mix(in srgb, var(--accent) 90%, var(--text)) 48%,
+    var(--accent) 50%,
+    color-mix(in srgb, var(--accent) 90%, var(--text)) 52%,
+    var(--text) 60%);
+}
+@keyframes ai-title-sheen {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fold,
+  .fold.is-open { transition: none; }
+  .act { animation: none; }
+  /* 动画一停 background-position 会钉在某一处，标题就一段蓝一段白，这里退回纯色 */
+  .act.is-live .a-title.mono { background: none; color: var(--text); animation: none; }
 }
 .cmd-out {
   padding: 6px 8px; background: var(--bg-elevated);

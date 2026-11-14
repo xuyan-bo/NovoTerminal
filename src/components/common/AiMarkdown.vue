@@ -1,4 +1,5 @@
 <script>
+import { h } from 'vue';
 import { api } from '../../store';
 import { parseMarkdown, safeHref } from '../../lib/markdown';
 
@@ -15,15 +16,15 @@ export default {
       return parseMarkdown(this.text);
     },
   },
-  render(h) {
-    return h('div', { class: 'md' }, this.blocks(h, this.tokens));
+  render() {
+    return h('div', { class: 'md' }, this.blocks(this.tokens));
   },
   methods: {
-    blocks(h, list) {
-      return (list || []).map((token, i) => this.block(h, token, i));
+    blocks(list) {
+      return (list || []).map((token, i) => this.block(token, i));
     },
-    block(h, token, key) {
-      const children = () => this.inline(h, token.tokens || [{ type: 'text', text: token.text }]);
+    block(token, key) {
+      const children = () => this.inline(token.tokens || [{ type: 'text', text: token.text }]);
       switch (token.type) {
         case 'paragraph':
           return h('p', { key, class: 'md-p' }, children());
@@ -34,11 +35,11 @@ export default {
         case 'code':
           return h('pre', { key, class: 'md-code' }, token.text);
         case 'blockquote':
-          return h('blockquote', { key, class: 'md-quote' }, this.blocks(h, token.tokens));
+          return h('blockquote', { key, class: 'md-quote' }, this.blocks(token.tokens));
         case 'list':
-          return this.list(h, token, key);
+          return this.list(token, key);
         case 'table':
-          return this.table(h, token, key);
+          return this.table(token, key);
         case 'hr':
           return h('hr', { key, class: 'md-hr' });
         // 模型直接写出的 html 与未识别类型一律当纯文本插值，不解析成元素
@@ -46,40 +47,42 @@ export default {
           return h('p', { key, class: 'md-p' }, this.textOf(token));
       }
     },
-    list(h, token, key) {
-      const attrs = token.ordered && token.start > 1 ? { start: String(token.start) } : {};
-      return h(token.ordered ? 'ol' : 'ul', { key, class: ['md-list', token.ordered ? 'md-list-ol' : null], attrs },
-        (token.items || []).map((item, i) => this.listItem(h, item, i)));
+    list(token, key) {
+      // Vue 3 的 h 不再支持嵌套 attrs 字段，起始序号直接作为元素属性传入
+      const props = { key, class: ['md-list', token.ordered ? 'md-list-ol' : null] };
+      if (token.ordered && token.start > 1) props.start = String(token.start);
+      return h(token.ordered ? 'ol' : 'ul', props,
+        (token.items || []).map((item, i) => this.listItem(item, i)));
     },
-    listItem(h, item, key) {
+    listItem(item, key) {
       const kids = [];
       for (const token of item.tokens || []) {
         if (token.type === 'space') continue;
-        if (token.type === 'list') kids.push(this.list(h, token, 'l' + key + kids.length));
-        else if (token.type === 'text') kids.push(...this.inline(h, token.tokens || [{ type: 'text', text: token.text }]));
-        else if (BLOCK_TYPES.includes(token.type)) kids.push(this.block(h, token, 'b' + key + kids.length));
-        else kids.push(...this.inline(h, [token]));
+        if (token.type === 'list') kids.push(this.list(token, 'l' + key + kids.length));
+        else if (token.type === 'text') kids.push(...this.inline(token.tokens || [{ type: 'text', text: token.text }]));
+        else if (BLOCK_TYPES.includes(token.type)) kids.push(this.block(token, 'b' + key + kids.length));
+        else kids.push(...this.inline([token]));
       }
       return h('li', { key }, kids);
     },
-    table(h, token, key) {
+    table(token, key) {
       const cells = (row, tag) =>
         (row || []).map((cell, i) =>
           h(tag, {
             key: i,
             style: token.align && token.align[i] ? { textAlign: token.align[i] } : null,
-          }, this.inline(h, cell.tokens || [{ type: 'text', text: cell.text }]))
+          }, this.inline(cell.tokens || [{ type: 'text', text: cell.text }]))
         );
       return h('table', { key, class: 'md-table' }, [
         h('thead', [h('tr', cells(token.header, 'th'))]),
         h('tbody', (token.rows || []).map((row, r) => h('tr', { key: r }, cells(row, 'td')))),
       ]);
     },
-    inline(h, list) {
-      return (list || []).map((token, i) => this.inlineToken(h, token, i));
+    inline(list) {
+      return (list || []).map((token, i) => this.inlineToken(token, i));
     },
-    inlineToken(h, token, key) {
-      const children = () => this.inline(h, token.tokens || [{ type: 'text', text: token.text }]);
+    inlineToken(token, key) {
+      const children = () => this.inline(token.tokens || [{ type: 'text', text: token.text }]);
       switch (token.type) {
         case 'strong':
           return h('b', { key }, children());
@@ -94,24 +97,23 @@ export default {
         case 'checkbox':
           return h('span', { key, class: ['md-box', token.checked ? 'is-checked' : null] });
         case 'link':
-          return safeHref(token.href) ? this.link(h, key, token.href, children()) : h('span', { key }, children());
+          return safeHref(token.href) ? this.link(key, token.href, children()) : h('span', { key }, children());
         // 面板里不为模型给的图片发起网络请求，退化成可点击的文字
         case 'image':
-          return safeHref(token.href) ? this.link(h, key, token.href, [token.text || token.href]) : h('span', { key }, token.text || '');
+          return safeHref(token.href) ? this.link(key, token.href, [token.text || token.href]) : h('span', { key }, token.text || '');
         default:
           return h('span', { key }, this.textOf(token));
       }
     },
-    link(h, key, href, children) {
+    link(key, href, children) {
       const url = safeHref(href);
+      // Vue 3 的事件监听是平铺的 onClick，不再套 on: {}
       return h('a', {
         key,
         class: 'md-link',
-        on: {
-          click: (e) => {
-            e.preventDefault();
-            if (api.openExternal) api.openExternal(url);
-          },
+        onClick: (e) => {
+          e.preventDefault();
+          if (api.openExternal) api.openExternal(url);
         },
       }, children);
     },
