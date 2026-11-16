@@ -774,17 +774,31 @@ function applyZoom() {
   }
 }
 
-/** 默认窗口尺寸取工作区比例；floor 只在小屏上兜底，不会超出工作区。workAreaSize 是 DIP，已含系统缩放。 */
-function sizedToWorkArea(ratioW, ratioH, floorW, floorH, area) {
-  const a = area || screen.getPrimaryDisplay().workAreaSize;
+/**
+ * 窗口默认尺寸统一挂主窗口的基准尺寸上：主窗口取工作区比例，子窗口再取这个基准的比例。
+ * 基准来自工作区而非主窗口当前 bounds，所以用户拉伸主窗口时子窗口不会跟着变，但三档比例同一基准换算，
+ * 换机器或换分辨率后彼此的相对大小保持一致。floor 只在小屏兜底，不会超出基准区域。
+ * workAreaSize 是 DIP，已含系统缩放。
+ */
+const MAIN_WIN = { rw: 0.875, rh: 0.897, floorW: 1375, floorH: 805 };
+// 拆分会话多为放大看单条终端/桌面，需接近主窗口但露出主窗口边缘以便拖回；SFTP 本地+远端双栏加传输队列最吃宽度
+const SESSION_WIN = { rw: 0.76, rh: 0.84, floorW: 900, floorH: 560 };
+const SFTP_WIN = { rw: 0.82, rh: 0.88, floorW: 1000, floorH: 640 };
+
+function sizedTo(base, { rw, rh, floorW, floorH }) {
   return {
-    width: Math.min(a.width, Math.max(floorW, Math.round(a.width * ratioW))),
-    height: Math.min(a.height, Math.max(floorH, Math.round(a.height * ratioH))),
+    width: Math.min(base.width, Math.max(floorW, Math.round(base.width * rw))),
+    height: Math.min(base.height, Math.max(floorH, Math.round(base.height * rh))),
   };
 }
 
+/** 主窗口在指定工作区上的尺寸；子窗口都以此为基准 */
+function mainWinSize(area) {
+  return sizedTo(area || screen.getPrimaryDisplay().workAreaSize, MAIN_WIN);
+}
+
 function createWindow() {
-  const size = sizedToWorkArea(0.7 * 1.25, 0.78 * 1.15, 1100 * 1.25, 700 * 1.15);
+  const size = mainWinSize();
   // 窗口底色必须跟持久化主题一致：写死深色时浅色主题会先闪一块深底，再被启动画面覆盖
   const bootLight = resolveInitialTheme() === 'light';
   win = new BrowserWindow({
@@ -1745,7 +1759,7 @@ function registerIpc() {
   }
 
   async function createGroup(tab, dropAt, dropArea) {
-    const { width, height } = sizedToWorkArea(0.55, 0.65, 900, 560, dropArea);
+    const { width, height } = sizedTo(mainWinSize(dropArea), SESSION_WIN);
     const options = {
       width,
       height,
@@ -2148,7 +2162,7 @@ function registerIpc() {
 
     sftpPanelReady = false;
     sftpPendingSessions.length = 0;
-    const panelSize = sizedToWorkArea(0.6, 0.7, 1000, 640);
+    const panelSize = sizedTo(mainWinSize(), SFTP_WIN);
     const panel = new BrowserWindow({
       width: panelSize.width,
       height: panelSize.height,
