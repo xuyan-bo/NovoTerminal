@@ -11,6 +11,7 @@ import {
   parentLocal,
   isTaskFinished,
   sortItems,
+  fileIcon,
 } from './utils';
 import { t } from '../../i18n';
 
@@ -177,6 +178,103 @@ describe('sortItems', () => {
 
   it('缺省排序按名称升序', () => {
     expect(names(sortItems(make(), undefined))).toEqual(['..', 'bin', 'docs', 'a.txt', 'b.txt']);
+  });
+});
+
+describe('fileIcon', () => {
+  it('按扩展名归类常见类型，大小写不敏感', () => {
+    expect(fileIcon('main.go')).toBe('file-code');
+    expect(fileIcon('App.VUE')).toBe('file-code');
+    expect(fileIcon('deploy.sh')).toBe('file-terminal');
+    expect(fileIcon('README.md')).toBe('file-markdown');
+    expect(fileIcon('notes.txt')).toBe('file-text');
+    expect(fileIcon('tsconfig.json')).toBe('file-json');
+    expect(fileIcon('report.pdf')).toBe('file-pdf');
+    expect(fileIcon('plan.docx')).toBe('file-word');
+    expect(fileIcon('data.csv')).toBe('file-sheet');
+    expect(fileIcon('deck.pptx')).toBe('file-slides');
+    expect(fileIcon('logo.png')).toBe('file-image');
+    expect(fileIcon('voice.m4a')).toBe('file-audio');
+    expect(fileIcon('demo.mkv')).toBe('file-video');
+    expect(fileIcon('release.tar.gz')).toBe('file-archive');
+    expect(fileIcon('schema.sql')).toBe('file-db');
+    expect(fileIcon('id_rsa.pub')).toBe('file-key');
+    expect(fileIcon('Inter.woff2')).toBe('file-font');
+    expect(fileIcon('app.dll')).toBe('file-binary');
+    expect(fileIcon('fix.diff')).toBe('file-git');
+  });
+
+  it('多段扩展名只看最后一段', () => {
+    expect(fileIcon('bundle.tar.gz')).toBe('file-archive');
+    expect(fileIcon('component.test.js')).toBe('file-code');
+  });
+
+  it('日常非开发类型各有专属图标', () => {
+    expect(fileIcon('setup.msi')).toBe('file-package');
+    expect(fileIcon('WeChat.apk')).toBe('file-package');
+    expect(fileIcon('ubuntu.iso')).toBe('file-disk');
+    expect(fileIcon('win11.vhdx')).toBe('file-disk');
+    expect(fileIcon('三体.epub')).toBe('file-ebook');
+    expect(fileIcon('plan.dwg')).toBe('file-cad');
+    expect(fileIcon('model.stl')).toBe('file-model');
+    expect(fileIcon('cut.aep')).toBe('file-project');
+    expect(fileIcon('letter.eml')).toBe('file-mail');
+    expect(fileIcon('桌面快捷方式.lnk')).toBe('file-link');
+    expect(fileIcon('mind.xmind')).toBe('file-notes');
+  });
+
+  it('图片、字幕、备份与系统文件就近归类', () => {
+    expect(fileIcon('IMG_0001.CR2')).toBe('file-image');
+    expect(fileIcon('movie.ass')).toBe('file-text');
+    expect(fileIcon('mht保存.mhtml')).toBe('file-text');
+    expect(fileIcon('backup.bak')).toBe('file-archive');
+    expect(fileIcon('ntuser.reg')).toBe('file-config');
+    expect(fileIcon('driver.sys')).toBe('file-binary');
+    expect(fileIcon('stats.hdf5')).toBe('file-db');
+  });
+
+  it('服务器上常见的包与数据文件', () => {
+    expect(fileIcon('app.jar')).toBe('file-jar');
+    expect(fileIcon('ROOT.war')).toBe('file-jar');
+    expect(fileIcon('numpy-2.1.whl')).toBe('file-package');
+    expect(fileIcon('rails-7.1.gem')).toBe('file-package');
+    expect(fileIcon('serde.crate')).toBe('file-package');
+    expect(fileIcon('Newtonsoft.nupkg')).toBe('file-package');
+    expect(fileIcon('config.json')).toBe('file-json');
+    expect(fileIcon('k8s-deploy.yaml')).toBe('file-yaml');
+    expect(fileIcon('docker-compose.yml')).toBe('file-yaml');
+    expect(fileIcon('app.toml')).toBe('file-config');
+    expect(fileIcon('npm.lock')).toBe('file-text');
+    expect(fileIcon('sshd.service')).toBe('file-config');
+    expect(fileIcon('app.pid')).toBe('file-text');
+  });
+
+  it('同一个后缀两用时的取舍', () => {
+    expect(fileIcon('cube.obj')).toBe('file-model');
+    expect(fileIcon('disk.vhd')).toBe('file-disk');
+    expect(fileIcon('matrix.mm')).toBe('file-notes');
+    expect(fileIcon('id.key')).toBe('file-key');
+    expect(fileIcon('loader.mts')).toBe('file-code');
+    expect(fileIcon('camcorder.m2ts')).toBe('file-video');
+  });
+
+  it('按完整文件名识别，dotfile 归为配置', () => {
+    expect(fileIcon('Dockerfile')).toBe('file-config');
+    expect(fileIcon('Makefile')).toBe('file-terminal');
+    expect(fileIcon('.gitignore')).toBe('file-git');
+    expect(fileIcon('.bashrc')).toBe('file-terminal');
+    expect(fileIcon('.env.local')).toBe('file-config');
+    expect(fileIcon('.npmrc')).toBe('file-config');
+    expect(fileIcon('LICENSE')).toBe('file-text');
+  });
+
+  it('命不中的回落到通用文件图标', () => {
+    expect(fileIcon('archive.xyz')).toBe('file');
+    expect(fileIcon('README')).toBe('file-text');
+    expect(fileIcon('unknown')).toBe('file');
+    expect(fileIcon('trailing.')).toBe('file');
+    expect(fileIcon('')).toBe('file');
+    expect(fileIcon(null)).toBe('file');
   });
 });
 

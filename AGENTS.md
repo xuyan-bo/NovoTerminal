@@ -63,7 +63,7 @@
   - 连接失败：`this.log.error('rdp', 'session connect failed', { host, port, code: e.code, message: e.message })`
   - meta 一律禁止 password、私钥、vnc pass 等敏感字段，脱敏交给 `logStore` 兜底仍不应依赖。
 - **滚动条样式**：所有可滚动区域统一使用 Element 的细滚动条（约 6px、圆角，滑块用 `--border`，hover 变 `--text-3`，轨道透明），不出现粗的原生滚动条。SSH 的 `.xterm-viewport`、VNC 及会话视图 `.view` 超出宽高时的右侧/底部滚动条已在此约定内；新增可滚动容器应复用并用 `::webkit-scrollbar` 收敛宽度，避免另起更粗样式。
-- **图标规范**：通用 UI 图标（箭头、刷新、关闭等）统一使用 `@element-plus/icons-vue`——`main.js` 已按组件名全局注册，模板写 `<el-icon><Close /></el-icon>`，数据里的图标字段存 Element Plus 组件名（如 `HomeFilled`、`Files`），需要判别时用 `src/lib/icons.js` 的 `isElementIcon(name)`。`@element-plus/icons-vue` 中没有合适图标时，告知用户并由用户提供 SVG，图标文件（单色、白色填充/描边）放入 `public/icons/`，页面统一通过全局 `<svg-icon name="…" :size="…">` 组件引用（亮度遮罩 + `currentColor` 跟随主题），组件模板内禁止硬编码内联 `<svg>`；不允许自行用 `‹ › ✕ ＋` 之类的文本字符充当图标，也不引入外部图标库；操作系统等品牌图标作为数据集中在 `src/constants.js` 内渲染，是唯一例外。图标符号不得写进 i18n 文案，菜单图标用菜单项的 `icon` 类名字段承载。
+- **图标规范**：通用 UI 图标（箭头、刷新、关闭等）统一使用 `@element-plus/icons-vue`——`main.js` 已按组件名全局注册，模板写 `<el-icon><Close /></el-icon>`，数据里的图标字段存 Element Plus 组件名（如 `HomeFilled`、`Files`），需要判别时用 `src/lib/icons.js` 的 `isElementIcon(name)`。`@element-plus/icons-vue` 中没有合适图标时，告知用户并由用户提供 SVG，图标文件（单色、白色填充/描边）放入 `public/icons/`，页面统一通过全局 `<svg-icon name="…" :size="…">` 组件引用（亮度遮罩 + `currentColor` 跟随主题），组件模板内禁止硬编码内联 `<svg>`；不允许自行用 `‹ › ✕ ＋` 之类的文本字符充当图标，也不引入外部图标库；操作系统等品牌图标作为数据集中在 `src/constants.js` 内渲染，是唯一例外。SFTP 文件类型图标是彩色资源（Remix Icon，Apache-2.0，iconfont 库 20073 与官方 npm 包同源），按扩展名由 `src/components/sftp/utils.js` 的 `fileIcon(name)` 映射到 `public/icons/file-*.svg`，以 `<img class="f-ico">` 引入、不参与遮罩也不跟随主题变色，与文件夹图标同一类例外；新增类型必须同时补图标文件与 `fileIcon` 的映射分支。图标符号不得写进 i18n 文案，菜单图标用菜单项的 `icon` 类名字段承载。
 
 ## 4. Vue 组件与状态所有权
 

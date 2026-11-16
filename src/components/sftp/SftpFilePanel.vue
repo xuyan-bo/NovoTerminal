@@ -73,8 +73,8 @@
         @dragover.prevent.stop="$emit('row-over', $event, side, f)"
         @dragleave="$emit('drag-leave', $event)"
       >
-        <!-- Static src turns into a Vite import; public icons must resolve relative to the document (file:// included). -->
-        <span class="c-name"><img v-if="f.isDir" class="f-ico" :src="'icons/folder.svg'" alt="" /><svg-icon v-else class="f-ico-file" name="file" :size="13" />{{ f.name }}</span>
+        <!-- 图标按文档相对路径取 public/icons，file:// 下同样能解析。 -->
+        <span class="c-name"><img class="f-ico" :src="f.isDir ? 'icons/folder.svg' : 'icons/' + fileIcon(f.name) + '.svg'" alt="" />{{ f.name }}</span>
         <span class="c-size">{{ f.sizeText }}</span>
         <span class="c-time">{{ f.mtime }}</span>
       </div>
@@ -84,6 +84,8 @@
 </template>
 
 <script>
+import { fileIcon } from './utils';
+
 export default {
   name: 'SftpFilePanel',
   props: {
@@ -124,6 +126,7 @@ export default {
     this.detachMarquee();
   },
   methods: {
+    fileIcon,
     sortIcon(key) {
       if (!this.sort || this.sort.key !== key) return 'DCaret';
       return this.sort.dir === 'desc' ? 'CaretBottom' : 'CaretTop';
@@ -335,11 +338,6 @@ export default {
   margin-right: 4px;
   vertical-align: -2px;
   object-fit: contain;
-}
-/* SvgIcon's own scoped rule pins vertical-align: middle, so outrank it to match the folder image. */
-.c-name .f-ico-file {
-  margin-right: 4px;
-  vertical-align: -2px;
 }
 .marquee {
   position: fixed;
