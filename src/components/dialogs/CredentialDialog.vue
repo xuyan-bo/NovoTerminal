@@ -2,7 +2,6 @@
   <el-dialog
     v-model="modalVisible"
     width="min(980px, 94vw)"
-    top="8vh"
     :close-on-click-modal="false"
   >
     <template #header>
@@ -15,88 +14,112 @@
     <div class="cred-toolbar">
       <el-input
         v-model="keyword"
+        class="cred-search"
         :placeholder="$t('cred.searchPh')"
         clearable
         prefix-icon="Search"
-        style="width: 220px"
       />
       <el-button type="primary" plain class="cred-add" icon="Plus" @click="openCreate">
         {{ $t('cred.new') }}
       </el-button>
     </div>
-    <div v-loading="revealing" class="cred-table" @dragover="onDragOver" @drop="onDrop">
-      <el-table
-        :data="rows"
-        stripe
-        height="min(440px, calc(100vh - 260px))"
-        row-key="id"
-        :row-class-name="dropRowClass"
-      >
-        <el-table-column width="40">
-          <template #default="{ row }">
-            <span
-              class="cred-handle"
-              :class="{ 'is-off': !!keyword }"
-              :draggable="!keyword"
-              @dragstart="onDragStart(row, $event)"
-              @dragend="onDragEnd"
-            >
-              <el-icon><Rank /></el-icon>
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="$t('cred.name')" prop="name" min-width="140" show-overflow-tooltip />
-        <el-table-column :label="$t('cred.kind')" width="92">
-          <template #default="{ row }">
-            <span class="pill" :class="row.kind === 'key' ? 'cred-kind-key' : 'cred-kind-pass'">
-              {{ row.kind === 'key' ? $t('cred.kindKey') : $t('cred.kindPassword') }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="$t('cred.user')" min-width="140" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.user || '—' }}</template>
-        </el-table-column>
-        <el-table-column :label="$t('cred.note')" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.note || '—' }}</template>
-        </el-table-column>
-        <el-table-column :label="$t('cred.updated')" width="160" class-name="cred-time">
-          <template #default="{ row }">{{ fmtTime(row.updatedAt) }}</template>
-        </el-table-column>
-        <el-table-column :label="$t('cred.ops')" width="180" align="center" class-name="cred-ops">
-          <template #default="{ row }">
-            <el-button type="text" size="small" icon="View" @click="openView(row)">
-              {{ $t('cred.view') }}
-            </el-button>
-            <el-button type="text" size="small" icon="Edit" @click="openEdit(row)">
-              {{ $t('cred.edit') }}
-            </el-button>
-            <el-popconfirm
-              placement="top-end"
-              :title="$t('msg.confirmDeleteCredential')"
-              :confirm-button-text="$t('msg.confirm')"
-              :cancel-button-text="$t('settings.cancel')"
-              @confirm="remove(row)"
-            >
-              <template #reference>
-                <el-button type="text" size="small" class="cred-del" icon="Delete">
-                  {{ $t('cred.del') }}
-                </el-button>
-              </template>
-            </el-popconfirm>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
 
-    <template #footer>
-      <el-button @click="modalVisible = false">{{ $t('settings.close') }}</el-button>
-    </template>
+    <div v-loading="revealing" class="cred-body">
+      <el-scrollbar class="cred-scroll">
+        <div class="cred-grid" @click="confirmId = null" @dragover="onDragOver" @drop="onDrop">
+          <div
+            v-for="(row, index) in rows"
+            :key="row.id"
+            class="cred-card"
+            :class="{
+              'is-dragging': dragId === row.id,
+              'drop-before': dropAt === index,
+              'drop-after': dropAt === index + 1 && index === rows.length - 1,
+            }"
+            :data-index="index"
+          >
+            <el-tooltip :content="$t('cred.drag')" placement="top" :disabled="!!keyword">
+              <span
+                class="card-grip"
+                :class="{ 'is-off': !!keyword }"
+                :draggable="!keyword"
+                @dragstart="onDragStart(row, $event)"
+                @dragend="onDragEnd"
+              >
+                <el-icon><Rank /></el-icon>
+              </span>
+            </el-tooltip>
+            <span class="kind-ico" :class="{ 'is-key': row.kind === 'key' }">
+              <el-icon>
+                <Key v-if="row.kind === 'key'" />
+                <Lock v-else />
+              </el-icon>
+            </span>
+
+            <div class="card-main">
+              <div class="card-line">
+                <span class="card-title" :title="row.name" @click="openRow(row, 'view')">
+                  {{ row.name }}
+                </span>
+                <span class="pill" :class="row.kind === 'key' ? 'cred-kind-key' : 'cred-kind-pass'">
+                  {{ row.kind === 'key' ? $t('cred.kindKey') : $t('cred.kindPassword') }}
+                </span>
+              </div>
+              <div class="card-sub">
+                <span class="card-user">
+                  <el-icon><User /></el-icon>
+                  <span>{{ row.user || '—' }}</span>
+                </span>
+                <span class="card-note">{{ row.note || '—' }}</span>
+              </div>
+            </div>
+
+            <span class="card-time">
+              <el-icon><Clock /></el-icon>
+              <span>{{ fmtTime(row.updatedAt) }}</span>
+            </span>
+
+            <div class="card-acts">
+              <el-tooltip :content="$t('cred.view')" placement="top">
+                <el-button class="ibtn" icon="View" :aria-label="$t('cred.view')" @click="openRow(row, 'view')" />
+              </el-tooltip>
+              <el-tooltip :content="$t('cred.edit')" placement="top">
+                <el-button class="ibtn" icon="EditPen" :aria-label="$t('cred.edit')" @click="openRow(row, 'edit')" />
+              </el-tooltip>
+              <el-tooltip :content="$t('cred.del')" placement="top">
+                <el-button class="ibtn" icon="Delete" :aria-label="$t('cred.del')" @click.stop="confirmId = row.id" />
+              </el-tooltip>
+            </div>
+
+            <!-- 删除确认：叠在卡片下方（最后一条改到上方），行内展开不弹浮层，避免滚动容器裁切 -->
+            <div
+              v-if="confirmId === row.id"
+              class="card-confirm"
+              :class="{ 'is-up': index === rows.length - 1 }"
+              @click.stop
+            >
+              <span class="confirm-text">{{ $t('msg.confirmDeleteCredential') }}</span>
+              <div class="confirm-acts">
+                <el-button size="small" @click="confirmId = null">{{ $t('settings.cancel') }}</el-button>
+                <el-button size="small" type="danger" @click="confirmRemove(row)">
+                  {{ $t('msg.confirm') }}
+                </el-button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="!rows.length" class="cred-empty">
+          <el-icon><Search /></el-icon>
+          <span>{{ keyword ? $t('cred.emptySearch') : $t('cred.empty') }}</span>
+        </div>
+      </el-scrollbar>
+    </div>
 
     <el-dialog
       :title="formTitle"
       v-model="formOpen"
       width="min(560px, 92vw)"
-      top="12vh"
       append-to-body
       :close-on-click-modal="false"
     >
@@ -275,7 +298,9 @@ export default {
       saving: false,
       passVisible: false,
       passphraseVisible: false,
+      dragId: null,
       dropAt: -1,
+      confirmId: null,
       form: blankForm(),
       rules: {
         name: [
@@ -347,6 +372,16 @@ export default {
       this.formOpen = false;
       this.resetForm();
       this.keyword = '';
+      // keyword 本来就是空时上面的赋值不触发 watcher，删除确认会残留到下次打开
+      this.confirmId = null;
+      this.dragId = null;
+      this.dropAt = -1;
+    },
+    keyword() {
+      // 搜索会打乱列表顺序，拖动与删除确认同时失效
+      this.confirmId = null;
+      this.dragId = null;
+      this.dropAt = -1;
     },
     formOpen(v) {
       if (!v) this.resetForm();
@@ -363,19 +398,15 @@ export default {
       return `${d.getFullYear()}-${TWO(d.getMonth() + 1)}-${TWO(d.getDate())} ${TWO(d.getHours())}:${TWO(d.getMinutes())}`;
     },
     openCreate() {
+      this.confirmId = null;
       this.resetForm();
       this.formMode = 'edit';
       this.formOpen = true;
     },
-    openView(row) {
-      this.openRow(row, 'view');
-    },
-    openEdit(row) {
-      this.openRow(row, 'edit');
-    },
     /** 进表单前先过一次系统身份验证，通过才拿到明文；取消或失败就停在列表。 */
     async openRow(row, formMode) {
       if (this.revealing) return;
+      this.confirmId = null;
       const seq = ++this._revealSeq;
       this.revealing = true;
       try {
@@ -410,6 +441,7 @@ export default {
       this.editId = null;
       this.dropAt = -1;
       this._dragRow = null;
+      this.dragId = null;
       this.form = blankForm();
       this.passVisible = false;
       this.passphraseVisible = false;
@@ -437,6 +469,8 @@ export default {
     onDragStart(row, e) {
       if (this.keyword) return;
       this._dragRow = row;
+      this.dragId = row.id;
+      this.confirmId = null;
       if (!e.dataTransfer) return;
       e.dataTransfer.effectAllowed = 'move';
       // Chromium 要求拖拽带上数据，否则 dragstart 之后没有后续事件
@@ -444,17 +478,18 @@ export default {
     },
     onDragEnd() {
       this._dragRow = null;
+      this.dragId = null;
       this.dropAt = -1;
     },
-    /** 落点：行上半＝插到该行前、下半＝插到该行后；行区空白视为末尾追加，表头不算落点。 */
+    /** 落点：卡片上半＝插到该卡前、下半＝插到该卡后；卡片之外的空白视为末尾追加。 */
     dropIndex(e) {
       const target = e.target;
       if (!target || !target.closest) return -1;
-      if (target.closest('.el-table__header-wrapper')) return -1;
-      const tr = target.closest('tbody tr');
-      if (!tr) return this.rows.length;
-      const i = Array.prototype.indexOf.call(tr.parentNode.children, tr);
-      const box = tr.getBoundingClientRect();
+      const card = target.closest('.cred-card');
+      if (!card) return this.rows.length;
+      const i = Number(card.dataset.index);
+      if (!Number.isInteger(i)) return this.rows.length;
+      const box = card.getBoundingClientRect();
       return e.clientY > box.top + box.height / 2 ? i + 1 : i;
     },
     onDragOver(e) {
@@ -470,6 +505,7 @@ export default {
       const src = this._dragRow;
       const at = this.dropAt;
       this._dragRow = null;
+      this.dragId = null;
       this.dropAt = -1;
       if (!src || at < 0) return;
       const list = store.snapshot.credentials || [];
@@ -481,13 +517,6 @@ export default {
       } catch (err) {
         this.$message.error(connectionErrorMessage(err));
       }
-    },
-    /** Element 把 row-class-name 当单个 { row, rowIndex } 参数调用 */
-    dropRowClass({ rowIndex }) {
-      if (rowIndex === this.dropAt) return 'is-drop-row';
-      return this.dropAt === this.rows.length && rowIndex === this.rows.length - 1
-        ? 'is-drop-tail'
-        : '';
     },
     payload() {
       const base = {
@@ -520,7 +549,8 @@ export default {
         }
       });
     },
-    async remove(row) {
+    async confirmRemove(row) {
+      this.confirmId = null;
       try {
         await deleteCredential(row.id);
         this.$message.success(t('msg.credentialDeleted'));
@@ -536,12 +566,264 @@ export default {
 .cred-toolbar {
   display: flex;
   align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.cred-search {
+  width: 250px;
+}
+.el-button.cred-add {
+  background: transparent;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.el-button.cred-add:hover,
+.el-button.cred-add:focus {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* 列表操作列：纯图标按钮，文案放 tooltip */
+.el-button.ibtn {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-2);
+  font-size: 13px;
+}
+.el-button.ibtn + .el-button.ibtn {
+  margin-left: 0;
+}
+.el-button.ibtn:hover,
+.el-button.ibtn:focus {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.cred-scroll {
+  height: min(430px, calc(100vh - 250px));
+  min-height: 240px;
+}
+/* 上下留白给拖拽插入线与卡片 hover 外发光，左右 3px 防止描边被裁 */
+.cred-scroll :deep(.el-scrollbar__view) {
+  padding: 6px 3px 8px;
+}
+
+.cred-grid {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
-  margin-bottom: 10px;
 }
-.cred-del {
-  color: var(--danger);
+.cred-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) 138px auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  transition: border-color 0.18s, box-shadow 0.18s;
 }
+.cred-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+html.theme-light .cred-card:hover {
+  box-shadow: 0 4px 14px rgba(31, 45, 61, 0.1);
+}
+.cred-card.is-dragging {
+  opacity: 0.42;
+}
+.cred-card.drop-before::before,
+.cred-card.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.cred-card.drop-before::before {
+  top: -6px;
+}
+.cred-card.drop-after::after {
+  bottom: -6px;
+}
+
+.card-grip {
+  display: inline-flex;
+  color: var(--text-3);
+  cursor: grab;
+  font-size: 15px;
+}
+.card-grip:active {
+  cursor: grabbing;
+}
+.card-grip.is-off {
+  cursor: default;
+  opacity: 0.35;
+}
+.kind-ico {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.kind-ico.is-key {
+  background: rgba(103, 194, 58, 0.14);
+  color: var(--success);
+}
+/* 基础外观与 cred-kind-* 配色在全局 main.css（下拉选项 teleport 到 body，只能全局），这里只补卡片内布局 */
+.pill {
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.card-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.card-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.card-title:hover {
+  color: var(--accent);
+}
+.card-sub {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  font-size: 12px;
+}
+.card-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-2);
+  flex: 0 0 auto;
+  max-width: 40%;
+}
+.card-user .el-icon {
+  font-size: 13px;
+  color: var(--text-3);
+}
+.card-user span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-note {
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.card-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.card-time .el-icon {
+  font-size: 12px;
+}
+.card-acts {
+  display: flex;
+  gap: 6px;
+}
+@media (max-width: 720px) {
+  .cred-card {
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+  }
+  .card-time {
+    display: none;
+  }
+}
+
+.card-confirm {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 6px);
+  right: 12px;
+  width: max-content;
+  max-width: 320px;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.36);
+}
+.card-confirm.is-up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+html.theme-light .card-confirm {
+  box-shadow: 0 10px 26px rgba(31, 45, 61, 0.16);
+}
+.card-confirm .confirm-text {
+  flex: 1;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.card-confirm .confirm-acts {
+  display: flex;
+  gap: 6px;
+}
+
+.cred-empty {
+  height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.cred-empty .el-icon {
+  font-size: 42px;
+}
+
 .cred-pick + .el-textarea {
   margin-top: 8px;
 }
@@ -559,56 +841,5 @@ export default {
 }
 .pass-reveal-btn:hover {
   color: var(--accent);
-}
-/* plain 的浅蓝底是 Element 写死的，暗色主题下是一块亮斑，用 token 压住（.el-button 前缀抬权重压过 is-plain） */
-.el-button.cred-add {
-  background: transparent;
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.el-button.cred-add:hover,
-.el-button.cred-add:focus {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-/* 14px 字号下 YYYY-MM-DD HH:mm 约 120px，130px 列会被折成两行 */
-.cred-table :deep(td.cred-time .cell) {
-  white-space: nowrap;
-}
-/* 操作列固定 180px，Element Plus 默认相邻按钮 12px 间距会把三个文字按钮挤到第二行 */
-.cred-table :deep(td.cred-ops .cell) {
-  white-space: nowrap;
-}
-.cred-table :deep(td.cred-ops .el-button) {
-  padding-left: 0;
-  padding-right: 0;
-}
-.cred-table :deep(td.cred-ops .el-button + .el-button) {
-  margin-left: 6px;
-}
-.cred-table :deep(td.cred-ops .cred-del) {
-  margin-left: 6px;
-}
-.cred-table :deep(td.cred-ops .el-button .el-icon + span) {
-  margin-left: 2px;
-}
-.cred-handle {
-  display: inline-block;
-  color: var(--text-3);
-  cursor: grab;
-}
-.cred-handle:active {
-  cursor: grabbing;
-}
-.cred-handle.is-off {
-  cursor: default;
-  opacity: 0.35;
-}
-.cred-table :deep(.el-table__body tr.is-drop-row > td.el-table__cell) {
-  box-shadow: inset 0 2px 0 var(--accent);
-}
-.cred-table :deep(.el-table__body tr.is-drop-tail > td.el-table__cell) {
-  box-shadow: inset 0 -2px 0 var(--accent);
 }
 </style>
