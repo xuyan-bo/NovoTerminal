@@ -24,9 +24,10 @@
       </el-button>
     </div>
 
-    <div v-loading="revealing" class="cred-body">
+    <!-- 落点按光标与卡片几何计算，监听挂在整个可视区上：卡片下方的空白也算末尾 -->
+    <div v-loading="revealing" class="cred-body" @dragover="onDragOver" @drop="onDrop">
       <el-scrollbar class="cred-scroll">
-        <div class="cred-grid" @click="confirmId = null" @dragover="onDragOver" @drop="onDrop">
+        <div ref="grid" class="cred-grid" @click="confirmId = null">
           <div
             v-for="(row, index) in rows"
             :key="row.id"
@@ -36,7 +37,6 @@
               'drop-before': dropAt === index,
               'drop-after': dropAt === index + 1 && index === rows.length - 1,
             }"
-            :data-index="index"
           >
             <el-tooltip :content="$t('cred.drag')" placement="top" :disabled="!!keyword">
               <span
@@ -50,10 +50,7 @@
               </span>
             </el-tooltip>
             <span class="kind-ico" :class="{ 'is-key': row.kind === 'key' }">
-              <el-icon>
-                <Key v-if="row.kind === 'key'" />
-                <Lock v-else />
-              </el-icon>
+              <el-icon><Key /></el-icon>
             </span>
 
             <div class="card-main">
@@ -84,10 +81,10 @@
                 <el-button class="ibtn" icon="View" :aria-label="$t('cred.view')" @click="openRow(row, 'view')" />
               </el-tooltip>
               <el-tooltip :content="$t('cred.edit')" placement="top">
-                <el-button class="ibtn" icon="EditPen" :aria-label="$t('cred.edit')" @click="openRow(row, 'edit')" />
+                <el-button class="ibtn is-edit" icon="EditPen" :aria-label="$t('cred.edit')" @click="openRow(row, 'edit')" />
               </el-tooltip>
               <el-tooltip :content="$t('cred.del')" placement="top">
-                <el-button class="ibtn" icon="Delete" :aria-label="$t('cred.del')" @click.stop="confirmId = row.id" />
+                <el-button class="ibtn is-del" icon="Delete" :aria-label="$t('cred.del')" @click.stop="confirmId = row.id" />
               </el-tooltip>
             </div>
 
@@ -481,22 +478,23 @@ export default {
       this.dragId = null;
       this.dropAt = -1;
     },
-    /** 落点：卡片上半＝插到该卡前、下半＝插到该卡后；卡片之外的空白视为末尾追加。 */
+    /** 落点：光标在卡片上半＝插到该卡前，越过全部卡片（含下方空白）＝末尾追加。 */
     dropIndex(e) {
-      const target = e.target;
-      if (!target || !target.closest) return -1;
-      const card = target.closest('.cred-card');
-      if (!card) return this.rows.length;
-      const i = Number(card.dataset.index);
-      if (!Number.isInteger(i)) return this.rows.length;
-      const box = card.getBoundingClientRect();
-      return e.clientY > box.top + box.height / 2 ? i + 1 : i;
+      const grid = this.$refs.grid;
+      if (!grid) return this.rows.length;
+      const cards = grid.querySelectorAll('.cred-card');
+      for (let i = 0; i < cards.length; i++) {
+        const box = cards[i].getBoundingClientRect();
+        if (e.clientY < box.top + box.height / 2) return i;
+      }
+      return cards.length;
     },
     onDragOver(e) {
       if (!this._dragRow) return;
+      const from = this.rows.findIndex((r) => r.id === this._dragRow.id);
       const i = this.dropIndex(e);
-      if (i < 0) return;
-      if (i !== this.dropAt) this.dropAt = i;
+      // 落回自己原位前后（from / from+1）顺序不会变，不画插入线，否则松手看着像没生效
+      this.dropAt = i === from || i === from + 1 ? -1 : i;
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
     },
@@ -604,6 +602,19 @@ export default {
   background: var(--bg-hover);
   border-color: var(--accent);
   color: var(--accent);
+}
+/* 编辑走浅蓝、删除走红，与查看的默认蓝边区分开 */
+.el-button.ibtn.is-edit:hover,
+.el-button.ibtn.is-edit:focus {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.el-button.ibtn.is-del:hover,
+.el-button.ibtn.is-del:focus {
+  background: rgba(245, 108, 108, 0.15);
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .cred-scroll {

@@ -79,7 +79,7 @@ import ClosePromptDialog from './components/dialogs/ClosePromptDialog.vue';
 import UpdateDialog from './components/dialogs/UpdateDialog.vue';
 import SshAuthDialog from './components/dialogs/SshAuthDialog.vue';
 import { store, api, refresh, applyDetached, dropDetachedTab, applyTabState, openCopyForGroup, checkForUpdates } from './store';
-import { t, applySettings, elementLocale } from './i18n';
+import { t, applySettings, applyTheme, elementLocale } from './i18n';
 import { getProtocol } from './protocols';
 
 const MIN_SIDEBAR_W = 180;
@@ -219,6 +219,15 @@ export default {
         checkForUpdates(true).catch(() => {});
       }, 3000);
     }
+    // 主题广播三个窗口都要收（SFTP 面板与拆分窗不走上面的分支）：系统标题栏由主进程统一改，
+    // 面板配色只能靠每扇窗口自己重贴主题类，漏了就会出现"标题栏变了、面板没变"的穿帮。
+    this._offTheme =
+      api.onThemeChanged &&
+      api.onThemeChanged((payload) => {
+        if (!payload || !payload.theme) return;
+        applyTheme(payload.theme);
+        store.themeTick++;
+      });
     if (window.matchMedia) {
       const mq = window.matchMedia('(prefers-color-scheme: light)');
       const onChange = () => {
@@ -242,6 +251,7 @@ export default {
     if (this._offTabState) this._offTabState();
     if (this._offTabCopy) this._offTabCopy();
     if (this._offStore) this._offStore();
+    if (this._offTheme) this._offTheme();
     if (this._mq && this._mqHandler && this._mq.removeEventListener) {
       this._mq.removeEventListener('change', this._mqHandler);
     }

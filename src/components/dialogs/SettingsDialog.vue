@@ -656,6 +656,10 @@ export default {
           this.picker.visible = false;
           // 没保存就不该留下预览效果：按已落盘的设置重新应用一遍（保存路径里 snapshot 已刷新，等于保持新外观）
           this.applyAppearance((store.snapshot && store.snapshot.settings) || {});
+          // 预览同时切了系统标题栏和其它已开窗口，退回也要走同一条广播
+          if (api.previewTheme) {
+            api.previewTheme((store.snapshot && store.snapshot.settings || {}).theme || 'system').catch(() => {});
+          }
           if (this.$refs.form) this.$nextTick(() => this.$refs.form.clearValidate());
         }
       },
@@ -802,6 +806,8 @@ export default {
     onTheme(id) {
       this.form.theme = id;
       this.applyAppearance(this.form);
+      // 预览同步到系统标题栏与其它已开窗口；不落盘，取消由关窗时的回退统一处理
+      if (api.previewTheme) api.previewTheme(id).catch(() => {});
       if (this.$refs.form) this.$refs.form.validateField('theme', () => {});
     },
     onLang(lang) {

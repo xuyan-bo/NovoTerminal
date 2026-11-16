@@ -964,6 +964,31 @@ function resolveInitialTheme() {
   return light ? 'light' : 'dark';
 }
 
+/**
+ * 系统标题栏跟随应用主题：Windows 的标题栏/窗口边框、macOS 的工具条与红绿灯底衬、Linux 的 GTK
+ * 标题栏都由 Chromium 按 themeSource 决定明暗，不写这个值就只有「跟随系统」一种行为，应用切深色
+ * 时顶上会压着一条浅色栏。必须写设置值（system/light/dark）而不是解析后的 light/dark，写成解析值
+ * 会让 system 主题失去跟随系统的能力（shouldUseDarkColors 被自己写死）。
+ * theme 传空时取已落盘的设置；返回真正写进去的值。
+ */
+function applyNativeTheme(theme) {
+  const wanted = theme || (store && store.getSettings && store.getSettings().theme) || 'system';
+  const source = SETTING_THEMES.includes(wanted) ? wanted : 'system';
+  if (nativeTheme.themeSource !== source) nativeTheme.themeSource = source;
+  return source;
+}
+
+/**
+ * 主题变更要落到每个已开窗口：子窗口的 store 不会自己重新读设置，只靠发起方 refresh() 只能刷新
+ * 自己那一份。这里只广播主题，不落盘——设置页的预览和保存都走这条，取消时把已保存的值再发一次
+ * 就退回去了。
+ */
+function publishTheme(theme) {
+  const source = applyNativeTheme(theme);
+  send('theme:changed', { theme: source });
+  return source;
+}
+
 function registerIpc() {
   // preload 首帧前同步读取，只回主题，不带任何输入
   ipcMain.on('app:initial-theme', (event) => {
@@ -974,6 +999,12 @@ function registerIpc() {
     const snap = store.snapshot();
     return snap && snap.settings ? { ...snap, settings: withoutAiKeys(snap.settings) } : snap;
   });
+  // 设置页的主题是「先预览、保存才落盘」：预览只把系统标题栏和已开窗口切过去，不写库，
+  // 关掉弹窗时页面再发一次已保存的值就退回去了。只认主窗口，别处不能改全局外观。
+  handle('theme:preview', (sender, theme) => {
+    if (!isMainWindow(sender)) throw untrustedSenderError();
+    return publishTheme(theme);
+  }, true);
   handle('clipboard:read-text', () => {
     try {
       return clipboard.readText() || '';
@@ -1165,6 +1196,8 @@ function registerIpc() {
     if ('logTotalMb' in clean) logStore.setTotalBytes(clean.logTotalMb * MB);
     applyZoom();
     rebuildTrayMenu();
+    // 落盘后按设置值广播一次，已打开的子窗口才会跟着换（预览是临时的，这条才是永久生效）
+    if ('theme' in clean) publishTheme(clean.theme);
     // AI 只记汇总，服务清单里有 baseUrl 与凭证，不进日志
     const ai = clean.ai;
     logger.info('settings', 'settings updated', {
@@ -1275,6 +1308,8 @@ function registerIpc() {
     logStore.setTotalBytes(clampedLogTotalMb(store.getSettings().logTotalMb) * MB);
     applyZoom();
     rebuildTrayMenu();
+    // 备份里带着主题，导入后已打开的窗口也要跟着换
+    publishTheme();
     send('store:changed', { reason: 'backup-import' });
     logger.info('backup', 'backup imported', {
       categories: (parsed.manifest && parsed.manifest.categories) || [],
@@ -2495,6 +2530,8 @@ app.whenReady().then(() => {
   if (!isDev) {
     try { fs.readFileSync(INDEX_HTML_PATH, 'utf8'); } catch (_) {}
   }
+  // 先进主题再建窗口：首帧的窗口底色与系统标题栏都要按同一份设置渲染，否则会先闪一次深/浅
+  applyNativeTheme();
   createWindow();
   createTray();
 

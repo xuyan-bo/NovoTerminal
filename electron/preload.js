@@ -39,6 +39,13 @@ const api = {
   browseCredentialKey: () => ipcRenderer.invoke('credential:browse-key'),
   getSettings: () => ipcRenderer.invoke('store:settings'),
   updateSettings: (patch) => ipcRenderer.invoke('store:update-settings', patch),
+  /** 设置页的主题预览：只切外观不落盘，取消时再用已保存的值调一次 */
+  previewTheme: (theme) => ipcRenderer.invoke('theme:preview', theme),
+  onThemeChanged: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('theme:changed', handler);
+    return () => ipcRenderer.removeListener('theme:changed', handler);
+  },
   resolveClose: (action, remember) => ipcRenderer.invoke('app:resolve-close', { action, remember }),
   onClosePrompt: (cb) => {
     const handler = () => cb();
