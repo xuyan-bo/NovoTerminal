@@ -6,8 +6,8 @@ import { formatSize, parentLocal, parentRemote, isTaskFinished, transferErrorTex
 /** Folder totals are only worth recomputing a few times per second, not per progress event. */
 const RECALC_THROTTLE_MS = 400;
 
-/** 完成提示合批窗口：多选上传、编辑器连续回传都不该逐条刷屏。 */
-const DONE_TOAST_MS = 1200;
+/** 完成提示合批窗口：多选上传的小文件完成事件毫秒级连续到达，短窗口足够收拢成一条。 */
+const DONE_TOAST_MS = 300;
 
 /**
  * Task rows live in their own session (`s.tasks`), because progress events keep arriving for

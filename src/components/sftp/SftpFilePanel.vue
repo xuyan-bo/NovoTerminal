@@ -46,37 +46,39 @@
       >{{ $t(col.label) }}<el-icon class="sort-ico"><component :is="sortIcon(col.key)" /></el-icon></span>
     </div>
     <!-- Stop the native drop here so it cannot also reach the panel/root handlers. -->
-    <div
-      class="file-list"
-      :data-side="side"
-      @contextmenu.prevent="$emit('blank-context', $event, side)"
-      @dragenter.prevent
-      @dragover.prevent="$emit('drag-over', $event, side)"
-      @drop.prevent.stop="$emit('zone-drop', $event, side)"
-      @mousedown="onAreaMouseDown"
-    >
+    <div class="file-body" v-loading="loading">
       <div
-        v-for="f in items"
-        :key="(side === 'local' ? 'l-' : 'r-') + f.name"
-        class="file-row"
-        :class="{ sel: selected.indexOf(f.name) >= 0, 'drop-hi': dropHi === (side === 'local' ? 'l:' : 'r:') + f.name, parent: f.isParent }"
+        class="file-list"
         :data-side="side"
-        :data-name="f.name"
-        :data-isdir="f.isDir ? '1' : '0'"
-        :data-parent="f.isParent ? '1' : '0'"
-        :draggable="true"
-        @click="$emit('select', side, f.name, $event)"
-        @dblclick="$emit('item-dbl', f, $event)"
-        @contextmenu.prevent.stop="!f.isParent && $emit('item-context', $event, side, f)"
-        @dragstart="$emit('drag-start', $event, side, f)"
-        @dragend="$emit('drag-end', $event)"
-        @dragover.prevent.stop="$emit('row-over', $event, side, f)"
-        @dragleave="$emit('drag-leave', $event)"
+        @contextmenu.prevent="$emit('blank-context', $event, side)"
+        @dragenter.prevent
+        @dragover.prevent="$emit('drag-over', $event, side)"
+        @drop.prevent.stop="$emit('zone-drop', $event, side)"
+        @mousedown="onAreaMouseDown"
       >
-        <!-- 图标按文档相对路径取 public/icons，file:// 下同样能解析。 -->
-        <span class="c-name"><img class="f-ico" :src="f.isDir ? 'icons/folder.svg' : 'icons/' + fileIcon(f.name) + '.svg'" alt="" />{{ f.name }}</span>
-        <span class="c-size">{{ f.sizeText }}</span>
-        <span class="c-time">{{ f.mtime }}</span>
+        <div
+          v-for="f in items"
+          :key="(side === 'local' ? 'l-' : 'r-') + f.name"
+          class="file-row"
+          :class="{ sel: selected.indexOf(f.name) >= 0, 'drop-hi': dropHi === (side === 'local' ? 'l:' : 'r:') + f.name, parent: f.isParent }"
+          :data-side="side"
+          :data-name="f.name"
+          :data-isdir="f.isDir ? '1' : '0'"
+          :data-parent="f.isParent ? '1' : '0'"
+          :draggable="true"
+          @click="$emit('select', side, f.name, $event)"
+          @dblclick="$emit('item-dbl', f, $event)"
+          @contextmenu.prevent.stop="!f.isParent && $emit('item-context', $event, side, f)"
+          @dragstart="$emit('drag-start', $event, side, f)"
+          @dragend="$emit('drag-end', $event)"
+          @dragover.prevent.stop="$emit('row-over', $event, side, f)"
+          @dragleave="$emit('drag-leave', $event)"
+        >
+          <!-- 图标按文档相对路径取 public/icons，file:// 下同样能解析。 -->
+          <span class="c-name"><img class="f-ico" :src="f.isDir ? 'icons/folder.svg' : 'icons/' + fileIcon(f.name) + '.svg'" alt="" />{{ f.name }}</span>
+          <span class="c-size">{{ f.sizeText }}</span>
+          <span class="c-time">{{ f.mtime }}</span>
+        </div>
       </div>
     </div>
     <div v-if="marquee" class="marquee" :style="marqueeStyle"></div>
@@ -296,11 +298,27 @@ export default {
 .file-head span.sort-on .sort-ico {
   opacity: 1;
 }
+/* v-loading 挂在滚动容器外层：遮罩不随列表滚动、始终盖住可视区。 */
+.file-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
 .file-list {
   flex: 1;
   min-height: 0;
   overflow: auto;
   position: relative;
+}
+/* 全局把遮罩底色设为透明；文件列表这里要「挡住旧目录」的遮罩感，
+   深浅各给一层半透明面板色（半透明叠加，两套主题下都看得清）。 */
+.file-body :deep(.el-loading-mask) {
+  background-color: rgba(21, 27, 36, 0.55);
+}
+html.theme-light .file-body :deep(.el-loading-mask) {
+  background-color: rgba(255, 255, 255, 0.6);
 }
 .file-row {
   cursor: default;
