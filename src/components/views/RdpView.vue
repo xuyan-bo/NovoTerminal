@@ -22,14 +22,24 @@
           <svg-icon name="folder-download" />
         </button>
       </el-tooltip>
-      <el-tooltip :content="connToggleTip" placement="top">
-        <button
-          type="button"
-          class="gear-icon-btn"
-          :class="{ 'is-danger': !isDisconnected }"
-          @click="onConnToggle"
-        >
-          <svg-icon :name="isDisconnected ? 'link' : 'link-broken'" />
+      <el-popconfirm
+        v-if="!isDisconnected"
+        :title="$t('msg.confirmDisconnect')"
+        :confirm-button-text="$t('msg.confirm')"
+        :cancel-button-text="$t('msg.cancel')"
+        :width="240"
+        placement="top"
+        @confirm="onDisconnectConfirm"
+      >
+        <template #reference>
+          <button type="button" class="gear-icon-btn is-danger">
+            <svg-icon name="link-broken" />
+          </button>
+        </template>
+      </el-popconfirm>
+      <el-tooltip v-else :content="connToggleTip" placement="top">
+        <button type="button" class="gear-icon-btn" @click="onConnToggle">
+          <svg-icon name="link" />
         </button>
       </el-tooltip>
     </div>
@@ -698,6 +708,10 @@ export default {
       } else {
         this.disconnectNow(false);
       }
+    },
+    /** 确认气泡弹出期间会话可能已被对端断开，确认时再判一次，避免误触重连。 */
+    onDisconnectConfirm() {
+      if (!this.isDisconnected) this.disconnectNow(false);
     },
 
     // wasm 不会自己擦屏：图像不收掉，状态写着「已断开」而画面看着还活着

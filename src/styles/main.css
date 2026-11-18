@@ -1420,6 +1420,16 @@ button {
   background: transparent;
 }
 
+.ctx-item.ai { color: var(--think); }
+.ctx-item.ai .ctx-icon { color: var(--think); }
+.ctx-item.ai:hover { background: var(--think-soft); }
+.ctx-item.ai.disabled { color: var(--text-3); }
+.ctx-item.ai.disabled .ctx-icon { color: var(--text-3); }
+
+.ctx-item.ai.disabled:hover {
+  background: transparent;
+}
+
 .ctx-item.danger:hover {
   background: rgba(245, 108, 108, 0.15);
   color: var(--danger);

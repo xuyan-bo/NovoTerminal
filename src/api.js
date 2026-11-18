@@ -238,6 +238,12 @@ export const api = hasBridge
       async aiCancel() {
         return { ok: true, running: false };
       },
+      async aiOneShot() {
+        return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
+      },
+      async aiOneShotCancel() {
+        return { ok: true, running: false };
+      },
       async aiSetPermission() {
         return { __error: true, message: t('msg.previewMode'), code: 'NO_BRIDGE' };
       },

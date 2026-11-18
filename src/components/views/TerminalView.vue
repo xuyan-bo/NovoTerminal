@@ -32,15 +32,24 @@
           <svg-icon name="folder-download" />
         </button>
       </el-tooltip>
-      <el-tooltip :content="connToggleTip" placement="top">
-        <button
-          type="button"
-          class="gear-icon-btn"
-          :class="{ 'is-danger': !isDisconnected }"
-          @click="onConnToggle"
-        >
-          <!-- disconnected → reconnect (link); connecting/ready → disconnect (broken link) -->
-          <svg-icon :name="isDisconnected ? 'link' : 'link-broken'" />
+      <el-popconfirm
+        v-if="!isDisconnected"
+        :title="$t('msg.confirmDisconnect')"
+        :confirm-button-text="$t('msg.confirm')"
+        :cancel-button-text="$t('msg.cancel')"
+        :width="240"
+        placement="top"
+        @confirm="onDisconnectConfirm"
+      >
+        <template #reference>
+          <button type="button" class="gear-icon-btn is-danger">
+            <svg-icon name="link-broken" />
+          </button>
+        </template>
+      </el-popconfirm>
+      <el-tooltip v-else :content="connToggleTip" placement="top">
+        <button type="button" class="gear-icon-btn" @click="onConnToggle">
+          <svg-icon name="link" />
         </button>
       </el-tooltip>
     </div>
@@ -138,6 +147,15 @@
       </div>
     </transition>
     <ctx-menu ref="termCtx" @select="onTermCtxSelect" />
+    <ai-selection-popover
+      v-if="aiPopover"
+      :key="aiPopover.key"
+      :mode="aiPopover.mode"
+      :text="aiPopover.text"
+      :x="aiPopover.x"
+      :y="aiPopover.y"
+      @close="aiPopover = null"
+    />
     <ssh-theme-dialog ref="themeDialog" :asset-id="assetId" :in-fullscreen="isFullscreen" @saved="onThemeSaved" />
   </div>
 </template>
@@ -153,6 +171,7 @@ import { t } from '../../i18n';
 import { sshThemeToXterm, resolveSshTheme, ADVANCED_DEFAULTS } from '../../constants';
 import SshThemeDialog from '../dialogs/SshThemeDialog.vue';
 import CtxMenu from '../common/CtxMenu.vue';
+import AiSelectionPopover from '../common/AiSelectionPopover.vue';
 import createFullscreenMixin from '../session/fullscreen';
 
 const FIT_DEBOUNCE_MS = 120;
@@ -165,6 +184,7 @@ export default {
   components: {
     SshThemeDialog,
     CtxMenu,
+    AiSelectionPopover,
     SshMonitorPanel: defineAsyncComponent(() => import('../panels/SshMonitorPanel.vue')),
     AiAssistantPanel: defineAsyncComponent(() => import('../panels/AiAssistantPanel.vue')),
   },
@@ -218,6 +238,7 @@ export default {
       findRegex: false,
       findIndex: -1,
       findCount: 0,
+      aiPopover: null,
     };
   },
   computed: {
@@ -225,6 +246,12 @@ export default {
     aiEnabled() {
       const ai = (store.snapshot.settings || {}).ai;
       return !ai || ai.enabled !== false;
+    },
+    /** 右键菜单里的 AI 项只在助手开启且配置了模型服务时出现。 */
+    aiConfigured() {
+      const ai = (store.snapshot.settings || {}).ai;
+      if (!ai || ai.enabled === false || !Array.isArray(ai.services)) return false;
+      return ai.services.some((s) => s && Array.isArray(s.models) && s.models.length > 0);
     },
     /** 监控与 AI 共用右侧这一列，任一打开就占宽，避免把终端挤两次。 */
     sideOpen() {
@@ -321,6 +348,8 @@ export default {
     this._offMonitor = null;
     this._offMonitorEnd = null;
     this._splitMove = null;
+    this._ctxSel = '';
+    this._ctxPoint = null;
     this._splitUp = null;
     this._sideMove = null;
     this._sideUp = null;
@@ -510,16 +539,24 @@ export default {
       const term = this.term;
       if (!term) return;
       const hasSel = !!(term.hasSelection && term.hasSelection());
+      this._ctxSel = hasSel ? term.getSelection() : '';
+      this._ctxPoint = { x: e.clientX, y: e.clientY };
       const clip = await this.readClipboardText();
       if (this._disposed || !this.$refs.termCtx) return;
-      this.$refs.termCtx.open(e, [
+      const items = [
         { label: t('term.find'), icon: 'Search', action: 'find' },
         { sep: true },
         { label: t('term.copy'), icon: 'DocumentCopy', action: 'copy', disabled: !hasSel, hint: t('term.copyNoSel') },
         { label: t('term.paste'), icon: 'DocumentAdd', action: 'paste', disabled: clip === '', hint: t('clipboard.empty') },
         { label: t('term.selectAll'), icon: 'Finished', action: 'selectAll' },
         { label: t('term.clear'), icon: 'Delete', action: 'clear' },
-      ]);
+      ];
+      if (this.aiConfigured) {
+        items.push({ sep: true });
+        items.push({ label: t('term.aiTranslate'), icon: 'MagicStick', action: 'aiTranslate', ai: true, disabled: !hasSel, hint: t('term.aiNoSel') });
+        items.push({ label: t('term.aiExplain'), icon: 'Reading', action: 'aiExplain', ai: true, disabled: !hasSel, hint: t('term.aiNoSel') });
+      }
+      this.$refs.termCtx.open(e, items);
     },
     onTermCtxSelect(item) {
       const term = this.term;
@@ -529,6 +566,18 @@ export default {
       else if (item.action === 'selectAll') term.selectAll();
       else if (item.action === 'clear') this.clearScreen();
       else if (item.action === 'find') this.openFind();
+      else if (item.action === 'aiTranslate' || item.action === 'aiExplain') {
+        const text = this._ctxSel || '';
+        if (!text.trim()) return;
+        const point = this._ctxPoint || { x: 0, y: 0 };
+        this.aiPopover = {
+          key: Date.now(),
+          mode: item.action === 'aiTranslate' ? 'translate' : 'explain',
+          text,
+          x: point.x,
+          y: point.y,
+        };
+      }
     },
     /** 返回 '' 表示确认剪贴板为空（粘贴置灰）；null 表示读不了或无桥接，不置灰。 */
     async readClipboardText() {
@@ -1050,6 +1099,10 @@ export default {
       } else {
         this.disconnectNow(false);
       }
+    },
+    /** 确认气泡弹出期间会话可能已被对端断开，确认时再判一次，避免误触重连。 */
+    onDisconnectConfirm() {
+      if (!this.isDisconnected) this.disconnectNow(false);
     },
 
     /**

@@ -1542,6 +1542,9 @@ function registerIpc() {
     ownSsh(sender, req && req.sessionId);
     return aiAssistant.cancel(req.sessionId);
   }, true);
+  /** 选区翻译/释义：一次性调用，不挂 SSH 会话；事件按发起窗口的 webContents.id 定向回传。 */
+  handle('ai:one-shot', (sender, req) => aiAssistant.oneShot({ ...(req || {}), ownerId: sender.id }), true);
+  handle('ai:one-shot-cancel', (sender, req) => aiAssistant.cancelOneShot(req && req.requestId, sender.id), true);
   /** 新建会话：把当前对话归档成一条会话记录，再开一条空的。 */
   handle('ai:session-archive', (sender, req) => {
     ownSsh(sender, req && req.sessionId);

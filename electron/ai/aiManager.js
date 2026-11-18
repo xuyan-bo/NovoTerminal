@@ -77,6 +77,8 @@ class AiManager {
     /** 会话内的偏好覆盖（审批级别、模型）；没有覆盖的项跟随设置里的默认值，随会话一起销毁。 */
     this.overrides = new Map(); // sessionId -> { permission?, modelRef? }
     this.pendingScreens = new Map(); // requestId -> { sessionId, resolve, timer }
+    /** 选区翻译/释义这类一次性请求：不建会话、不落盘，发完即从表里移除。 */
+    this.oneShots = new Map(); // requestId -> { abort, ownerId }
   }
 
   settings() {
@@ -892,6 +894,66 @@ class AiManager {
     }
   }
 
+  /**
+   * 选区的一次性调用：不建会话、不落盘、不挂 SSH 工具，只发一轮 system+user，事件按 requestId 定向回发起窗口。
+   * 与 turn() 完全分离，避免翻译/释义污染助手的对话历史或占用会话的 running 位。
+   */
+  async oneShot(req) {
+    const requestId = req && req.requestId;
+    if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(requestId)) {
+      throw aiError('AI_REQUEST', 'invalid requestId');
+    }
+    const mode = (req && req.mode) === 'explain' ? 'explain' : 'translate';
+    const text = typeof (req && req.text) === 'string' ? req.text.trim().slice(0, 8000) : '';
+    if (!text) throw aiError('AI_REQUEST', 'empty selection');
+    const settings = this.settings();
+    if (!settings.enabled) throw aiError('AI_DISABLED', 'AI 助手已在设置中关闭');
+    const model = resolveModel((this.store.getSettings() || {}).ai, this._normalizeRef(req && req.modelRef));
+    const target = (typeof req.ownerId === 'number' && req.ownerId > 0) ? req.ownerId : undefined;
+    const abort = new AbortController();
+    this.oneShots.set(requestId, { abort, ownerId: target });
+    const emit = (payload) => this.send('ai:event', { ...payload, sessionId: requestId, requestId, oneShot: true }, target);
+    const system = mode === 'explain'
+      ? '你是一个终端文本释义助手。用户会选中一段终端里的文本（命令、日志、报错或路径）。用简洁的简体中文解释这段文本是什么意思、通常意味着什么；只输出释义本身，不要复述原文，不要使用 markdown。'
+      : '你是一个翻译助手。把用户选中的终端文本完整翻译成简体中文，保留其中的命令、路径、参数和专有名词原样。只输出译文，不要添加解释，不要使用 markdown。';
+    const started = Date.now();
+    emit({ type: 'state', running: true });
+    try {
+      const result = await streamChat({
+        baseUrl: model.baseUrl,
+        apiKey: model.apiKey,
+        model: model.model,
+        messages: [{ role: 'system', content: system }, { role: 'user', content: text }],
+        maxTokens: 1024,
+        temperature: 0.2,
+        signal: abort.signal,
+        log: this.log,
+        onText: (piece) => emit({ type: 'delta', text: piece }),
+      });
+      if (!result.text.trim()) throw aiError('AI_EMPTY', 'the model returned no content');
+      emit({ type: 'done', ms: Date.now() - started, chars: result.text.length });
+      this.log && this.log.info('ai', 'ai one-shot completed', { mode, model: model.model, ms: Date.now() - started, chars: result.text.length });
+      return { ok: true };
+    } catch (error) {
+      const canceled = error.code === 'AI_CANCELED' || abort.signal.aborted;
+      const code = error.code || 'AI_REQUEST';
+      if (!canceled) this.log && this.log.error('ai', 'ai one-shot failed', { mode, model: model.model, code, message: error.message });
+      emit({ type: 'done', error: { code, message: error.message }, ms: Date.now() - started });
+      return { ok: false, code, message: error.message };
+    } finally {
+      this.oneShots.delete(requestId);
+      emit({ type: 'state', running: false });
+    }
+  }
+
+  /** 浮层关闭时中断还没跑完的一次性请求；请求已结束或不属于该窗口时是空操作。 */
+  cancelOneShot(requestId, ownerId) {
+    const shot = this.oneShots.get(requestId);
+    if (!shot || (ownerId != null && shot.ownerId !== ownerId)) return { ok: true, running: false };
+    if (shot.abort) shot.abort.abort();
+    return { ok: true, running: true };
+  }
+
   /** 会话断开或宿主窗口销毁：中止在跑的请求，归档还没存过的对话，丢掉审批等待。 */
   stopSession(sessionId, reason) {
     this.overrides.delete(sessionId);
@@ -910,10 +972,18 @@ class AiManager {
       const target = this.ssh.execTarget(sessionId);
       if (!target || target.ownerId === ownerId) this.stopSession(sessionId, 'owner-closed');
     }
+    for (const [requestId, shot] of this.oneShots) {
+      if (shot.ownerId === ownerId) {
+        if (shot.abort) shot.abort.abort();
+        this.oneShots.delete(requestId);
+      }
+    }
   }
 
   destroyAll() {
     for (const sessionId of [...this.conversations.keys()]) this.stopSession(sessionId, 'shutdown');
+    for (const shot of this.oneShots.values()) if (shot.abort) shot.abort.abort();
+    this.oneShots.clear();
     this.overrides.clear();
     for (const pending of this.pendingScreens.values()) clearTimeout(pending.timer);
     this.pendingScreens.clear();

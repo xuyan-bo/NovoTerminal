@@ -33,7 +33,7 @@
 | `src/components/common/` | 通用小组件（右键菜单、SVG 图标、方法配置、Markdown 展示） |
 | `src/components/session/fullscreen.js` | 共用全屏生命周期；协议组件只提供样式类和尺寸回调 |
 | `src/components/sftp/` | 文件面板、传输队列、任务/传输/拖放方法及纯路径工具 |
-| `src/i18n.js`、`src/styles/main.css` | 双语文案、主题入口、全局样式变量和公共样式 |
+| `src/i18n.js`、`src/locales/`、`src/styles/main.css` | 双语文案（`src/locales/` 按语言各一文件，新增语言按此模式加文件）、主题/语言切换与文案查表入口、全局样式变量和公共样式 |
 | `electron/preload.js` | 通过 `contextBridge` 暴露具名、受限 API 和事件订阅 |
 | `electron/main.js` | 窗口、应用生命周期和 IPC 编排；具体协议逻辑交给对应模块 |
 | `electron/session/` | 外部会话适配及连接探测；RDP 分内置（IronRDP-WASM，由渲染端连接）与外部客户端（mstsc/xfreerdp/wfreerdp，由本目录适配器启动）两条路径 |

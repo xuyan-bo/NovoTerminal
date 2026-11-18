@@ -12,7 +12,7 @@
       <div
         v-else
         class="ctx-item"
-        :class="{ danger: item.danger, disabled: item.disabled }"
+        :class="{ danger: item.danger, disabled: item.disabled, ai: item.ai }"
         :title="item.disabled ? item.hint || '' : ''"
         @click="select(item)"
       ><el-icon v-if="item.icon" class="ctx-icon"><component :is="item.icon" /></el-icon>{{ item.label }}</div>
