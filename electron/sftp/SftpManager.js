@@ -37,8 +37,11 @@ const XFER_CHUNK_BYTES = 64 * 1024;
 const XFER_READY_TIMEOUT_MS = 20000;
 /** Terminal tasks are dropped this long after the renderer received their final event. */
 const TASK_PRUNE_MS = 5000;
-/** Minimum gap between two progress broadcasts of the same running task. */
-const PROGRESS_INTERVAL_MS = 200;
+/** Minimum gap between two progress broadcasts of the same running task. 大量小文件并发时，
+ *  中间百分比刷新过密会让渲染端反复触发表格重渲染；完成/失败等终态事件不受此节流。 */
+const PROGRESS_INTERVAL_MS = 500;
+/** Window for sampling a transfer's instantaneous speed; short enough for small files. */
+const SPEED_SAMPLE_MS = 200;
 /** Upper bound of the per-connection "remote directory exists" cache. */
 const DIR_CACHE_MAX = 20000;
 /** Concurrent partial-target cleanups while cancelling a folder subtree. */
@@ -75,13 +78,20 @@ class SftpManager {
     if (!task._lastT) {
       task._lastT = now;
       task._lastBytes = task.transferred;
+      task._startT = now;
     }
     const dt = now - task._lastT;
-    if (dt >= 500 && task.status === 'running') {
+    if (task.status === 'running') {
       const db = task.transferred - (task._lastBytes || 0);
-      task.speed = db > 0 ? (db / dt) * 1000 : 0;
-      task._lastT = now;
-      task._lastBytes = task.transferred;
+      if (dt >= SPEED_SAMPLE_MS) {
+        task.speed = db > 0 ? (db / dt) * 1000 : 0;
+        task._lastT = now;
+        task._lastBytes = task.transferred;
+      } else if (!task.speed && task.transferred > 0) {
+        // 小文件活不到一个采样窗口，先用「启动至今的均速」兜底，至少不是 0
+        const since = Math.max(now - task._startT, 1);
+        task.speed = (task.transferred / since) * 1000;
+      }
     } else if (task.status !== 'running') {
       task.speed = 0;
     }

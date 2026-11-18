@@ -9,6 +9,21 @@ const RECALC_THROTTLE_MS = 400;
 /** 完成提示合批窗口：多选上传的小文件完成事件毫秒级连续到达，短窗口足够收拢成一条。 */
 const DONE_TOAST_MS = 300;
 
+/** 删除子树后继续拦截其晚到事件的窗口；主进程取消时已从 Map 删除任务，不会有更晚的事件。 */
+const IGNORE_EVENT_MS = 5000;
+
+/** 中间进度合批窗口：拉长窗口以合并并发行的进度写入，减少表格响应式重渲染次数；终态事件仍即时应用。 */
+const PROGRESS_FLUSH_MS = 250;
+
+/** 文件夹速率的采样窗口：足够长以抹平逐帧抖动，又短于小文件的完成时间。 */
+const SPEED_WINDOW_MS = 300;
+
+/** 完成后目录刷新的合批窗口：一批小文件完成后只列一次目录，而不是每个文件列一次。 */
+const REFRESH_AFTER_DONE_MS = 600;
+
+/** 传输期间推迟刷新的最长等待：避免个别长任务让新文件迟迟不出现，到点强制刷一次。 */
+const REFRESH_MAX_WAIT_MS = 5000;
+
 /**
  * Task rows live in their own session (`s.tasks`), because progress events keep arriving for
  * background sessions while the user reads another tab. The queue table itself is shared, so the
@@ -39,6 +54,54 @@ export default {
   },
   folderState(s, rootId) {
     return (s && s.folderStates.get(rootId)) || null;
+  },
+  /** 删除/停传后立起屏障：晚到的取消与进度事件必须丢弃，否则会被 mergeTask 当成新任务打平回列表。 */
+  ignoreXfer(s, ids) {
+    if (!s || !ids || !ids.length) return;
+    if (!s.ignoredXferIds) s.ignoredXferIds = new Set();
+    ids.forEach((id) => id && s.ignoredXferIds.add(id));
+    setTimeout(() => {
+      ids.forEach((id) => s.ignoredXferIds && s.ignoredXferIds.delete(id));
+    }, IGNORE_EVENT_MS);
+  },
+  isIgnoredEvent(s, p) {
+    if (!s || !p) return false;
+    return !!(p.taskId && s.ignoredXferIds && s.ignoredXferIds.has(p.taskId));
+  },
+  /** 只写值真正变化的字段：跳过 reactive setter 调用，避免触发表格单元格的重复渲染 effect。 */
+  assignRow(row, patch) {
+    for (const key in patch) {
+      if (row[key] !== patch[key]) row[key] = patch[key];
+    }
+  },
+  /** 进度按 taskId 合批：一个计时窗口内只保留最新值，减少表格重渲染与整树重算次数。 */
+  queueProgress(s, p) {
+    if (!s || !s.alive || !p || !p.taskId) return;
+    if (this.isTaskFinished(p)) {
+      this.flushProgress(s);
+      this.mergeTask(s, p);
+      return;
+    }
+    s.progressBuffer.set(p.taskId, p);
+    if (s.progressFlush) return;
+    s.progressFlush = setTimeout(() => {
+      s.progressFlush = null;
+      if (!s.alive) return;
+      const pending = Array.from(s.progressBuffer.values());
+      s.progressBuffer.clear();
+      pending.forEach((item) => this.mergeTask(s, item));
+    }, PROGRESS_FLUSH_MS);
+  },
+  flushProgress(s) {
+    if (!s || !s.alive) return;
+    if (s.progressFlush) {
+      clearTimeout(s.progressFlush);
+      s.progressFlush = null;
+    }
+    if (!s.progressBuffer || !s.progressBuffer.size) return;
+    const pending = Array.from(s.progressBuffer.values());
+    s.progressBuffer.clear();
+    pending.forEach((item) => this.mergeTask(s, item));
   },
   /** A folder task shows up in the queue before anything is enumerated. */
   registerFolderRoot(s, root) {
@@ -106,25 +169,6 @@ export default {
     this.recalcTree(s, root);
     this.syncTasks(s);
   },
-  /** Element asks for a node's children only when the user expands it. */
-  loadTreeChildren(row, treeNode, resolve) {
-    const kids = (row && row.children) || [];
-    const s = this.sessionOf(row);
-    if (!s) {
-      resolve(kids.slice());
-      return;
-    }
-    const state = this.folderState(s, (row && row.rootId) || (row && row.taskId));
-    const entry = state ? this.dirWait(state, row) : null;
-    if (!entry || entry.done) {
-      resolve(kids.slice());
-      return;
-    }
-    entry.promise.then(() => {
-      if (!s.alive) return;
-      resolve(((row && row.children) || []).slice());
-    });
-  },
   /** All descendant file rows of a folder node, at any depth. */
   folderFiles(row) {
     const out = [];
@@ -188,38 +232,66 @@ export default {
   },
   recalcFolder(parent, scanDone, paused) {
     if (!parent || !(parent.isFolder || parent.isDir)) return parent;
-    const files = this.folderFiles(parent);
     let size = 0;
     let transferred = 0;
-    let speed = 0;
+    let childSpeed = 0;
     let hasRun = false;
     let anyErr = false;
     let anyPause = false;
     let anyCancel = false;
     let doneCount = 0;
-    files.forEach((c) => {
+    let fileCount = 0;
+    let settledChildren = true;
+    (parent.children || []).forEach((c) => {
+      if (!c) return;
       size += Number(c.size) || 0;
       transferred += Number(c.transferred) || 0;
-      if (c.status === 'running') {
-        hasRun = true;
-        speed += Number(c.speed) || 0;
-      } else if (c.status === 'error') anyErr = true;
-      else if (c.status === 'paused') anyPause = true;
-      else if (c.status === 'canceled') anyCancel = true;
-      if (c.status === 'done') doneCount += 1;
+      if (c.isDir || c.isFolder) {
+        const agg = c._agg || {};
+        fileCount += Number(c.fileCount) || 0;
+        doneCount += Number(c.doneCount) || 0;
+        childSpeed += Number(agg.speed) || 0;
+        if (agg.hasRun) hasRun = true;
+        if (agg.anyErr) anyErr = true;
+        if (agg.anyPause) anyPause = true;
+        if (agg.anyCancel) anyCancel = true;
+        if (!agg.settled) settledChildren = false;
+      } else {
+        fileCount += 1;
+        if (c.status === 'running') {
+          hasRun = true;
+          childSpeed += Number(c.speed) || 0;
+        } else if (c.status === 'error') anyErr = true;
+        else if (c.status === 'paused') anyPause = true;
+        else if (c.status === 'canceled') anyCancel = true;
+        if (c.status === 'done') doneCount += 1;
+        if (!(c.status === 'done' || c.status === 'error' || c.status === 'canceled')) settledChildren = false;
+      }
     });
-    const settled =
-      files.length > 0 &&
-      files.every((c) => c.status === 'done' || c.status === 'error' || c.status === 'canceled');
+    const settled = fileCount > 0 && settledChildren;
     // While the scan is still running the totals are partial, so never report completion.
-    const complete = parent.isFolder && scanDone === false ? false : settled || !files.length;
+    const complete = parent.isFolder && scanDone === false ? false : settled || !fileCount;
+    // 文件夹速率取这段时间窗口内的总吞吐，不依赖子文件恰好落在主进程的采样点上——小文件几十毫秒
+    // 就完成了，子行 speed 常为 0，只有按已完成字节增量算，父级才会稳定显示速率。
+    const now = Date.now();
+    const prev = parent._speedWindow;
+    let speed = 0;
+    if (!prev) {
+      parent._speedWindow = { t: now, transferred };
+    } else if (now - prev.t >= SPEED_WINDOW_MS) {
+      const delta = transferred - prev.transferred;
+      if (delta > 0) speed = (delta / (now - prev.t)) * 1000;
+      parent._speedWindow = { t: now, transferred };
+    }
+    if (speed <= 0 && hasRun && childSpeed > 0) speed = childSpeed;
     parent.size = size;
     parent.transferred = transferred;
-    parent.fileCount = files.length;
+    parent.fileCount = fileCount;
     parent.doneCount = doneCount;
     parent.percent = size > 0 ? Math.min(100, Math.round((transferred / size) * 100)) : complete ? 100 : 0;
     parent.sizeText = formatSize(size);
-    parent.speedText = hasRun && speed > 0 ? `${formatSize(speed)}/s` : '—';
+    parent.speedText = speed > 0 ? `${formatSize(speed)}/s` : '—';
+    parent._agg = { speed, hasRun, anyErr, anyPause, anyCancel, settled };
     // 全部取消不能伪装成完成，否则会触发「原地刷新」并显示成 100%
     if (complete) parent.status = anyErr ? 'error' : anyCancel ? 'canceled' : 'done';
     else if ((anyPause || paused) && !hasRun) parent.status = 'paused';
@@ -281,6 +353,7 @@ export default {
       return kids.some(remove);
     };
     remove(state.root);
+    if (row.xferId) this.ignoreXfer(s, [row.xferId]);
     s.rowByKey.delete(this.childKey(row));
     if (row.xferId) s.rowByXferId.delete(row.xferId);
     this.scheduleRecalc(s, state.root);
@@ -298,38 +371,78 @@ export default {
   },
   mergeTask(s, p) {
     if (!s || !s.alive || !p || !p.taskId) return;
+    // 删掉的树在取消/IPC 收尾期间仍会有晚到事件；命中屏障就丢弃，绝不能新建顶层行把它「打平」出来
+    if (this.isIgnoredEvent(s, p)) return;
     // 主进程事件负载没有 xferId 字段，它的 taskId 才是传输 id；行对象自带 xferId，taskId 是渲染端 row-key
     const fromEvent = !Object.prototype.hasOwnProperty.call(p, 'xferId');
     const row = this.findFolderRow(s, p);
     if (row) {
       // In-place update keeps the row identity the table cells already depend on.
-      Object.assign(row, p, {
+      this.assignRow(row, Object.assign({}, p, {
         taskId: row.taskId,
         isFolder: false,
         isDir: row.isDir,
         xferId: fromEvent ? p.taskId : row.xferId,
-      });
+      }));
       if (fromEvent) s.rowByXferId.set(p.taskId, row);
       const state = this.folderState(s, row.rootId);
       this.scheduleRecalc(s, state ? state.root : row);
       return;
     }
-    const i = s.tasks.findIndex((x) => x.taskId === p.taskId);
-    const prev = i >= 0 ? s.tasks[i] : null;
-    const merged =
-      i >= 0
-        ? { ...s.tasks[i], ...p }
-        : { ...p, sessionName: s.label, createdAt: Date.now() };
-    if (i >= 0) s.tasks.splice(i, 1, merged);
-    else s.tasks.unshift(merged);
-    if (merged.status === 'error' && (!prev || prev.status !== 'error')) {
-      this.$message.error(`${merged.name}: ${transferErrorText(merged)}`);
+    // 独立文件任务：用 id→行 映射 O(1) 命中后就地更新，不再 findIndex + splice 重建 s.tasks
+    // ——那会让 queueTasks computed 失效并触发整张表格重排，几百个小文件下足以占满主线程。
+    let standalone = s.standaloneById.get(p.taskId);
+    if (!standalone) {
+      standalone = this.makeTaskRow(s, {
+        ...p,
+        sessionName: s.label,
+        xferId: fromEvent ? p.taskId : p.xferId,
+      });
+      s.standaloneById.set(p.taskId, standalone);
+      // 批量合入 s.tasks：每个文件开始就 unshift 一行会让 queueTasks 重算 + el-table 全表重渲染，
+      // 几百个小文件下这是 renderCell 热点的主要来源。先放缓冲，按帧一次性合入。
+      s.pendingAdd.push(standalone);
+      this.scheduleStandaloneAdd(s);
+    } else {
+      this.assignRow(standalone, Object.assign({}, p, { xferId: fromEvent ? p.taskId : standalone.xferId }));
     }
-    if (merged.status === 'done' && (!prev || prev.status !== 'done')) {
-      this.notifyTaskDone(merged.name);
-      this.refreshAfterDone(s, merged);
-      s.tasks = s.tasks.filter((x) => !(x.taskId === merged.taskId && x.status === 'done'));
+    if (standalone.status === 'error' && !standalone._errorNoted) {
+      standalone._errorNoted = true;
+      this.$message.error(`${standalone.name}: ${transferErrorText(standalone)}`);
     }
+    if (standalone.status === 'done' && !standalone._doneNoted) {
+      standalone._doneNoted = true;
+      this.notifyTaskDone(standalone.name);
+      this.refreshAfterDone(s, standalone);
+      this.scheduleStandalonePrune(s, standalone);
+    }
+  },
+  /** 新增的独立任务按帧批量合入 s.tasks：几百个文件只触发几次数组变更，而不是每行一次全表重排。 */
+  scheduleStandaloneAdd(s) {
+    if (s.addTimer) return;
+    s.addTimer = setTimeout(() => {
+      s.addTimer = null;
+      if (!s.alive || !s.pendingAdd.length) return;
+      const adding = s.pendingAdd;
+      s.pendingAdd = [];
+      // 已在缓冲期就完成并被 prune 的行不再入表
+      const fresh = adding.filter((r) => !r._doneNoted && !this.isTaskFinished(r));
+      if (fresh.length) s.tasks.unshift(...fresh);
+    }, PROGRESS_FLUSH_MS);
+  },
+  /** 完成/取消的独立任务合批移除：避免每行一次 filter 重建整个 s.tasks 数组。 */
+  scheduleStandalonePrune(s, row) {
+    s.pendingDone.add(row);
+    if (s.pruneTimer) return;
+    s.pruneTimer = setTimeout(() => {
+      s.pruneTimer = null;
+      if (!s.alive || !s.pendingDone.size) return;
+      const done = s.pendingDone;
+      s.pendingDone = new Set();
+      done.forEach((r) => s.standaloneById.delete(r.xferId || r.taskId));
+      if (s.pendingAdd.length) s.pendingAdd = s.pendingAdd.filter((r) => !done.has(r));
+      s.tasks = s.tasks.filter((x) => !done.has(x));
+    }, DONE_TOAST_MS);
   },
   /** 完成提示合批：窗口内累计条数，只发一条，单项时仍报名字。 */
   notifyTaskDone(name) {
@@ -346,17 +459,61 @@ export default {
       );
     }, DONE_TOAST_MS);
   },
+  /**
+   * 完成后刷新所在目录：合并一批完成事件只列一次目录。原先每个文件完成都 goRemote 一次，
+   * 几百个小文件就是几百次 sftpList 网络往返 + 整表重建，既占主线程又用 remoteLoading
+   * 把用户主动双击的导航挡掉——这才是「传输中双击文件夹卡死」的设计层根因。
+   */
   refreshAfterDone(s, task) {
-    if (!task) return;
+    if (!task || !s) return;
+    let side = null;
+    let dir = null;
     if (task.direction === 'upload') {
-      const dir = parentRemote(task.targetPath);
-      if (dir === s.remotePath) this.goRemote(s, s.remotePath);
+      dir = parentRemote(task.targetPath);
+      if (dir === s.remotePath) side = 'remote';
     } else {
-      const dir = parentLocal(task.targetPath);
-      // The local panel is shared, so a background session must not navigate it out from under
-      // the user; the row itself already shows completion.
-      if (s === this.s && dir === this.localPath) this.goLocal(this.localPath);
+      dir = parentLocal(task.targetPath);
+      // 本机面板由所有会话共享，后台会话绝不能把用户正在看的目录导航走
+      if (s === this.s && dir === this.localPath) side = 'local';
     }
+    if (!side) return;
+    if (!s.refreshDirs) s.refreshDirs = { remote: false, local: false };
+    s.refreshDirs[side] = true;
+    if (s.refreshTimer) return;
+    s.refreshStartedAt = s.refreshStartedAt || Date.now();
+    const tick = () => {
+      s.refreshTimer = null;
+      if (!s.alive || !s.refreshDirs) return;
+      // 传输还在继续就推迟刷新：几百个小文件期间文件列表保持静止，双击浏览零干扰。
+      // 用最长等待兜底，避免个别长任务导致新文件一直不出现。
+      const busy = this.hasActiveTransfer(s);
+      const waited = Date.now() - s.refreshStartedAt;
+      if (busy && waited < REFRESH_MAX_WAIT_MS) {
+        s.refreshTimer = setTimeout(tick, REFRESH_AFTER_DONE_MS);
+        return;
+      }
+      s.refreshStartedAt = 0;
+      const want = s.refreshDirs;
+      s.refreshDirs = { remote: false, local: false };
+      // 用户正在手动导航时跳过这一批后台刷新，避免和双击抢同一个 remoteLoading 闸门
+      if (want.remote && !s.remoteLoading) this.goRemote(s, s.remotePath);
+      if (want.local && !this.localLoading) this.goLocal(this.localPath);
+    };
+    s.refreshTimer = setTimeout(tick, REFRESH_AFTER_DONE_MS);
+  },
+  /** 是否还有未完成的传输；刚完成但还在等待合批移除的行不算。 */
+  hasActiveTransfer(s) {
+    const active = s.tasks.some((t) => {
+      if (!t || s.pendingDone.has(t)) return false;
+      if (t.isFolder) return t.status === 'running' || t.status === 'paused' || t.status === 'queued';
+      return !this.isTaskFinished(t);
+    });
+    if (active) return true;
+    let folderActive = false;
+    s.folderStates.forEach((st) => {
+      if (!st.done && !st.canceled) folderActive = true;
+    });
+    return folderActive;
   },
   async syncTasks(s) {
     if (!s || !s.connId || !api.sftpTasks) return;
@@ -377,7 +534,7 @@ export default {
         this.folderFiles(state.root).forEach((c) => {
           const m = (c.xferId && map[c.xferId]) || keyMap[this.childKey(c)];
           if (!m) return;
-          Object.assign(c, m, { taskId: c.taskId, isDir: c.isDir, isFolder: false, xferId: m.taskId });
+          this.assignRow(c, Object.assign({}, m, { taskId: c.taskId, isDir: c.isDir, isFolder: false, xferId: m.taskId }));
           if (m.taskId) s.rowByXferId.set(m.taskId, c);
         });
         this.scheduleRecalc(s, state.root);
@@ -512,6 +669,7 @@ export default {
   async removeTask(task) {
     const s = this.sessionOf(task);
     if (!s) return;
+    this.flushProgress(s);
     try {
       const unfinished = (row) => row && (row.status === 'running' || row.status === 'paused');
       if (task.isFolder) {
@@ -520,20 +678,24 @@ export default {
         const ids = this.folderFiles(task)
           .filter((c) => c.xferId)
           .map((c) => c.xferId);
+        // 先立屏障再取消：主进程 cancel 会同步发出每条子任务的 canceled 进度事件，
+        // 这些事件若在 forgetFolderTree 清映射之后到达，就会被 mergeTask 当成新任务打平回列表。
+        this.ignoreXfer(s, ids);
+        s.tasks = s.tasks.filter((x) => x.taskId !== task.taskId);
+        this.collapseFolder(task.taskId);
+        this.forgetFolderTree(s, task.taskId);
         if (ids.length) {
           // Cancelling a subtree must not serialize one round trip per file
           if (api.sftpCancelBatch) unwrap(await api.sftpCancelBatch(ids));
           else for (const id of ids) { try { unwrap(await api.sftpCancel(id)); } catch (_) {} }
         }
-        s.tasks = s.tasks.filter((x) => x.taskId !== task.taskId);
-        this.collapseFolder(task.taskId);
-        this.forgetFolderTree(s, task.taskId);
         await this.refreshListsAfterTaskRemove(s, task);
         this.syncTasks(s);
         return;
       }
       const wasUnfinished = unfinished(task);
       // 半截目标文件由主进程在取消时一并删除，渲染端不再重复删一次
+      if (task.xferId) this.ignoreXfer(s, [task.xferId]);
       if (task.xferId) unwrap(await api.sftpCancel(task.xferId));
       if (task.rootId) {
         // 子行不在 s.tasks 里：还没提交给主进程的行只能靠摘出树来阻止扫描循环继续上传
@@ -542,7 +704,11 @@ export default {
         this.syncTasks(s);
         return;
       }
+      if (!task.xferId) this.ignoreXfer(s, [task.taskId]);
       if (!task.xferId) unwrap(await api.sftpCancel(task.taskId));
+      s.standaloneById.delete(task.xferId || task.taskId);
+      s.pendingDone.delete(task);
+      if (s.pendingAdd.length) s.pendingAdd = s.pendingAdd.filter((r) => r !== task);
       s.tasks = s.tasks.filter((x) => x.taskId !== task.taskId);
       if (wasUnfinished) await this.refreshListsAfterTaskRemove(s, task);
       this.syncTasks(s);

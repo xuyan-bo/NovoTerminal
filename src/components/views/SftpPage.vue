@@ -148,7 +148,6 @@
       :tasks="queueTasks"
       :expanded-keys="expandedKeys"
       @expand-change="onExpandChange"
-      @load-children="loadTreeChildren"
       @toggle-pause="togglePause"
       @remove-task="removeTask"
     />
@@ -225,6 +224,17 @@ function createSession(meta, id, seq) {
     rowByXferId: new Map(),
     recalcPending: new Set(),
     recalcTimer: null,
+    progressBuffer: new Map(),
+    progressFlush: null,
+    ignoredXferIds: new Set(),
+    standaloneById: new Map(),
+    pendingDone: new Set(),
+    pruneTimer: null,
+    refreshDirs: null,
+    refreshTimer: null,
+    refreshStartedAt: 0,
+    pendingAdd: [],
+    addTimer: null,
   });
 }
 
@@ -323,7 +333,7 @@ export default {
         if (!p || !p.taskId) return;
         // 进度事件带 connId：后台页签的传输也要继续更新自己的任务行
         const s = this.sessions.find((x) => x.connId === p.connId);
-        if (s) this.mergeTask(s, p);
+        if (s) this.queueProgress(s, p);
       });
     // 连接被服务端或网络断开：主进程只报这一条，页签状态由这里改
     this._offState =
@@ -545,6 +555,20 @@ export default {
       if (s.recalcTimer) clearTimeout(s.recalcTimer);
       s.recalcTimer = null;
       s.recalcPending.clear();
+      if (s.progressFlush) clearTimeout(s.progressFlush);
+      s.progressFlush = null;
+      s.progressBuffer.clear();
+      if (s.pruneTimer) clearTimeout(s.pruneTimer);
+      s.pruneTimer = null;
+      s.pendingDone.clear();
+      s.standaloneById.clear();
+      if (s.refreshTimer) clearTimeout(s.refreshTimer);
+      s.refreshTimer = null;
+      s.refreshDirs = null;
+      s.refreshStartedAt = 0;
+      if (s.addTimer) clearTimeout(s.addTimer);
+      s.addTimer = null;
+      s.pendingAdd.length = 0;
       // 正在扫描的文件夹要收到取消信号，否则暂停中的扫描循环一直等不到恢复
       Array.from(s.folderStates.keys()).forEach((id) => this.forgetFolderTree(s, id));
       s.rowByKey.clear();

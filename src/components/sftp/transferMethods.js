@@ -5,6 +5,9 @@ import { joinLocal, joinRemote, parentRemote, transferErrorText } from './utils'
 // 文件夹任务的 row-key 尾巴：同一毫秒建出两条任务时 Date.now() 会重复，el-table 的 row-key 必须唯一
 let folderSeq = 0;
 
+// 文件夹子任务的并发提交数：与主进程默认传输槽位一致，既不串行也不压垮单个 SFTP channel
+const FOLDER_SUBMIT_CONCURRENCY = 16;
+
 export default {
   /**
    * 覆盖策略来自该资产 SFTP 方式的高级参数：ask 逐个询问（默认），replace 直接覆盖，skip 直接跳过。
@@ -21,6 +24,9 @@ export default {
    */
   async allowFolderTarget(s, root, row, direction) {
     if (!row || !row.targetPath) return true;
+    const policy = this.sftpOverwritePolicy(s);
+    // replace 不关心目标是否已存在，跳过每个文件一次远端 stat——这是串行提交的主要往返开销
+    if (policy === 'replace') return true;
     let exists = false;
     try {
       const st = unwrap(
@@ -37,28 +43,52 @@ export default {
     const state = this.folderState(s, root.taskId);
     if (!state) return true;
     if (state.overwrite === undefined) {
-      const policy = this.sftpOverwritePolicy(s);
-      if (policy !== 'ask') {
-        state.overwrite = policy === 'replace';
-      } else {
-        try {
-          await this.$confirm(
-            t(
-              direction === 'upload' ? 'sftp.overwriteFolderRemote' : 'sftp.overwriteFolderLocal',
-              { name: root.name }
-            ),
-            t('sftp.overwriteTitle'),
-            { type: 'warning', confirmButtonText: t('msg.confirm'), cancelButtonText: t('msg.cancel') }
-          );
-          state.overwrite = true;
-        } catch (_) {
-          state.overwrite = false;
-        }
+      // 并发提交时多个子任务可能同时撞上已存在目标：整棵树只弹一次确认，共用一个决定
+      if (!state.overwritePromise) {
+        state.overwritePromise = (async () => {
+          if (policy !== 'ask') return policy === 'replace';
+          try {
+            await this.$confirm(
+              t(
+                direction === 'upload' ? 'sftp.overwriteFolderRemote' : 'sftp.overwriteFolderLocal',
+                { name: root.name }
+              ),
+              t('sftp.overwriteTitle'),
+              { type: 'warning', confirmButtonText: t('msg.confirm'), cancelButtonText: t('msg.cancel') }
+            );
+            return true;
+          } catch (_) {
+            return false;
+          }
+        })();
       }
+      state.overwrite = await state.overwritePromise;
     }
     if (state.overwrite) return true;
     this.dropChildRow(s, row);
     return false;
+  },
+  /** 有界并发提交：让主进程 16 个传输槽位始终有活干，又不让 stat/IPC 往返串行拖垮提交速度。 */
+  async submitFolderBatch(s, root, jobs) {
+    if (!jobs || !jobs.length) return;
+    const state = this.folderState(s, root.taskId);
+    if (!state) return;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < jobs.length) {
+        if (state.canceled || !s.alive) return;
+        const job = jobs[cursor++];
+        await this.waitForResume(state);
+        if (state.canceled || !s.alive) return;
+        if (!job.row.dropped) {
+          await job.run();
+          this.scheduleRecalc(s, root);
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(FOLDER_SUBMIT_CONCURRENCY, jobs.length) }, worker)
+    );
   },
   /** 同一路径可能已经在某棵文件夹树里传：进度事件会按 source|target 命中那一行，两条任务不能各建一份。 */
   rowByKeyHit(s, sourcePath, targetPath) {
@@ -204,6 +234,7 @@ export default {
       }));
       this.markDirScanned(s, root.taskId, cur.row);
       this.scheduleRecalc(s, root);
+      const files = [];
       for (let i = 0; i < entries.length; i++) {
         if (state.canceled) return;
         const row = rows[i];
@@ -220,27 +251,30 @@ export default {
           queue.push({ row, source: row.sourcePath, target: row.targetPath });
           continue;
         }
-        await this.waitForResume(state);
-        if (state.canceled) return;
-        // 扫描按提交前捕获的 rows 逐条走：行被移除或用户拒绝覆盖时要当场跳过，不能照常上传
-        if (row.dropped) continue;
-        if (!(await this.allowFolderTarget(s, root, row, 'upload'))) continue;
-        try {
-          const r = unwrap(
-            await api.sftpUpload({
-              connId: s.connId,
-              localPath: row.sourcePath,
-              remotePath: row.targetPath,
-            })
-          );
-          if (r && r.taskId) this.bindTransfer(s, row, r.taskId);
-        } catch (e) {
-          row.status = 'error';
-          row.error = e.message || String(e);
-          row.errorCode = e.code || '';
-        }
-        this.scheduleRecalc(s, root);
+        files.push({
+          row,
+          run: async () => {
+            // 行可能在排队期间被移除或用户拒绝覆盖，提交前当场复查，不能照常上传
+            if (!(await this.allowFolderTarget(s, root, row, 'upload'))) return;
+            if (!state || state.canceled || !s.alive || row.dropped) return;
+            try {
+              const r = unwrap(
+                await api.sftpUpload({
+                  connId: s.connId,
+                  localPath: row.sourcePath,
+                  remotePath: row.targetPath,
+                })
+              );
+              if (r && r.taskId) this.bindTransfer(s, row, r.taskId);
+            } catch (e) {
+              row.status = 'error';
+              row.error = e.message || String(e);
+              row.errorCode = e.code || '';
+            }
+          },
+        });
       }
+      await this.submitFolderBatch(s, root, files);
     }
   },
 
@@ -297,6 +331,7 @@ export default {
       }));
       this.markDirScanned(s, root.taskId, cur.row);
       this.scheduleRecalc(s, root);
+      const files = [];
       for (let i = 0; i < entries.length; i++) {
         if (state.canceled) return;
         const row = rows[i];
@@ -313,26 +348,29 @@ export default {
           queue.push({ row, source: row.sourcePath, target: row.targetPath });
           continue;
         }
-        await this.waitForResume(state);
-        if (state.canceled) return;
-        if (row.dropped) continue;
-        if (!(await this.allowFolderTarget(s, root, row, 'download'))) continue;
-        try {
-          const r = unwrap(
-            await api.sftpDownload({
-              connId: s.connId,
-              remotePath: row.sourcePath,
-              localPath: row.targetPath,
-            })
-          );
-          if (r && r.taskId) this.bindTransfer(s, row, r.taskId);
-        } catch (e) {
-          row.status = 'error';
-          row.error = e.message || String(e);
-          row.errorCode = e.code || '';
-        }
-        this.scheduleRecalc(s, root);
+        files.push({
+          row,
+          run: async () => {
+            if (!(await this.allowFolderTarget(s, root, row, 'download'))) return;
+            if (!state || state.canceled || !s.alive || row.dropped) return;
+            try {
+              const r = unwrap(
+                await api.sftpDownload({
+                  connId: s.connId,
+                  remotePath: row.sourcePath,
+                  localPath: row.targetPath,
+                })
+              );
+              if (r && r.taskId) this.bindTransfer(s, row, r.taskId);
+            } catch (e) {
+              row.status = 'error';
+              row.error = e.message || String(e);
+              row.errorCode = e.code || '';
+            }
+          },
+        });
       }
+      await this.submitFolderBatch(s, root, files);
     }
   },
   async startUpload(s, localPath, remotePath) {
