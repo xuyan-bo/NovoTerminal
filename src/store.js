@@ -92,7 +92,7 @@ export function closeTab(id) {
   const tab = store.tabs[i];
   // Close ends the session now, in the same click; waiting for the view to be destroyed would keep
   // a connection that no longer has any tab running.
-  if (tab.kind === 'ssh' && tab.liveSessionId && api.sshDisconnect) {
+  if ((tab.kind === 'ssh' || tab.kind === 'telnet') && tab.liveSessionId && api.sshDisconnect) {
     api.sshDisconnect(tab.liveSessionId).catch(() => {});
     tab.liveSessionId = null;
   }
@@ -181,7 +181,7 @@ export function clearDockTarget(tabId) {
 export function applyDetached(tabId, detached) {
   const tab = findTab(tabId);
   if (!tab || tab.detached === detached) return;
-  if (detached && tab.kind === 'ssh' && tab.liveSessionId) markSessionHandover(tabId);
+  if (detached && (tab.kind === 'ssh' || tab.kind === 'telnet') && tab.liveSessionId) markSessionHandover(tabId);
   tab.detached = detached;
   if (!detached) {
     if (dockTarget && dockTarget.tabId === tabId) {
@@ -346,7 +346,7 @@ export function dropDetachedTab(tabId) {
   if (i < 0) return;
   const [tab] = store.tabs.splice(i, 1);
   // A window closed before it took the connection over leaves that session owned here with no view.
-  if (tab.detached && tab.kind === 'ssh' && tab.liveSessionId && api.sshDisconnect) {
+  if (tab.detached && (tab.kind === 'ssh' || tab.kind === 'telnet') && tab.liveSessionId && api.sshDisconnect) {
     api.sshDisconnect(tab.liveSessionId).catch(() => {});
   }
   if (store.activeTab === tabId) {

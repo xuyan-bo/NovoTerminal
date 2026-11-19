@@ -260,9 +260,9 @@ export default {
     sessionComponent(tab) {
       return getProtocol(tab.kind).component;
     },
-    /** Only SSH re-hosts a live connection across windows; the other views always reconnect. */
+    /** SSH 与 Telnet 字符终端会把活连接跨窗口带走，其余视图总是重新连。 */
     attachSessionIdOf(tab) {
-      return tab.kind === 'ssh' ? tab.liveSessionId || undefined : undefined;
+      return tab.kind === 'ssh' || tab.kind === 'telnet' ? tab.liveSessionId || undefined : undefined;
     },
     /**
      * The view owns its live connection id; record it so a detached window can re-host it. Views

@@ -1,7 +1,7 @@
 <template>
   <div ref="wrapEl" class="ssh-term-wrap">
     <div class="ssh-toolbar">
-      <span class="pill ssh">{{ shortLabel }}</span>
+      <span class="pill" :class="methodId === 'telnet' ? 'telnet' : 'ssh'">{{ shortLabel }}</span>
       <span class="ssh-status" :class="status">{{ statusText }}</span>
       <span class="ssh-meta">{{ title }}</span>
       <el-tooltip :content="$t('ssh.fullscreenTip')" placement="top">
@@ -22,7 +22,7 @@
           <svg-icon name="palette" />
         </button>
       </el-tooltip>
-      <el-tooltip :content="$t('sftp.openTip')" placement="top">
+      <el-tooltip v-if="methodId === 'ssh'" :content="$t('sftp.openTip')" placement="top">
         <button
           type="button"
           class="gear-icon-btn"
@@ -56,6 +56,7 @@
     <div class="ssh-body">
       <div class="ssh-term-main">
         <button
+          v-if="methodId === 'ssh'"
           type="button"
           class="monitor-toggle"
           :class="{ active: monitorOpen }"
@@ -65,7 +66,7 @@
           <svg-icon name="monitor-pulse" :size="15" />
         </button>
         <button
-          v-if="aiEnabled"
+          v-if="aiEnabled && methodId === 'ssh'"
           type="button"
           class="monitor-toggle ai-toggle"
           :class="{ active: aiOpen, busy: aiRunning }"
@@ -156,7 +157,7 @@
       :y="aiPopover.y"
       @close="aiPopover = null"
     />
-    <ssh-theme-dialog ref="themeDialog" :asset-id="assetId" :in-fullscreen="isFullscreen" @saved="onThemeSaved" />
+    <ssh-theme-dialog ref="themeDialog" :asset-id="assetId" :method-id="methodId" :in-fullscreen="isFullscreen" @saved="onThemeSaved" />
   </div>
 </template>
 
@@ -414,14 +415,15 @@ export default {
     this.teardownTerm();
   },
   methods: {
-    /** This asset's saved SSH advanced parameters (empty object when the method row predates them) */
-    sshAdvanced() {
+    /** 本资产当前访问方式的 advanced（SSH / Telnet 共用终端配色与回滚行数） */
+    methodAdvanced() {
       const hit = findAsset(this.assetId);
-      return (hit && hit.asset.methods && hit.asset.methods.ssh && hit.asset.methods.ssh.advanced) || {};
+      const methods = hit && hit.asset.methods;
+      return (methods && methods[this.methodId] && methods[this.methodId].advanced) || {};
     },
-    /** Read this asset's saved SSH color scheme (or defaults if unset) */
+    /** Read this asset's saved terminal color scheme (or defaults if unset) */
     getAssetTheme() {
-      return resolveSshTheme(this.sshAdvanced().colors || null);
+      return resolveSshTheme(this.methodAdvanced().colors || null);
     },
     /** Sync CSS background + xterm theme so both render surfaces match */
     syncSurface(colors) {
@@ -457,7 +459,7 @@ export default {
         // SearchAddon 的全量命中高亮走 registerDecoration，需要开放 proposed API
         allowProposedApi: true,
         // A big buffer makes every resize reflow expensive; the saved default stays modest on purpose
-        scrollback: Number(this.sshAdvanced().scrollback) || ADVANCED_DEFAULTS.ssh.scrollback,
+        scrollback: Number(this.methodAdvanced().scrollback) || (ADVANCED_DEFAULTS[this.methodId] || ADVANCED_DEFAULTS.ssh).scrollback,
         theme: sshThemeToXterm(this.getAssetTheme()),
       });
       const fit = new FitAddon();

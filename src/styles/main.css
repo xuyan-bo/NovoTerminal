@@ -695,6 +695,10 @@ button {
   border-color: rgba(103, 194, 58, 0.45);
   color: #95d474;
 }
+.pill.telnet {
+  border-color: rgba(178, 107, 219, 0.45);
+  color: #c792ea;
+}
 .pill.sftp {
   border-color: rgba(32, 182, 182, 0.45);
   color: #5fd3d3;

@@ -203,8 +203,8 @@ export default {
         rules.clientPath = [{ ...requiredRule(t, 'msg.fieldRequired', ['blur', 'change']), required: true }];
         return rules;
       }
-      // SSH/SFTP 的必填与枚举合法性走 el-form 规则，校验结果落在字段下方而不是弹一条 $message
-      if (this.schemaKey === 'ssh' || this.schemaKey === 'sftp') {
+      // SSH/Telnet/SFTP 的枚举合法性走 el-form 规则，校验结果落在字段下方而不是弹一条 $message
+      if (this.schemaKey === 'ssh' || this.schemaKey === 'telnet' || this.schemaKey === 'sftp') {
         for (const f of this.allFields) {
           const list = [];
           if (f.type === 'select') list.push({ validator: this.selectOptionRule(f), trigger: 'change' });

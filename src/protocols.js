@@ -15,6 +15,17 @@ export const PROTOCOLS = {
     authKinds: ['password', 'key'],
     component: defineAsyncComponent(() => import('./components/views/TerminalView.vue')),
   },
+  // Telnet 与 SSH 同为字符终端，复用 TerminalView 与主进程的 ssh:* 数据通道，按 methodId 分流
+  telnet: {
+    label: 'TELNET',
+    defaultPort: 23,
+    pillClass: 'telnet',
+    icon: 'Connection',
+    nameKey: 'cat.name.telnet',
+    descKey: 'cat.desc.telnet',
+    authKinds: ['password'],
+    component: defineAsyncComponent(() => import('./components/views/TerminalView.vue')),
+  },
   // SFTP 没有内嵌视图：由独立的单实例控制面板窗口承载多会话，故不注册 component
   sftp: {
     label: 'SFTP',
@@ -50,7 +61,7 @@ export const PROTOCOLS = {
 };
 
 /** 「添加访问方式」菜单的顺序 */
-export const METHOD_ORDER = ['ssh', 'sftp', 'rdp', 'vnc'];
+export const METHOD_ORDER = ['ssh', 'telnet', 'sftp', 'rdp', 'vnc'];
 
 export function getProtocol(id) {
   return Object.prototype.hasOwnProperty.call(PROTOCOLS, id) ? PROTOCOLS[id] : null;

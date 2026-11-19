@@ -18,6 +18,7 @@ generated-*.png
 !/scripts/afterPack.cjs
 !/scripts/gen-os-icons.js
 !/scripts/test-ssh-*.cjs
+!/scripts/mock-telnet-server.js
 # local agent memory / project-local tool data, keep out of the repo
 .workbuddy/
 

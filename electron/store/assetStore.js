@@ -94,6 +94,7 @@ const ID_MAX = 64;
  */
 const AUTH_KINDS_BY_METHOD = {
   ssh: ['password', 'key'],
+  telnet: ['password'],
   sftp: ['password', 'key'],
   rdp: ['password'],
   vnc: ['password'],

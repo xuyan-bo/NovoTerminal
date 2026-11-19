@@ -5,7 +5,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const { execFile } = require('child_process');
 /** Bump when shipping renderer changes — source-only marker, not surfaced in the UI */
-const APP_BUILD = 'rd2-1647';
+const APP_BUILD = 'rd2-telnet-1';
 const {
   AssetStore,
   authKindsFor,
@@ -20,6 +20,8 @@ const { migrateSideData } = require('./store/dataMigration');
 const { packBackup, unpackBackup, restoreBackup, MIN_PASSWORD, MAX_PASSWORD } = require('./store/backup');
 const { SessionManager } = require('./session/SessionManager');
 const { SshSessionManager } = require('./ssh/SshSessionManager');
+const { TelnetSessionManager } = require('./telnet/TelnetSessionManager');
+const { TELNET_DEFAULTS } = require('./telnet/connection');
 const { SshMonitorManager } = require('./ssh/SshMonitorManager');
 const { AiManager } = require('./ai/aiManager');
 const { AiSessionStore } = require('./ai/sessionStore');
@@ -62,6 +64,7 @@ const ADVANCED_DEFAULTS = {
     nla: true,
   },
   ssh: SSH_DEFAULTS,
+  telnet: TELNET_DEFAULTS,
 };
 
 function protocolKey(id) {
@@ -113,6 +116,7 @@ let win = null;
 let store = null;
 let sessions = null;
 let sshSessions = null;
+let telnetSessions = null;
 let sshMonitor = null;
 let aiAssistant = null;
 let vncSessions = null;
@@ -318,6 +322,7 @@ const sshTests = new Map();
 function closeSshOwner(ownerId) {
   if (aiAssistant) aiAssistant.stopOwner(ownerId);
   if (sshSessions) sshSessions.closeOwner(ownerId);
+  if (telnetSessions) telnetSessions.closeOwner(ownerId);
   if (sshMonitor) sshMonitor.stopOwner(ownerId);
   if (sftpManager) sftpManager.closeOwner(ownerId);
   if (editManager) editManager.closeOwner(ownerId);
@@ -1421,9 +1426,34 @@ function registerIpc() {
 
   // ---- SSH terminal ----
   handle('ssh:connect', async (sender, req) => {
-    if (!req || req.methodId !== 'ssh') throw Object.assign(new Error('Invalid SSH method'), { code: 'SSH_METHOD' });
+    if (!req || (req.methodId !== 'ssh' && req.methodId !== 'telnet')) {
+      throw Object.assign(new Error('Invalid terminal method'), { code: 'SSH_METHOD' });
+    }
     const hit = store.findAsset(req.assetId);
     if (!hit) throw new Error('asset not found');
+    // Telnet 与 SSH 同为字符终端，共用本通道；按 methodId 分流到各自的会话管理器。
+    if (req.methodId === 'telnet') {
+      const telnetMethod = hit.asset.methods && hit.asset.methods.telnet;
+      if (!telnetMethod) throw new Error('method not found');
+      const telnetPort = telnetMethod.port || 23;
+      const { auth } = await resolveAuthForWindow(sender, hit.asset, 'telnet', telnetPort);
+      const telnetResult = await telnetSessions.connect({
+        requestId: req.requestId,
+        ownerId: sender.id,
+        assetId: hit.asset.id,
+        asset: { host: hit.asset.host },
+        auth,
+        method: { id: 'telnet', port: telnetPort, advanced: telnetMethod.advanced },
+        cols: req.cols, rows: req.rows,
+      });
+      if (sender.isDestroyed()) {
+        telnetSessions.disconnect(telnetResult.sessionId);
+        throw Object.assign(new Error('Telnet connection canceled'), { code: 'TELNET_CANCELED' });
+      }
+      store.pushRecent(hit.asset, { id: 'telnet', port: telnetPort });
+      send('store:changed', { reason: 'recent' });
+      return telnetResult;
+    }
     const method = hit.asset.methods && hit.asset.methods.ssh;
     if (!method) throw new Error('method not found');
     const port = method.port || 22;
@@ -1473,22 +1503,39 @@ function registerIpc() {
   const ownSsh = (sender, sessionId) => {
     if (!sshSessions.owns(sessionId, sender.id)) throw Object.assign(new Error('SSH session is not owned by this window'), { code: 'SSH_OWNER' });
   };
+  /**
+   * 字符终端会话可能由 SSH 或 Telnet 管理器持有（sessionId 均以 'ssh-' 开头）。
+   * 按「谁持有谁服务」路由，避免为 Telnet 复制整套 write/resize/disconnect 通道。
+   */
+  const terminalOf = (sessionId) => {
+    if (telnetSessions && telnetSessions.sessions.has(sessionId)) return telnetSessions;
+    if (sshSessions && sshSessions.sessions.has(sessionId)) return sshSessions;
+    return null;
+  };
+  const ownTerminal = (sender, sessionId) => {
+    const mgr = terminalOf(sessionId);
+    if (!mgr || !mgr.owns(sessionId, sender.id)) {
+      throw Object.assign(new Error('Terminal session is not owned by this window'), { code: 'SSH_OWNER' });
+    }
+    return mgr;
+  };
   handle('ssh:write', (sender, sessionId, data) => {
-    ownSsh(sender, sessionId);
-    return sshSessions.write(sessionId, data);
+    const mgr = ownTerminal(sender, sessionId);
+    return mgr.write(sessionId, data);
   }, true);
   handle('ssh:write-binary', (sender, sessionId, data) => {
-    ownSsh(sender, sessionId);
-    return sshSessions.write(sessionId, data, true);
+    const mgr = ownTerminal(sender, sessionId);
+    return mgr.write(sessionId, data, true);
   }, true);
   handle('ssh:resize', (sender, sessionId, cols, rows) => {
-    ownSsh(sender, sessionId);
-    return sshSessions.resize(sessionId, cols, rows);
+    const mgr = ownTerminal(sender, sessionId);
+    return mgr.resize(sessionId, cols, rows);
   }, true);
   handle('ssh:disconnect', (sender, sid) => {
-    if (!sshSessions.sessions.has(sid)) return { ok: true, existed: false };
-    ownSsh(sender, sid);
-    return sshSessions.disconnect(sid);
+    const mgr = terminalOf(sid);
+    if (!mgr) return { ok: true, existed: false };
+    ownTerminal(sender, sid);
+    return mgr.disconnect(sid);
   }, true);
   handle('monitor:start', (sender, sessionId, intervalSec) => {
     ownSsh(sender, sessionId);
@@ -1642,14 +1689,15 @@ function registerIpc() {
     if (!host || host.isDestroyed() || BrowserWindow.fromWebContents(sender) !== host) {
       throw Object.assign(new Error('SSH session is not hosted by this window'), { code: 'SSH_OWNER' });
     }
-    if (!sshSessions.sessions.has(sid)) {
-      throw Object.assign(new Error('SSH session no longer exists'), { code: 'SSH_GONE' });
+    const mgr = terminalOf(sid);
+    if (!mgr) {
+      throw Object.assign(new Error('Terminal session no longer exists'), { code: 'SSH_GONE' });
     }
-    sshSessions.transferOwner(sid, sender.id);
+    mgr.transferOwner(sid, sender.id);
     const cols = Number(req.cols), rows = Number(req.rows);
-    sshSessions.resize(sid, cols, rows);
-    const tail = sshSessions.tail(sid);
-    logger.info('ssh', 'ssh session re-hosted', { sessionId: sid, tabId, detached: groupOf(tabId) !== null, tailChunks: tail.chunks.length });
+    mgr.resize(sid, cols, rows);
+    const tail = mgr.tail(sid);
+    logger.info('ssh', 'terminal session re-hosted', { sessionId: sid, tabId, detached: groupOf(tabId) !== null, tailChunks: tail.chunks.length });
     return { ok: true, sessionId: sid, ready: tail.ready, tail: tail.chunks };
   }, true);
 
@@ -1709,7 +1757,7 @@ function registerIpc() {
   handle('rdp:disconnect', (sender, sid) => rdpSessions.disconnect(sid, sender.id), true);
 
   // ---- Detached session windows ----
-  const DETACHABLE_KINDS = ['ssh', 'vnc', 'rdp'];
+  const DETACHABLE_KINDS = ['ssh', 'telnet', 'vnc', 'rdp'];
 
   const loadSessionRoute = async (target, hash) => {
     if (isDev && process.env.VITE_DEV_SERVER_URL) {
@@ -1763,12 +1811,13 @@ function registerIpc() {
 
   /** SSH 连接跟着页签走：换宿主只转移该页签那条会话的所有权，其余会话不受影响。 */
   function handoverTab(tab, fromWindow, toWindow) {
-    const sid = tab.kind === 'ssh' ? tab.liveSessionId : null;
+    const sid = (tab.kind === 'ssh' || tab.kind === 'telnet') ? tab.liveSessionId : null;
     // liveSessionId 来自页签描述符（渲染端上报），只有当前宿主真的拥有它才转交，
     // 否则等于让任一窗口凭一个会话 id 把别人的连接搬走。
     const fromId = fromWindow && !fromWindow.isDestroyed() ? fromWindow.webContents.id : null;
-    const owned = sid && fromId !== null && sshSessions && sshSessions.owns(sid, fromId);
-    if (owned) sshSessions.transferOwner(sid, toWindow.webContents.id);
+    const holder = sid ? terminalOf(sid) : null;
+    const owned = sid && fromId !== null && holder && holder.owns(sid, fromId);
+    if (owned) holder.transferOwner(sid, toWindow.webContents.id);
     if (fromWindow && !fromWindow.isDestroyed() && fromWindow !== toWindow) {
       // 交出的那一侧销毁视图时必须不断开连接，VNC/RDP 由新宿主重新握手。
       fromWindow.webContents.send('session:handover', { tabId: tab.id });
@@ -2511,6 +2560,10 @@ app.whenReady().then(() => {
     onEnded: (sessionId) => {
       if (aiAssistant) aiAssistant.stopSession(sessionId, 'session-ended');
     },
+  });
+  telnetSessions = new TelnetSessionManager({
+    log: logger,
+    send: sendToOwner,
   });
   sshMonitor = new SshMonitorManager({ ssh: sshSessions, send: sendToOwner, log: logger });
   aiAssistant = new AiManager({

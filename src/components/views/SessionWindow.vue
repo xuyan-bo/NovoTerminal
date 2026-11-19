@@ -121,9 +121,9 @@ export default {
       const protocol = getProtocol(tab.kind);
       return protocol && protocol.component ? protocol.component : null;
     },
-    // 只有 SSH 会把活连接跨窗口带走，其余视图总是重新连。
+    // SSH 与 Telnet 字符终端会把活连接跨窗口带走，其余视图总是重新连。
     attachSessionIdOf(tab) {
-      return tab.kind === 'ssh' ? tab.liveSessionId || undefined : undefined;
+      return tab.kind === 'ssh' || tab.kind === 'telnet' ? tab.liveSessionId || undefined : undefined;
     },
     onViewSession(tab, sessionId) {
       tab.liveSessionId = sessionId || null;

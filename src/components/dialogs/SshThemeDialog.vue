@@ -76,7 +76,9 @@ export default {
   name: 'SshThemeDialog',
   props: {
     assetId: { type: String, default: '' },
-    /** When the SSH view is fullscreen, keep dialog + color pickers inside the
+    /** SSH / Telnet 共用终端配色，按当前访问方式读写，默认 ssh 兼容既有调用 */
+    methodId: { type: String, default: 'ssh' },
+    /** When the terminal view is fullscreen, keep dialog + color pickers inside the
      * fullscreen element; body-appended popups are otherwise hidden/masked. */
     inFullscreen: { type: Boolean, default: false },
   },
@@ -114,8 +116,9 @@ export default {
       // load saved scheme for this asset
       let saved = null;
       const hit = this.assetId && findAsset(this.assetId);
-      if (hit && hit.asset.methods && hit.asset.methods.ssh) {
-        const adv = hit.asset.methods.ssh.advanced || {};
+      const methods = hit && hit.asset.methods;
+      if (methods && methods[this.methodId]) {
+        const adv = methods[this.methodId].advanced || {};
         if (adv.colors) saved = adv.colors;
       }
       this.form = resolveSshTheme(saved);
@@ -131,14 +134,14 @@ export default {
         const hit = findAsset(this.assetId);
         if (!hit) throw new Error(t('detail.empty'));
         const methods = JSON.parse(JSON.stringify(hit.asset.methods || {}));
-        if (!methods.ssh) {
-          // 资产上没有 SSH 方式（连接后被删掉）：凭空写一行会让用户多出一条没启用过的访问方式
+        if (!methods[this.methodId]) {
+          // 资产上没有这条访问方式（连接后被删掉）：凭空写一行会让用户多出一条没启用过的访问方式
           throw Object.assign(new Error(t('ssh.themeNoMethod')), { code: 'SSH_METHOD_MISSING' });
         }
-        const prev = methods.ssh;
+        const prev = methods[this.methodId];
         // 保留旧记录的额外字段（包括 bold），但只编辑、应用 xterm 支持的颜色。
         const colors = { ...(prev.advanced?.colors || {}), ...resolveSshTheme(this.form) };
-        methods.ssh = {
+        methods[this.methodId] = {
           ...prev,
           advanced: { ...(prev.advanced || {}), colors },
         };
