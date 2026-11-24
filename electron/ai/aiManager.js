@@ -21,6 +21,8 @@ const {
 
 const SCREEN_TIMEOUT_MS = 3000;
 const TITLE_CHARS = 40;
+/** 会话内部接续的私有标记：Symbol 键无法经 IPC 传入，外部请求伪造不出这个放行位。 */
+const INTERNAL_TURN = Symbol('internal-turn');
 /** 思考增量攒够这个长度才开播，避免把网关的收尾噪声显示成一次思考。 */
 const MIN_REASON_CHARS = 12;
 /**
@@ -92,6 +94,8 @@ class AiManager {
       conv = {
         sessionId, messages: [], record: [], running: false, abort: null, approvals: new Map(), seq: 0,
         turnSeq: 0, turnId: '',
+        /** 运行中的插话：按提交顺序挂在会话上，在下一轮模型请求前的安全边界注入。 */
+        steering: [],
         /** 估算系数：真实 usage.prompt_tokens / 上一轮估算，让没有 tokenizer 的估算越跑越准。 */
         tokenRatio: 1,
         /** 按模型记的降载结果（model id -> token 数）：网关嫌输出太大时学到一次就够用一整场会话。 */
@@ -145,13 +149,46 @@ class AiManager {
     this.emit(conv.sessionId, { turnId: conv.turnId || '', ...payload });
   }
 
-  /** 用户点「停止」：中断模型请求，并丢掉还在等待的审批。 */
+  /** 用户点「停止」：中断模型请求，并丢掉还在等待的审批与还没注入的插话。 */
   cancel(sessionId) {
     const conv = this.conversations.get(sessionId);
     if (!conv || !conv.running) return { ok: true, running: false };
     if (conv.abort) conv.abort.abort();
     this._rejectApprovals(conv, 'canceled');
+    this._dropSteering(conv, 'canceled');
     return { ok: true, running: true };
+  }
+
+  /**
+   * 运行中的插话：先登记到会话，由当前回合在工具调用之间把文本并进模型上下文，
+   * 不中止正在执行的命令。面板收起或换宿主时也能靠 history 把这条补回来。
+   */
+  steer(req) {
+    const sessionId = req && req.sessionId;
+    if (typeof sessionId !== 'string' || !/^ssh-[a-zA-Z0-9-]{1,100}$/.test(sessionId)) {
+      throw aiError('AI_REQUEST', 'invalid sessionId');
+    }
+    const text = typeof req.text === 'string' ? req.text.trim().slice(0, 8000) : '';
+    if (!text) throw aiError('AI_REQUEST', 'empty message');
+    const conv = this._meta(sessionId);
+    const item = { id: 'st-' + crypto.randomUUID(), text };
+    // 没在跑时没有「等待注入」这回事，按普通提问直接起一轮，不留悬挂的插话；
+    // 但要把气泡补上，否则用户看不到自己发出的这条，且 record 里也记成引导，回放才一致。
+    if (!conv.running) {
+      this.emitTurn(conv, { type: 'steer', state: 'queued', id: item.id, text });
+      this.emitTurn(conv, { type: 'steer', state: 'injected', id: item.id, text });
+      return this.turn({ ...req, steer: true });
+    }
+    conv.steering.push(item);
+    this.emitTurn(conv, { type: 'steer', state: 'queued', id: item.id, text });
+    this.log && this.log.info('ai', 'ai steer queued', { sessionId, host: conv.meta ? conv.meta.host : '', chars: text.length });
+    return { ok: true, id: item.id };
+  }
+
+  _dropSteering(conv, reason) {
+    if (!conv.steering.length) return;
+    for (const item of conv.steering) this.emitTurn(conv, { type: 'steer', state: 'dropped', id: item.id, reason });
+    conv.steering = [];
   }
 
   /** 新建会话：当前对话早已落盘，这里只补写最后一轮，然后清空内存重新攒。 */
@@ -362,6 +399,7 @@ class AiManager {
       pending: conv
         ? [...conv.approvals.entries()].map(([requestId, p]) => ({ requestId, kind: p.kind, askedAt: p.askedAt, ...p.info }))
         : [],
+      steering: conv ? conv.steering.slice() : [],
       context: window
         ? { window, used, pct: Math.min(100, Math.round((used / window) * 100)), parts: ctx ? ctx.parts : null, reserve: ctx ? ctx.reserve : 0 }
         : null,
@@ -634,7 +672,9 @@ class AiManager {
     if (!text) throw aiError('AI_REQUEST', 'empty message');
 
     const conv = this._meta(sessionId);
-    if (conv.running) throw aiError('AI_BUSY', '上一轮还没结束');
+    // 插话在 finally 里接成的新一轮会预置 running=true 防止面板并发 flush；
+    // 这是同会话的内部接续，必须放行，否则会被自己的忙检查挡掉、插话无声丢失且会话卡死。
+    if (conv.running && !req[INTERNAL_TURN]) throw aiError('AI_BUSY', '上一轮还没结束');
     const ref = this._normalizeRef(req.modelRef);
     if (ref) {
       override.modelRef = ref;
@@ -643,12 +683,13 @@ class AiManager {
     const model = resolveModel((this.store.getSettings() || {}).ai, override.modelRef || settings.defaultRef);
     const screen = settings.readScreen ? String(req.screen || '').split(/\r?\n/).slice(-120).join('\n').slice(0, 8000) : '';
     const lang = this.store.getSettings().lang;
-    const abort = new AbortController();
+    // 插话接成的新一轮会预置 abort 交给这一轮复用，填住 setImmediate 前那一段停止盲区
+    const abort = req.abort || new AbortController();
     conv.running = true;
     conv.abort = abort;
     conv.turnId = 't' + (conv.turnSeq += 1);
     conv.messages.push({ role: 'user', content: text });
-    this._record(conv, { role: 'user', text });
+    this._record(conv, { role: 'user', text, steer: !!req.steer });
     // 面板可能已经给这条对话改过名，先接住再落盘，否则首次写文件会退回自动标题
     const named = typeof req.title === 'string' ? req.title.trim().slice(0, TITLE_CHARS * 3) : '';
     if (named) conv.title = named;
@@ -674,8 +715,12 @@ class AiManager {
     const started = Date.now();
     let emptyRetried = false;
     let finished = false;
-    /** 末轮 finish_reason 是 length 说明正文被单次输出上限砍断，不能当成模型自己说完了。 */
+    /** 末轮 finish_reason 是 length 说明正文被砍断，不能当成模型自己说完了。 */
     let truncated = false;
+    /** length 也可能来自网关自身的额度（本地 Ollama 顶满 num_ctx 最典型），与我们要的 maxTokens 无关。 */
+    let clipped = false;
+    /** 末轮服务端报回的 completion_tokens，0 表示网关没有报用量。 */
+    let roundOut = 0;
     /** 最后一次真正发出去的输出上限，只用于截断日志。 */
     let lastCap = 0;
     let tokenIn = 0;
@@ -685,12 +730,26 @@ class AiManager {
     /** 整轮统计要落盘，历史回放才有耗时与用量可显示；异常收场同样记一条。 */
     const closeTurn = () => {
       const ms = Date.now() - started;
-      this._record(conv, { role: 'turn', ms, promptTokens: tokenIn, completionTokens: tokenOut, truncated });
+      this._record(conv, { role: 'turn', ms, promptTokens: tokenIn, completionTokens: tokenOut, truncated, clipped });
       return ms;
     };
     try {
       for (let round = 0; round < settings.maxTurns; round += 1) {
         if (abort.signal.aborted) break;
+        // 工具调用之间才是安全边界：在模型请求组装之前把插话并进上下文，
+        // 既不打断正在跑的命令，也能让模型在下一步就看到新的约束。
+        if (conv.steering.length) {
+          const arrived = conv.steering.splice(0);
+          // 引导被采纳就是一个处理块的边界：换 turnId 让后续事件归到新块，
+          // 渲染端在 injected 时收掉旧块，引导气泡之后从新块继续。
+          conv.turnId = 't' + (conv.turnSeq += 1);
+          for (const item of arrived) {
+            conv.messages.push({ role: 'user', content: item.text });
+            this._record(conv, { role: 'user', text: item.text, steer: true });
+            this.emitTurn(conv, { type: 'steer', state: 'injected', id: item.id, text: item.text });
+          }
+          this.log && this.log.info('ai', 'ai steer injected', { sessionId, host: target.host, count: arrived.length });
+        }
         const system = this.systemPrompt(ctx);
         // 预算只认工具定义的数组：createTools 返回的是 {definitions, invoke}，整个塞进去会让
         // aiContext 的 defs.length 读成 undefined，工具开销永远算 0，水位偏低、压缩晚触发。
@@ -737,6 +796,7 @@ class AiManager {
         // 猜高的输出上限只会换来一次 400：被拒就降档重问，学到的高度按模型钉在这一场会话上
         let cap = scope.maxTokens;
         let result;
+        roundOut = 0;
         for (;;) {
           try {
             result = await ask(cap);
@@ -752,7 +812,8 @@ class AiManager {
         if (result.usage) {
           const inTok = Number(result.usage.prompt_tokens) || 0;
           tokenIn += inTok;
-          tokenOut += Number(result.usage.completion_tokens) || 0;
+          roundOut = Number(result.usage.completion_tokens) || 0;
+          tokenOut += roundOut;
           // 没有真 tokenizer，就用服务端报回的用量把估算系数拉准；用量太小的响应不参与校准
           if (inTok > 200 && state.used > 0) conv.tokenRatio = Math.min(3, Math.max(0.4, inTok / state.used));
         }
@@ -770,8 +831,11 @@ class AiManager {
           if (result.text) {
             conv.messages.push({ role: 'assistant', content: result.text });
             this._record(conv, { role: 'ai', text: result.text });
-            // length 表示正文被 maxTokens 砍断：这一轮其实没说完，面板必须给出「继续」的入口
-            truncated = result.finishReason === 'length';
+            // length 有两种来路：砍在我们请求的 maxTokens 上（completion 接近 cap），
+            // 或网关自己的额度提前耗尽也报 length——本地 Ollama 输入+输出顶满 num_ctx 最典型，
+            // completion 远低于请求的 cap，回复「继续」只会再次被截断。用量缺失时维持原判定。
+            truncated = result.finishReason === 'length' && (!roundOut || roundOut >= cap * 0.9);
+            clipped = result.finishReason === 'length' && !truncated;
             finished = true;
             break;
           }
@@ -863,12 +927,16 @@ class AiManager {
       if (truncated) {
         this.log && this.log.warn('ai', 'ai answer hit the max output tokens', { sessionId, host: target.host, model: model.model, maxTokens: lastCap || scope.maxTokens });
       }
+      if (clipped) {
+        this.log && this.log.warn('ai', 'ai answer clipped by the gateway itself', { sessionId, host: target.host, model: model.model, completionTokens: roundOut, requestedCap: lastCap || scope.maxTokens });
+      }
       this.emitTurn(conv, {
         type: 'done',
         ms: closeTurn(),
         usage: tokenIn || tokenOut ? { promptTokens: tokenIn, completionTokens: tokenOut } : null,
         recordId: conv.recordId,
         truncated,
+        clipped,
         error: hitLimit ? { code: 'AI_MAX_TURNS', message: 'reached max turns' }
           // 用户点了停止：正常收场也要打标，否则面板看起来像模型自己把话说完
           : (stopped ? { code: 'AI_CANCELED', message: 'stopped by user' } : undefined),
@@ -890,7 +958,22 @@ class AiManager {
       // 收尾这轮又追加了正文与工具回包，圆环要显示的是真正留下来的量
       if (scope) this.emitContext(conv, this._budget(conv, scope));
       this._archive(conv, conv.title);
-      this.emitTurn(conv, { type: 'state', running: false });
+      // 回合在插话注入前就结束了（末轮直接作答、异常等）：接成新一轮，
+      // 否则这条引导会无声消失；state 保持 running，渲染端不会并发 flush 自己的队列。
+      const leftover = conv.steering.splice(0);
+      let carried = false;
+      if (leftover.length && !abort.signal.aborted && this.conversations.get(sessionId) === conv) {
+        carried = true;
+        conv.running = true;
+        for (const item of leftover) this.emitTurn(conv, { type: 'steer', state: 'injected', id: item.id, text: item.text });
+        this.log && this.log.info('ai', 'ai steer carried to next turn', { sessionId, host: target.host, count: leftover.length });
+        const nextAbort = new AbortController();
+        conv.abort = nextAbort;
+        const nextReq = { ...req, text: leftover.map((item) => item.text).join('\n'), steer: true, abort: nextAbort };
+        nextReq[INTERNAL_TURN] = true;
+        setImmediate(() => { this.turn(nextReq).catch(() => {}); });
+      }
+      this.emitTurn(conv, { type: 'state', running: carried });
     }
   }
 
@@ -919,20 +1002,47 @@ class AiManager {
     const started = Date.now();
     emit({ type: 'state', running: true });
     try {
-      const result = await streamChat({
-        baseUrl: model.baseUrl,
-        apiKey: model.apiKey,
-        model: model.model,
-        messages: [{ role: 'system', content: system }, { role: 'user', content: text }],
-        maxTokens: 1024,
-        temperature: 0.2,
-        signal: abort.signal,
-        log: this.log,
-        onText: (piece) => emit({ type: 'delta', text: piece }),
-      });
-      if (!result.text.trim()) throw aiError('AI_EMPTY', 'the model returned no content');
-      emit({ type: 'done', ms: Date.now() - started, chars: result.text.length });
-      this.log && this.log.info('ai', 'ai one-shot completed', { mode, model: model.model, ms: Date.now() - started, chars: result.text.length });
+      let reason = '';
+      let cap = 4096;
+      const caps = { outputCaps: {} };
+      let result;
+      for (;;) {
+        reason = '';
+        try {
+          result = await streamChat({
+            baseUrl: model.baseUrl,
+            apiKey: model.apiKey,
+            model: model.model,
+            messages: [{ role: 'system', content: system }, { role: 'user', content: text }],
+            // 思考型模型（如本地 Ollama 上的 qwen3.5）先把额度花在 reasoning 上，1024 往往只够思考
+            // 就被砍成空回复；这里只是上限，翻译/释义的正常输出远用不满。
+            maxTokens: cap,
+            temperature: 0.2,
+            signal: abort.signal,
+            log: this.log,
+            onText: (piece) => emit({ type: 'delta', text: piece }),
+            onReason: (piece) => { reason += piece; },
+          });
+          break;
+        } catch (error) {
+          // 上限被网关 400 拒绝时降档重问，与 turn() 同一套判定；
+          // 400 在建流阶段就抛出，onText 尚未发出内容，重试不会让面板出现重复正文。
+          const next = this._stepDown(caps, model, error, cap);
+          if (!next) throw error;
+          this.log && this.log.warn('ai', 'ai one-shot output limit rejected, retrying with lower cap', { mode, model: model.model, from: cap, to: next });
+          cap = next;
+        }
+      }
+      let body = result.text;
+      // 思考型模型可能把整个输出额度花在 reasoning 上、content 为空：释义其实留在思考流里，
+      // 退一步把思考文本当作结果，比报「模型未返回内容」有用。
+      if (!body.trim() && reason.trim()) {
+        body = reason;
+        emit({ type: 'delta', text: body });
+      }
+      if (!body.trim()) throw aiError('AI_EMPTY', 'the model returned no content');
+      emit({ type: 'done', ms: Date.now() - started, chars: body.length });
+      this.log && this.log.info('ai', 'ai one-shot completed', { mode, model: model.model, ms: Date.now() - started, chars: body.length, fellBackToReason: body !== result.text });
       return { ok: true };
     } catch (error) {
       const canceled = error.code === 'AI_CANCELED' || abort.signal.aborted;
@@ -961,6 +1071,7 @@ class AiManager {
     if (!conv) return;
     if (conv.abort) conv.abort.abort();
     this._rejectApprovals(conv, reason || 'session-ended');
+    this._dropSteering(conv, reason || 'session-ended');
     // 进行中的回合会在自己的 finally 里带完整内容归档；这里只收尾没在跑的会话，避免同一份记录写两遍
     if (!conv.running) this._archive(conv, conv.title);
     this.conversations.delete(sessionId);

@@ -45,6 +45,11 @@
         </div>
         <div v-for="row in items" :key="row.key" class="ai-item">
           <div v-if="row.kind === 'user'" class="msg-user">{{ row.text }}</div>
+          <div v-else-if="row.kind === 'steer'" class="msg-user">
+            {{ row.text }}
+            <span v-if="row.state === 'queued'" class="steer-wait">{{ $t('ai.steerWait') }}</span>
+            <span v-else-if="row.state === 'dropped'" class="steer-wait">{{ $t('ai.steerDropped') }}</span>
+          </div>
           <div v-else-if="row.kind === 'note'" class="step-note is-center">{{ row.text }}</div>
           <!-- 一次提问不再是一座卡片：思考/命令按正文打断成若干过程段，正文始终留在时间线上 -->
           <div v-else class="turn">
@@ -113,7 +118,7 @@
               <span class="lbl mono">{{ elapsed(row.liveStart) }}</span>
             </div>
             <div v-if="row.truncated" class="turn-truncated">
-              <el-icon><WarningFilled /></el-icon>{{ $t('ai.truncatedTip') }}
+              <el-icon><WarningFilled /></el-icon>{{ $t(row.clipped ? 'ai.clippedTip' : 'ai.truncatedTip') }}
             </div>
             <div v-if="turnFoot(row)" class="turn-usage mono">{{ turnFoot(row) }}</div>
           </div>
@@ -259,6 +264,21 @@
     </div>
 
     <div v-if="available" class="ai-input">
+      <div v-if="queued.length" class="ai-queue">
+        <div v-for="(q, i) in queued" :key="q.id" class="ai-queue-row">
+          <span class="q-no mono">{{ i + 1 }}</span>
+          <span class="q-text">{{ q.text }}</span>
+          <button type="button" class="q-btn" :title="$t('ai.queueSteer')" @click="steerQueued(q)">
+            <el-icon><Promotion /></el-icon>
+          </button>
+          <button type="button" class="q-btn" :title="$t('ai.queueEdit')" @click="editQueued(q)">
+            <el-icon><EditPen /></el-icon>
+          </button>
+          <button type="button" class="q-btn" :title="$t('ai.queueRemove')" @click="removeQueued(q)">
+            <el-icon><Close /></el-icon>
+          </button>
+        </div>
+      </div>
       <div class="ai-box" :class="{ 'is-focus': boxFocused }">
         <div
           class="ai-box-grip"
@@ -272,7 +292,7 @@
           class="ai-box-input"
           rows="4"
           :style="boxInputStyle"
-          :placeholder="$t('ai.placeholder')"
+          :placeholder="$t(running ? 'ai.placeholderBusy' : 'ai.placeholder')"
           @focus="boxFocused = true"
           @blur="boxFocused = false"
           @keydown="onKeydown"
@@ -334,13 +354,21 @@
             />
           </el-tooltip>
           <button
+            v-if="running"
+            type="button"
+            class="stop-btn"
+            :title="$t('ai.stopTip')"
+            @click="cancel()"
+          >
+            <el-icon><VideoPause /></el-icon>
+          </button>
+          <button
             type="button"
             class="send-btn"
-            :class="{ 'is-stop': running }"
-            :title="$t(running ? 'ai.stopTip' : 'ai.sendTip')"
-            @click="running ? cancel() : send()"
+            :title="$t(running ? 'ai.queueSendTip' : 'ai.sendTip')"
+            @click="send()"
           >
-            <el-icon><VideoPause v-if="running" /><Promotion v-else /></el-icon>
+            <el-icon><Promotion /></el-icon>
           </button>
         </div>
       </div>
@@ -382,7 +410,7 @@ const EMPTY_CTX = Object.freeze({ window: 0, used: 0, pct: 0, parts: null, reser
 function newTurn(turnId) {
   return reactive({
     key: nextKey(), kind: 'turn', turnId, nodes: [], blk: {},
-    running: true, ms: null, usage: null, label: '', live: '', liveStart: 0, truncated: false,
+    running: true, ms: null, usage: null, label: '', live: '', liveStart: 0, truncated: false, clipped: false,
   });
 }
 
@@ -436,11 +464,14 @@ function rowsFromRecord(record) {
   for (const e of record || []) {
     if (e.role === 'user') {
       turn = null;
-      rows.push({ key: nextKey(), kind: 'user', text: e.text });
+      rows.push(e.steer
+        ? { key: nextKey(), kind: 'steer', text: e.text, state: 'injected' }
+        : { key: nextKey(), kind: 'user', text: e.text });
     } else if (e.role === 'turn') {
       if (turn) {
         turn.ms = e.ms;
         turn.truncated = !!e.truncated;
+        turn.clipped = !!e.clipped;
         turn.usage = e.promptTokens || e.completionTokens
           ? { promptTokens: e.promptTokens || 0, completionTokens: e.completionTokens || 0 }
           : null;
@@ -492,6 +523,8 @@ export default {
       /** 渲染行：提问气泡、逻辑回合、答复气泡、提示行。 */
       items: [],
       input: '',
+      /** 运行中输入的后续消息：先排在这里，当前回合结束再依次送出。 */
+      queued: [],
       running: false,
       error: null,
       /** 自动跟随底部；用户往上翻阅时暂停，出现「回到底部」胶囊。 */
@@ -668,6 +701,7 @@ export default {
   },
   created() {
     this._offEvent = null;
+    this._queueSeq = 0;
     this._disposed = false;
     this._boxMove = null;
     this._boxUp = null;
@@ -718,6 +752,7 @@ export default {
     /** 会话断开或换成另一条会话：旧对话不属于当前主机，直接清空，连上后再拉历史。 */
     clearConversation() {
       this.items = [];
+      this.queued = [];
       this.error = null;
       this.follow = true;
       this.ctx = { ...EMPTY_CTX };
@@ -748,6 +783,7 @@ export default {
         this.sessionTitle = r.title || '';
         this.recordId = r.recordId || '';
         this.items = rowsFromRecord(r.record);
+        for (const s of r.steering || []) this.putSteerBubble(s, 'queued');
         this.ctx = r.context || { ...EMPTY_CTX };
         // 上一轮还在跑（例如会话换了宿主）：记录里那条是已归档的片段，新事件另起一个进行中的回合
         this.running = !!r.running;
@@ -819,7 +855,7 @@ export default {
         if (n.nk === 'think' && n.running) {
           n.running = false;
           n.ms = Date.now() - n.startedAt;
-          // 思考过程结束后保持展开：默认可读，需要时再手动收起
+          n.open = false;
         }
       }
     },
@@ -834,6 +870,16 @@ export default {
     onEvent(ev) {
       if (ev.type === 'state') {
         this.running = !!ev.running;
+        // done 事件会先把 running 置 false，这里不能比对新旧值；插话接续新一轮时 state 保持 true，不会误发
+        if (!this.running) this.flushQueue();
+        return;
+      }
+      if (ev.type === 'steer') {
+        this.putSteerBubble(ev, ev.state);
+        // 引导被采纳后主进程会换 turnId：先收掉旧的处理块，后续事件自会新建一块，
+        // 这样引导气泡位于两块之间，而不是孤零零浮在整段对话最底下。
+        if (ev.state === 'injected') this.closeRunningTurn();
+        this.stick();
         return;
       }
       if (ev.type === 'context') {
@@ -864,10 +910,11 @@ export default {
         const turn = this.turnOf(ev);
         turn.live = '';
         if (ev.state === 'end') {
-          const open = turn.nodes.filter((n) => n.nk === 'think' && n.running).pop();
-          if (open) {
-            open.running = false;
-            open.ms = ev.ms;
+          const node = turn.nodes.filter((n) => n.nk === 'think' && n.running).pop();
+          if (node) {
+            node.running = false;
+            node.ms = ev.ms;
+            node.open = false;
           }
           this.busy(turn, this.$t('ai.liveRequest'));
           return;
@@ -969,6 +1016,7 @@ export default {
         turn.ms = ev.ms;
         turn.usage = ev.usage || null;
         turn.truncated = !!ev.truncated;
+        turn.clipped = !!ev.clipped;
         turn.label = ev.error ? this.$t(this.turnLabelKey(ev.error.code)) : '';
         if (closeTurn(turn)) this.removeTurn(turn);
         // 第一轮提问起记录就存在，主进程把 id 带回来，面板立刻知道自己是「哪一条历史」
@@ -977,6 +1025,16 @@ export default {
         this.stick();
         return;
       }
+    },
+
+    putSteerBubble(item, state) {
+      if (!item || !item.id) return;
+      const hit = this.items.find((i) => i.kind === 'steer' && i.id === item.id);
+      if (hit) {
+        hit.state = state;
+        return;
+      }
+      this.items.push({ key: nextKey(), kind: 'steer', id: item.id, text: item.text || '', state });
     },
 
     findNode(match) {
@@ -1150,11 +1208,63 @@ export default {
       return raw.split(/\r?\n/).slice(-LINE_LIMIT).join('\n');
     },
 
-    async send() {
+    send(mode) {
       const text = this.input.trim();
-      if (!text || this.running || !this.available) return;
+      if (!text || !this.available) return;
+      // 桥接缺失时先报错并保留输入，不能让用户的文字无声消失
       if (!api.aiSend) { this.error = { code: 'NO_BRIDGE', message: t('msg.needElectron') }; return; }
       this.input = '';
+      if (this.running) {
+        if (mode === 'steer') this.sendSteer(text);
+        else this.queueText(text);
+        return;
+      }
+      this.sendText(text);
+    },
+
+    queueText(text) {
+      this.queued.push({ id: 'q' + (this._queueSeq += 1), text });
+      this.follow = true;
+      this.scrollToEnd();
+    },
+
+    async sendSteer(text) {
+      if (!api.aiSend) { this.error = { code: 'NO_BRIDGE', message: t('msg.needElectron') }; return; }
+      this.error = null;
+      try {
+        unwrap(await api.aiSend({ sessionId: this.sessionId, text, mode: 'steer' }));
+      } catch (e) {
+        this.error = { code: e.code || 'AI_REQUEST', message: e.message };
+      }
+    },
+
+    flushQueue() {
+      if (this.running || !this.queued.length || !this.available) return;
+      this.sendText(this.queued.shift().text);
+    },
+
+    removeQueued(item) {
+      const at = this.queued.findIndex((q) => q.id === item.id);
+      if (at >= 0) this.queued.splice(at, 1);
+    },
+
+    editQueued(item) {
+      const at = this.queued.findIndex((q) => q.id === item.id);
+      if (at < 0) return;
+      this.queued.splice(at, 1);
+      this.input = item.text;
+      this.$nextTick(() => {
+        if (this.$refs.boxEl) this.$refs.boxEl.focus();
+      });
+    },
+
+    steerQueued(item) {
+      this.removeQueued(item);
+      this.sendSteer(item.text);
+    },
+
+    async sendText(text) {
+      if (!api.aiSend) { this.error = { code: 'NO_BRIDGE', message: t('msg.needElectron') }; return; }
       this.items.push({ key: nextKey(), kind: 'user', text });
       const turn = this.startTurn('');
       this.error = null;
@@ -1168,12 +1278,27 @@ export default {
         // 主进程在校验阶段就回绝了（未启用、上一条还没结束等），不该留下空回合
         this.removeTurn(turn);
         this.error = { code: e.code || 'AI_REQUEST', message: e.message };
+        // done 与下一轮 state 之间有个极短窗口 running 被置回 false，此时发的消息主进程仍在忙；
+        // 退回队列，等当前轮结束的 state 事件统一 flush，不能就这么丢了。
+        if (e.code === 'AI_BUSY') this.queued.push({ id: 'q' + (this._queueSeq += 1), text });
+        // 其余校验失败主进程不会发 state，队列要在这里接手，否则后续消息永远卡住
+        else this.flushQueue();
       }
     },
 
     removeTurn(turn) {
       const at = this.items.indexOf(turn);
       if (at >= 0) this.items.splice(at, 1);
+    },
+
+    /** 引导采纳时收掉引导之前那个进行中的块：保留已有步骤，只摘掉进行中状态。 */
+    closeRunningTurn() {
+      const turn = this.items.filter((i) => i.kind === 'turn' && i.running).pop();
+      if (!turn) return;
+      this.endThink(turn);
+      this.closeSay(turn);
+      turn.live = '';
+      turn.running = false;
     },
 
     async cancel() {
@@ -1436,7 +1561,7 @@ export default {
     onKeydown(e) {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
-        this.send();
+        this.send(e.ctrlKey || e.metaKey ? 'steer' : 'queue');
       }
     },
     /** 输入区贴在面板底部，所以拖动手柄放在顶边：向上拖变高，向下拖变矮。 */
@@ -1639,6 +1764,7 @@ export default {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.steer-wait { display: inline-block; margin-left: 6px; font-size: 10px; color: var(--text-3); }
 .msg-ai-cursor {
   display: inline-block;
   width: 6px;
@@ -1812,7 +1938,7 @@ html.theme-light .act.is-live .a-title.mono,
   display: flex; align-items: flex-start; gap: 5px; padding: 2px 4px;
   font-size: 10.5px; line-height: 1.6; color: var(--warning);
 }
-.turn-truncated .el-icon { font-size: 12px; line-height: 1.5; }
+.turn-truncated .el-icon { font-size: 12px; margin-top: 2.5px; }
 .back-tail {
   position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 2;
   padding: 3px 11px; border-radius: 999px; cursor: pointer; font-size: 10.5px;
@@ -1820,7 +1946,9 @@ html.theme-light .act.is-live .a-title.mono,
 }
 .back-tail:hover { background: var(--accent-soft); }
 .ai-pin {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  max-height: 45%;
+  overflow-y: auto;
   padding: 8px 9px 9px;
   background: var(--bg-panel);
   border-top: 1px solid var(--accent);
@@ -1830,6 +1958,43 @@ html.theme-light .act.is-live .a-title.mono,
 .pin-title { flex: 1; min-width: 0; font-weight: 600; }
 .pin-wait { font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
 .ai-input { flex: 0 0 auto; border-top: 1px solid var(--border); background: var(--bg-panel); padding: 7px 9px 9px; }
+/* 排队最多占输入区上方一小截，多条时内部滚动，不能把日志区挤没 */
+.ai-queue { display: flex; flex-direction: column; gap: 3px; margin-bottom: 5px; max-height: 116px; overflow-y: auto; }
+.ai-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 25px;
+  padding: 3px 5px 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+}
+.q-no { flex: none; font-size: 10px; color: var(--text-3); }
+.q-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.q-btn {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+.q-btn:hover { background: var(--bg-hover); color: var(--text); }
 .ai-box {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1886,9 +2051,9 @@ html.theme-light .act.is-live .a-title.mono,
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 26px;
-  padding: 0 8px;
-  font-size: 11.5px;
+  height: 28px;
+  padding: 0 9px;
+  font-size: 13px;
   border: 1px solid transparent;
   border-radius: 6px;
   background: none;
@@ -1897,23 +2062,23 @@ html.theme-light .act.is-live .a-title.mono,
   white-space: nowrap;
 }
 .bar-btn:hover { background: var(--bg-hover); color: var(--text); }
-.bar-caret { font-size: 9px; opacity: 0.7; }
+.bar-caret { font-size: 10px; opacity: 0.7; }
 .bar-btn.perm-auto { color: var(--warning); }
 .bar-btn.perm-full { color: var(--danger); }
-.model-select { width: 178px; flex: 0 1 auto; min-width: 96px; }
+.model-select { width: 196px; flex: 0 1 auto; min-width: 110px; }
 /* Element Plus 2.14 的 el-select 用 __wrapper 的 box-shadow 画框，内部不再有 el-input__inner */
 .model-select :deep(.el-select__wrapper) {
-  min-height: 26px;
-  padding: 2px 8px;
+  min-height: 28px;
+  padding: 2px 9px;
   gap: 4px;
-  font-size: 11.5px;
-  line-height: 20px;
+  font-size: 13px;
+  line-height: 21px;
   background: none;
   box-shadow: none;
   color: var(--text-2);
 }
 .model-select :deep(.el-select__wrapper.is-hovering:not(.is-focused)) { box-shadow: none; }
-.model-select :deep(.el-select__caret) { font-size: 11px; }
+.model-select :deep(.el-select__caret) { font-size: 12px; }
 .ctx-ring { flex: none; }
 .ctx-pop { min-width: 176px; }
 .ctx-line { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; font-size: 11.5px; line-height: 1.9; }
@@ -1934,7 +2099,21 @@ html.theme-light .act.is-live .a-title.mono,
   font-size: 13px;
 }
 .send-btn:hover { filter: brightness(1.08); }
-.send-btn.is-stop { background: none; border-color: var(--danger); color: var(--danger); }
+.stop-btn {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  border: 1px solid var(--danger);
+  background: none;
+  color: var(--danger);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+.stop-btn:hover { background: rgba(245, 108, 108, 0.12); }
 </style>
 
 <style>

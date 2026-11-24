@@ -1579,7 +1579,7 @@ function registerIpc() {
   // ---- AI 助手：一切动作都以「是否拥有这条 SSH 会话」为权限边界 ----
   handle('ai:send', (sender, req) => {
     ownSsh(sender, req && req.sessionId);
-    return aiAssistant.turn(req);
+    return req && req.mode === 'steer' ? aiAssistant.steer(req) : aiAssistant.turn(req);
   }, true);
   handle('ai:approve', (sender, req) => {
     ownSsh(sender, req && req.sessionId);

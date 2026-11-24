@@ -299,6 +299,7 @@ function normalizeMessage(m) {
     if (m.promptTokens) out.promptTokens = numOrNull(m.promptTokens);
     if (m.completionTokens) out.completionTokens = numOrNull(m.completionTokens);
     if (m.truncated) out.truncated = true;
+    if (m.clipped) out.clipped = true;
     return out;
   }
   if (m.role === 'compress') {
