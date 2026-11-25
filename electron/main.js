@@ -1194,7 +1194,6 @@ function registerIpc() {
     if ('theme' in clean && !SETTING_THEMES.includes(clean.theme)) clean.theme = 'system';
     if ('lang' in clean) clean.lang = clean.lang === 'en' ? 'en' : 'zh';
     if ('closeAction' in clean && !SETTING_CLOSE_ACTIONS.includes(clean.closeAction)) clean.closeAction = 'ask';
-    if ('homeWelcome' in clean) clean.homeWelcome = !!clean.homeWelcome;
     if ('autoUpdateCheck' in clean) clean.autoUpdateCheck = !!clean.autoUpdateCheck;
     if ('skippedUpdateVersion' in clean) clean.skippedUpdateVersion = String(clean.skippedUpdateVersion || '').trim().slice(0, 60);
     const s = unwrap(store.updateSettings(clean));

@@ -22,7 +22,6 @@ function mockSettings() {
     zoom: 100,
     font: 'default',
     closeAction: 'ask',
-    homeWelcome: true,
     autoUpdateCheck: true,
     skippedUpdateVersion: '',
     recentLimit: 20,

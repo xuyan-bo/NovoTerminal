@@ -48,7 +48,6 @@ const RESTORE_SETTINGS_KEYS = [
   'zoom',
   'font',
   'closeAction',
-  'homeWelcome',
   'autoUpdateCheck',
   'skippedUpdateVersion',
   'recentLimit',

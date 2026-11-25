@@ -187,7 +187,6 @@ function defaultData() {
       zoom: 100,
       font: 'default',
       closeAction: 'ask', // 'ask' = 每次询问, 'minimize' = 直接最小化, 'quit' = 直接退出
-      homeWelcome: true,
       autoUpdateCheck: true,
       // SFTP「编辑文件」调用的程序；清空即视为无可用编辑器，不再回落到系统默认
       fileEditor: defaultFileEditor(),

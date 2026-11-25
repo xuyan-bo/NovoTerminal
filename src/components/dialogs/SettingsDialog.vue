@@ -36,9 +36,6 @@
           @submit.prevent
         >
         <div v-show="activeMenu === 'general'" class="set-section">
-          <el-form-item :label="$t('settings.homeWelcome')">
-            <el-switch v-model="form.homeWelcome" />
-          </el-form-item>
           <el-form-item :label="$t('settings.autoUpdateCheck')">
             <el-switch v-model="form.autoUpdateCheck" />
           </el-form-item>
@@ -617,7 +614,6 @@ export default {
         zoom: 100,
         font: 'default',
         closeAction: 'ask',
-        homeWelcome: true,
         autoUpdateCheck: true,
         recentLimit: RECENT_LIMIT_DEFAULT,
         logTotalMb: LOG_TOTAL_DEFAULT_MB,
@@ -766,7 +762,6 @@ export default {
         zoom: Math.min(200, Math.max(50, Number(s.zoom) || 100)),
         font: s.font || 'default',
         closeAction: s.closeAction || 'ask',
-        homeWelcome: s.homeWelcome !== false,
         autoUpdateCheck: s.autoUpdateCheck !== false,
         recentLimit: this.clampedRecentLimit(s.recentLimit),
         logTotalMb: this.clampedLogTotalMb(s.logTotalMb),
@@ -1184,7 +1179,6 @@ export default {
               zoom: this.form.zoom,
               font: this.form.font,
               closeAction: this.form.closeAction,
-              homeWelcome: !!this.form.homeWelcome,
               autoUpdateCheck: !!this.form.autoUpdateCheck,
               recentLimit: this.clampedRecentLimit(this.form.recentLimit),
               logTotalMb: this.clampedLogTotalMb(this.form.logTotalMb),

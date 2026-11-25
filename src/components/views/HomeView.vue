@@ -1,10 +1,5 @@
 <template>
   <div class="home-scroll">
-    <div v-show="showWelcome" class="home-top">
-      <h2>{{ $t('home.title') }}</h2>
-      <p>{{ $t('home.sub') }}</p>
-    </div>
-
     <div class="dash-grid">
       <!-- left: assets + backup -->
       <div class="dash-card dash-assets">
@@ -134,10 +129,6 @@ export default {
     },
     recent() {
       return store.snapshot.recent || [];
-    },
-    showWelcome() {
-      const s = store.snapshot.settings || {};
-      return s.homeWelcome !== false;
     },
     recentLimit() {
       const n = Number((store.snapshot.settings || {}).recentLimit);
