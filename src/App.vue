@@ -14,32 +14,14 @@
         @mousedown="startResize"
       ></div>
       <section class="main">
-        <tab-bar :tree-hidden="treeHidden" @toggle-tree="treeHidden = !treeHidden" />
-
-        <div class="views">
-          <div class="view" :class="{ show: activeTab === 'home' }">
-            <home-view />
-          </div>
-          <div
-            v-for="t in sessionTabs"
-            :key="t.id + ':' + (tabRefreshKeys[t.id] || 0)"
-            class="view"
-            :class="[t.kind + '-view', { show: activeTab === t.id }]"
-          >
-            <!-- Keep protocol instances alive when switching tabs. -->
-            <component
-              :is="sessionComponent(t)"
-              v-show="activeTab === t.id"
-              :session-id="t.id"
-              :asset-id="t.assetId"
-              :method-id="t.methodId"
-              :title="(t.host || '') + (t.port ? ':' + t.port : '')"
-              :active="activeTab === t.id"
-              :attach-session-id="attachSessionIdOf(t)"
-              @session="onViewSession(t, $event)"
-            />
-          </div>
-        </div>
+        <!-- 主窗口与独立窗口同一套分屏模型：每个区域自己的页签栏，首页是主栏里的固定页签 -->
+        <pane-layout
+          v-if="mainLayout"
+          :node="mainLayout"
+          root
+          :tree-hidden="treeHidden"
+          @toggle-tree="treeHidden = !treeHidden"
+        />
       </section>
     </div>
 
@@ -65,7 +47,7 @@
 <script>
 import { defineAsyncComponent } from 'vue';
 import SideBar from './components/panels/SideBar.vue';
-import TabBar from './components/panels/TabBar.vue';
+import PaneLayout from './components/session/PaneLayout.vue';
 import SettingsDialog from './components/dialogs/SettingsDialog.vue';
 import CredentialDialog from './components/dialogs/CredentialDialog.vue';
 import BackupDialog from './components/dialogs/BackupDialog.vue';
@@ -80,7 +62,6 @@ import UpdateDialog from './components/dialogs/UpdateDialog.vue';
 import SshAuthDialog from './components/dialogs/SshAuthDialog.vue';
 import { store, api, refresh, applyDetached, dropDetachedTab, applyTabState, openCopyForGroup, checkForUpdates } from './store';
 import { t, applySettings, applyTheme, elementLocale } from './i18n';
-import { getProtocol } from './protocols';
 
 const MIN_SIDEBAR_W = 180;
 const MAX_SIDEBAR_W = 640;
@@ -118,8 +99,7 @@ export default {
   name: 'App',
   components: {
     SideBar,
-    TabBar,
-    HomeView: defineAsyncComponent(() => import('./components/views/HomeView.vue')),
+    PaneLayout,
     SettingsDialog,
     CredentialDialog,
     BackupDialog,
@@ -157,18 +137,8 @@ export default {
       void store.localeTick;
       return elementLocale();
     },
-    activeTab() {
-      return store.activeTab;
-    },
-    tabRefreshKeys() {
-      return store.tabRefreshKeys;
-    },
-    sessionTabs() {
-      return store.tabs.filter((t) => {
-        if (t.detached) return false;
-        const protocol = getProtocol(t.kind);
-        return protocol && protocol.component;
-      });
+    mainLayout() {
+      return store.layout;
     },
   },
   created() {
@@ -257,22 +227,6 @@ export default {
     }
   },
   methods: {
-    sessionComponent(tab) {
-      return getProtocol(tab.kind).component;
-    },
-    /** SSH 与 Telnet 字符终端会把活连接跨窗口带走，其余视图总是重新连。 */
-    attachSessionIdOf(tab) {
-      return tab.kind === 'ssh' || tab.kind === 'telnet' ? tab.liveSessionId || undefined : undefined;
-    },
-    /**
-     * The view owns its live connection id; record it so a detached window can re-host it. Views
-     * never clear it on teardown: a refresh destroys the old instance after the new one connected,
-     * and an id of a session that already ended is rejected by ssh:attach, which falls back to
-     * connecting fresh.
-     */
-    onViewSession(tab, sessionId) {
-      tab.liveSessionId = sessionId || null;
-    },
     /** Drag the divider between the asset tree and the right pane */
     startResize(e) {
       if (e.button !== 0) return;

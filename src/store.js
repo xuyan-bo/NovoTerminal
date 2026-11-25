@@ -43,7 +43,29 @@ export const store = reactive({
   /** 跟随系统主题被 OS 翻转时由 App.vue 递增；只改 DOM 类不会惊动任何渲染依赖 */
   themeTick: 0,
   tabRefreshKeys: {},
+  /** 分屏布局树（主窗口与独立窗口共用同一模型）：split 节点带方向比例，叶子区域持有一组页签 */
+  layout: null,
 });
+
+/**
+ * 页签拖拽的窗口内共享状态：起手（TabBar）、落点（TabBar 或 PaneLayout 的区域）与 dragend
+ * 可能在不同组件实例上发生，必须共用同一份才不会丢。
+ */
+export const tabDrag = reactive({
+  tabId: '',
+  handled: false,
+  detachable: false,
+  prepared: false,
+  title: '',
+  show: false,
+  left: 0,
+  top: 0,
+});
+
+/** 当前渲染进程是不是独立会话窗口（主窗口返回 false）。 */
+export function hostedInGroup() {
+  return !!hostedGroupId;
+}
 
 export async function refresh() {
   // 主进程出错时返回的是 {__error}，不 unwrap 会把错误对象当成快照写进去，资产树静默变空
@@ -76,7 +98,7 @@ export async function ignoreUpdateVersion(version) {
   await refresh();
 }
 
-export function openTab(tab) {
+export function openTab(tab, anchorTabId) {
   const found = store.tabs.find((t) => t.id === tab.id);
   if (found) {
     focusSessionTab(found.id);
@@ -84,6 +106,10 @@ export function openTab(tab) {
   }
   store.tabs.push(tab);
   store.activeTab = tab.id;
+  // 新页签默认进主栏（左上角第一个区域），与「右键资产新建连接落主栏」的约定一致；
+  // 带锚点（页签右键"复制会话"）时改落锚点所在区域、紧跟锚点之后。
+  reconcileLayout();
+  if (anchorTabId) placeTabAfterAnchor(tab.id, anchorTabId);
 }
 
 export function closeTab(id) {
@@ -97,6 +123,8 @@ export function closeTab(id) {
     tab.liveSessionId = null;
   }
   store.tabs.splice(i, 1);
+  // 分屏布局同步摘除：区域空了就地收拢，视图立刻卸载而不是等下一帧快照。
+  removeTabFromLayout(id);
   if (store.activeTab === id) {
     // 独立窗口里 store.tabs 只含本组页签，关掉最后一条后会变空：此时没有可激活的邻位，
     // activeTab 置空即可（主窗口始终留着首页，不会走到这里）。直接索引 [0].id 会抛错。
@@ -128,6 +156,11 @@ export function focusSessionTab(tabId) {
   const tab = findTab(tabId);
   if (!tab) return;
   store.activeTab = tabId;
+  // 分屏窗口里让页签所在区域切到它，否则视图停在别的页签上看不见。
+  if (store.layout) {
+    const g = regionOfTab(store.layout, tabId);
+    if (g) g.active = tabId;
+  }
   if (tab.connState === 'connecting' || tab.connState === 'ready') return;
   refreshSessionTab(tabId);
 }
@@ -159,19 +192,40 @@ function isDetachable(tab) {
 }
 
 /**
- * Insertion slot recorded when a detached tab is dropped on the bar. The merge broadcast that
- * re-hosts the session consumes it once, so a cancelled drag leaves nothing behind.
+ * Insertion slot recorded when a detached tab is dropped on a region bar in the main window. The
+ * merge broadcast that re-hosts the session consumes it once, so a cancelled drag leaves nothing
+ * behind. regionId 让收回的页签落进拖放时瞄准的那个区域，而不是总回主栏。
  */
 let dockTarget = null;
 
-export function setDockTarget(tabId, beforeId) {
-  dockTarget = { tabId, beforeId };
+export function setDockTarget(tabId, beforeId, regionId) {
+  dockTarget = { tabId, beforeId, regionId: regionId || '' };
 }
 
 /** A rejected dock request must not leave a slot behind for some later merge to consume. */
 export function clearDockTarget(tabId) {
   if (dockTarget && dockTarget.tabId === tabId) dockTarget = null;
 }
+
+/**
+ * 独立窗口接收外来页签的落点：快照回推把新页签先放进主栏，这里记下拖放瞄准的区域与位置，
+ * 下一帧快照消费一次把它挪过去；拖放取消（主进程拒绝）时由调用方清除。
+ */
+let pendingRegionDrop = null;
+
+export function setPendingRegionDrop(tabId, regionId, beforeId) {
+  pendingRegionDrop = { tabId, regionId: regionId || '', beforeId: beforeId || null };
+}
+
+export function clearPendingRegionDrop(tabId) {
+  if (pendingRegionDrop && pendingRegionDrop.tabId === tabId) pendingRegionDrop = null;
+}
+
+/**
+ * 独立窗口"复制会话"的锚点：页签 id 由主窗口代分，请求前只记源页签，快照回来若恰好
+ * 新增一枚就把复制页签落进源页签所在区域、紧跟其后（与主窗口的复制行为一致）。
+ */
+let pendingCopyAnchor = null;
 
 /**
  * Apply the authoritative detached state broadcast by the main process. A detached session leaves
@@ -185,12 +239,17 @@ export function applyDetached(tabId, detached) {
   tab.detached = detached;
   if (!detached) {
     if (dockTarget && dockTarget.tabId === tabId) {
-      moveTab(tabId, dockTarget.beforeId);
+      const { beforeId, regionId } = dockTarget;
       dockTarget = null;
+      moveTab(tabId, beforeId);
+      if (regionId && store.layout) layoutMoveTab(tabId, regionId, beforeId);
+      else reconcileLayout();
     }
     store.activeTab = tabId;
     return;
   }
+  // 拆出后立即从布局树摘除：区域空了就地收拢，停放副本不再占任何区域。
+  removeTabFromLayout(tabId);
   if (store.activeTab !== tabId) return;
   const i = store.tabs.indexOf(tab);
   const next =
@@ -207,6 +266,7 @@ let hostedGroupId = '';
 
 export function setHostedGroup(gid) {
   hostedGroupId = String(gid || '');
+  store.layout = null;
   if (!hostedGroupId) return;
   // 组快照到达前，本地那份（含主窗口的首页）必须先清空，否则独立窗口会先闪出一条"首页"页签。
   store.tabs = [];
@@ -252,6 +312,21 @@ export function applyGroupTabs(tabs) {
   const added = list.filter((tab) => !previous.has(tab.id));
   if (added.length === 1 && previous.has(store.activeTab)) store.activeTab = added[0].id;
   else if (!list.some((tab) => tab.id === store.activeTab)) store.activeTab = list.length ? list[0].id : '';
+  // 一次消费：快照到达时若记着拖放落点，把新页签从主栏挪进瞄准的区域与位置；
+  // 记着复制锚点且恰好新增一枚时，把复制页签落进源页签所在区域紧跟其后。
+  const drop = pendingRegionDrop;
+  pendingRegionDrop = null;
+  const anchor = pendingCopyAnchor;
+  reconcileLayout();
+  if (drop && list.some((tab) => tab.id === drop.tabId) && store.layout) {
+    layoutMoveTab(drop.tabId, drop.regionId || layoutMainRegionId(), drop.beforeId);
+  } else if (anchor && added.length === 1 && list.some((tab) => tab.id === anchor)) {
+    placeTabAfterAnchor(added[0].id, anchor);
+    pendingCopyAnchor = null;
+  } else if (anchor && (added.length > 1 || !list.some((tab) => tab.id === anchor))) {
+    // 锚点已消失或一次来了多枚新页签，无法确定复制对象：放弃锚定，避免滞留影响以后的快照。
+    pendingCopyAnchor = null;
+  }
 }
 
 export function reportTabState(tabId) {
@@ -272,9 +347,15 @@ export function reportActiveTab(tabId) {
   api.sessionTabActive({ tabId }).catch(() => {});
 }
 
-/** 独立窗口里的"复制会话"：本窗口只提请求，页签由主窗口代建后再交回来。 */
+/** 独立窗口里的"复制会话"：本窗口只提请求，页签由主窗口代建后再交回来；源页签记为落位锚点。 */
 export async function copySessionToGroup(tabId) {
-  unwrap(await api.sessionTabCopy({ tabId }));
+  pendingCopyAnchor = tabId;
+  try {
+    unwrap(await api.sessionTabCopy({ tabId }));
+  } catch (e) {
+    pendingCopyAnchor = null;
+    throw e;
+  }
 }
 
 /**
@@ -363,6 +444,229 @@ export function applyTabState(payload) {
   if (!tab || !tab.detached) return;
   tab.connState = payload.connState || 'idle';
   if (payload.liveSessionId !== undefined) tab.liveSessionId = payload.liveSessionId || null;
+}
+
+/* ---- 分屏布局 ----
+ * 树在每个宿主窗口的渲染进程里维护（主窗口与独立窗口同一套模型，不做持久化）：
+ * split 节点带方向与比例，叶子区域持有一组页签和它的活动页签。
+ * 独立窗口的页签成员与顺序仍由主进程组快照决定；主窗口以 store.tabs 里未拆出的页签为准。
+ * reconcileLayout 负责双向对齐：消失（关闭/拆出）的摘除收拢，新来的按 store.tabs 顺序
+ * 插进主栏（左上角第一个区域）——没有已落位的邻居时排在主栏末尾，首页恒在主栏首位。 */
+
+let regionSeq = 0;
+
+function newRegion(tabs, active) {
+  regionSeq += 1;
+  return { type: 'group', id: 'r' + regionSeq, tabs: tabs.slice(), active: active || tabs[0] || null };
+}
+
+function layoutLeaves(node, out) {
+  out = out || [];
+  if (!node) return out;
+  if (node.type === 'group') out.push(node);
+  else {
+    layoutLeaves(node.a, out);
+    layoutLeaves(node.b, out);
+  }
+  return out;
+}
+
+function findRegion(node, id) {
+  if (!node) return null;
+  if (node.type === 'group') return node.id === id ? node : null;
+  return findRegion(node.a, id) || findRegion(node.b, id);
+}
+
+function regionOfTab(node, tabId) {
+  if (!node) return null;
+  if (node.type === 'group') return node.tabs.indexOf(tabId) >= 0 ? node : null;
+  return regionOfTab(node.a, tabId) || regionOfTab(node.b, tabId);
+}
+
+function collectRegionTabs(node, out) {
+  out = out || new Set();
+  if (!node) return out;
+  if (node.type === 'group') node.tabs.forEach((id) => out.add(id));
+  else {
+    collectRegionTabs(node.a, out);
+    collectRegionTabs(node.b, out);
+  }
+  return out;
+}
+
+function pruneLayout() {
+  const walk = (node) => {
+    if (!node) return null;
+    if (node.type === 'group') return node.tabs.length ? node : null;
+    node.a = walk(node.a);
+    node.b = walk(node.b);
+    if (!node.a) return node.b;
+    if (!node.b) return node.a;
+    return node;
+  };
+  store.layout = walk(store.layout) || null;
+}
+
+/** 区域间搬动会重建 ssh/telnet 视图：先登记交接，卸载侧不断开主进程连接，重挂载时按 tail 回放画面。 */
+function handoverIfLive(tabId) {
+  const tab = findTab(tabId);
+  if (tab && (tab.kind === 'ssh' || tab.kind === 'telnet') && tab.liveSessionId) markSessionHandover(tabId);
+}
+
+/**
+ * 结构性布局变化（分屏翻转叶子为 split、prune 收拢 subtree、快照对齐）会重建受影响子树里的
+ * 全部视图，不只是被拖的那一枚：把所有活会话的字符终端统一登记交接，否则同区域的其它页签
+ * 卸载时会 disconnectNow 把连接断掉（实测表现为"第一个页签断开"）。重复登记无害——
+ * 交接标志只让卸载侧改走 releaseHost，真正的关闭仍由 closeTab 显式断开。
+ */
+function handoverAllLive() {
+  if (!store.layout) return;
+  for (const g of layoutLeaves(store.layout)) {
+    for (const id of g.tabs) handoverIfLive(id);
+  }
+}
+
+/** 摘除一枚页签后区域的回退活动页签：取被摘位置上的下一枚（否则末枚），而不是总回首页——
+ * 否则把第二条会话拆出去时，左边剩下的第一条会话会被首页顶掉。 */
+function activeAfterRemoval(g, removedId) {
+  const idx = g.tabs.indexOf(removedId);
+  const at = idx >= 0 ? Math.min(idx, g.tabs.length - 1) : g.tabs.length - 1;
+  return g.tabs[at] || null;
+}
+
+export function removeTabFromLayout(tabId) {
+  if (!store.layout) return;
+  handoverAllLive();
+  const g = regionOfTab(store.layout, tabId);
+  if (!g) return;
+  g.tabs.splice(g.tabs.indexOf(tabId), 1);
+  if (g.active === tabId) g.active = activeAfterRemoval(g, tabId);
+  pruneLayout();
+}
+
+export function reconcileLayout() {
+  const ids = store.tabs.filter((tab) => !tab.detached).map((tab) => tab.id);
+  if (!ids.length) {
+    store.layout = null;
+    return;
+  }
+  if (!store.layout) {
+    store.layout = newRegion(ids, ids.includes(store.activeTab) ? store.activeTab : ids[0]);
+    return;
+  }
+  const alive = new Set(ids);
+  handoverAllLive();
+  for (const g of layoutLeaves(store.layout)) {
+    g.tabs = g.tabs.filter((id) => alive.has(id));
+    if (!g.tabs.includes(g.active)) g.active = g.tabs[0] || null;
+  }
+  pruneLayout();
+  const placed = collectRegionTabs(store.layout);
+  for (let i = 0; i < ids.length; i += 1) {
+    const id = ids[i];
+    if (placed.has(id)) continue;
+    const main = layoutLeaves(store.layout)[0];
+    if (!main) {
+      store.layout = newRegion([id], store.activeTab === id ? id : null);
+      placed.add(id);
+      continue;
+    }
+    // 插在主栏里最近的已落位邻居之后；首页（ids[0]）没有邻居时回主栏首位。
+    let at = main.tabs.length;
+    if (i === 0) at = 0;
+    else {
+      for (let j = i - 1; j >= 0; j -= 1) {
+        const k = main.tabs.indexOf(ids[j]);
+        if (k >= 0) {
+          at = k + 1;
+          break;
+        }
+      }
+    }
+    main.tabs.splice(at, 0, id);
+    placed.add(id);
+    if (store.activeTab === id) main.active = id;
+  }
+}
+
+/** 把页签插到锚点所在区域、紧跟锚点之后；锚点不在布局里（如停放副本）时不动。 */
+function placeTabAfterAnchor(tabId, anchorId) {
+  const g = store.layout && regionOfTab(store.layout, anchorId);
+  if (!g) return;
+  layoutMoveTab(tabId, g.id, g.tabs[g.tabs.indexOf(anchorId) + 1] || null);
+}
+
+/** 区域平铺顺序同步给主进程（仅独立窗口）：下一次搬入的 beforeTabId 落位才不跑偏。 */
+export function reportRegionOrder() {
+  if (!hostedGroupId || !api.sessionGroupOrder) return;
+  const ids = [];
+  (function walk(node) {
+    if (!node) return;
+    if (node.type === 'group') ids.push(...node.tabs);
+    else {
+      walk(node.a);
+      walk(node.b);
+    }
+  })(store.layout);
+  api.sessionGroupOrder({ tabIds: ids }).catch(() => {});
+}
+
+/** 左上角第一个区域＝主栏：新会话与从别的窗口拖进来的页签都落这里。 */
+export function layoutMainRegionId() {
+  const first = layoutLeaves(store.layout)[0];
+  return first ? first.id : '';
+}
+
+/** 栏内落位或跨区移入；beforeTabId 为空表示放到末尾。 */
+export function layoutMoveTab(tabId, toRegionId, beforeTabId) {
+  if (!store.layout) return;
+  handoverAllLive();
+  const from = regionOfTab(store.layout, tabId);
+  const target = findRegion(store.layout, toRegionId);
+  if (!target) return;
+  if (from && from.id !== toRegionId) {
+    from.tabs.splice(from.tabs.indexOf(tabId), 1);
+    if (from.active === tabId) from.active = activeAfterRemoval(from, tabId);
+    pruneLayout();
+  }
+  const to = findRegion(store.layout, toRegionId);
+  if (!to) return;
+  const i = to.tabs.indexOf(tabId);
+  if (i >= 0) to.tabs.splice(i, 1);
+  let at = beforeTabId ? to.tabs.indexOf(beforeTabId) : to.tabs.length;
+  if (at < 0) at = to.tabs.length;
+  to.tabs.splice(at, 0, tabId);
+  to.active = tabId;
+  store.activeTab = tabId;
+}
+
+/** 四边落点：目标区域按方向对半分，被拖页签住进新区域。 */
+export function layoutSplitTab(tabId, regionId, zone) {
+  if (!store.layout) return;
+  handoverAllLive();
+  const from = regionOfTab(store.layout, tabId);
+  if (from && from.id === regionId && from.tabs.length === 1) return;
+  if (from) {
+    from.tabs.splice(from.tabs.indexOf(tabId), 1);
+    if (from.active === tabId) from.active = activeAfterRemoval(from, tabId);
+    pruneLayout();
+  }
+  const target = findRegion(store.layout, regionId);
+  if (!target) return;
+  const ng = newRegion([tabId], tabId);
+  const dir = zone === 'left' || zone === 'right' ? 'row' : 'col';
+  const first = zone === 'left' || zone === 'top';
+  const piece = { type: 'split', dir, ratio: 0.5, a: first ? ng : target, b: first ? target : ng };
+  const repl = (node) => {
+    if (node.type === 'group' && node.id === regionId) return piece;
+    if (node.type === 'split') {
+      node.a = repl(node.a);
+      node.b = repl(node.b);
+    }
+    return node;
+  };
+  store.layout = repl(store.layout);
+  store.activeTab = tabId;
 }
 
 export function moveTab(id, beforeId) {
@@ -588,11 +892,12 @@ export async function connectAsset(asset, method) {
   refresh().catch(() => {});
 }
 
-/** Opens another SSH session tab for the asset; the sessions in other tabs are untouched. */
-export function openSshSession(asset, method) {
+/** Opens another SSH session tab for the asset; the sessions in other tabs are untouched.
+ *  anchorTabId：页签右键"复制会话"时传源页签，新页签落进它所在区域紧跟其后；不传则落主栏。 */
+export function openSshSession(asset, method, anchorTabId) {
   const protocol = getProtocol(method.id);
   if (!protocol || !protocol.component) return;
-  openTab(buildSessionTab(asset, method, protocol));
+  openTab(buildSessionTab(asset, method, protocol), anchorTabId);
 }
 
 export function connectionErrorMessage(error) {
@@ -614,3 +919,6 @@ export function connectionErrorMessage(error) {
 }
 
 export { api, unwrap };
+
+// 主窗口启动时先把首页放进主栏，独立窗口随后被 setHostedGroup 清掉重建。
+reconcileLayout();

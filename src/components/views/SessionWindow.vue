@@ -1,31 +1,11 @@
 <template>
   <section class="main group-root">
-    <tab-bar scope="group" />
-    <div class="views">
-      <div
-        v-for="t in tabs"
-        :key="t.id + ':' + (refreshKeys[t.id] || 0)"
-        class="view"
-        :class="[t.kind + '-view', { show: activeTab === t.id }]"
-      >
-        <component
-          :is="sessionComponent(t)"
-          v-show="activeTab === t.id"
-          :session-id="t.id"
-          :asset-id="t.assetId"
-          :method-id="t.methodId"
-          :title="(t.host || '') + (t.port ? ':' + t.port : '')"
-          :active="activeTab === t.id"
-          :attach-session-id="attachSessionIdOf(t)"
-          @session="onViewSession(t, $event)"
-        />
-      </div>
-    </div>
+    <pane-layout v-if="layout" :node="layout" root />
   </section>
 </template>
 
 <script>
-import TabBar from '../panels/TabBar.vue';
+import PaneLayout from '../session/PaneLayout.vue';
 import {
   store,
   api,
@@ -38,27 +18,24 @@ import {
   focusSessionTab,
 } from '../../store';
 import { t } from '../../i18n';
-import { getProtocol } from '../../protocols';
 
 /**
- * 独立窗口也是页签宿主：它用同一个 store、同一个页签栏组件管自己那几条页签，
- * 成员与顺序由主进程下发的组快照决定，所以外观与交互和主窗口天然一致。
+ * 独立窗口也是页签宿主：页签一律住在分屏区域里（左上角第一个区域是主栏，
+ * 新会话默认落到它那里）。区域成员是窗口内部的布局树，页签成员与顺序仍由主进程
+ * 组快照决定，外观与交互和主窗口页签一致。
  */
 export default {
   name: 'SessionWindow',
-  components: { TabBar },
+  components: { PaneLayout },
   props: {
     groupId: { type: String, default: '' },
   },
   computed: {
-    tabs() {
-      return store.tabs;
+    layout() {
+      return store.layout;
     },
     activeTab() {
       return store.activeTab;
-    },
-    refreshKeys() {
-      return store.tabRefreshKeys;
     },
     // 协议视图直接写 tab.connState，这里只观察结果，不改它们的写法。
     states() {
@@ -67,6 +44,7 @@ export default {
   },
   watch: {
     activeTab(id) {
+      // 活动页签决定独立窗口的标题，和浏览器一样跟着切。
       reportActiveTab(id);
     },
     states() {
@@ -93,7 +71,7 @@ export default {
     if (api.onSessionConfirmClose) {
       this._offConfirm = api.onSessionConfirmClose((payload) => this.confirmClose(payload));
     }
-    // 主窗口的连接入口点到本窗口宿主的那条页签：激活它，断开过就重建视图重连。
+    // 主窗口的连接入口点到本窗口宿主的那条页签：聚焦它所在区域，断开过就重建视图重连。
     if (api.onSessionTabFocus) {
       this._offTabFocus = api.onSessionTabFocus((payload) => {
         if (payload && payload.tabId) focusSessionTab(payload.tabId);
@@ -116,17 +94,6 @@ export default {
       } catch (e) {
         this.logFailure('group tabs failed', e);
       }
-    },
-    sessionComponent(tab) {
-      const protocol = getProtocol(tab.kind);
-      return protocol && protocol.component ? protocol.component : null;
-    },
-    // SSH 与 Telnet 字符终端会把活连接跨窗口带走，其余视图总是重新连。
-    attachSessionIdOf(tab) {
-      return tab.kind === 'ssh' || tab.kind === 'telnet' ? tab.liveSessionId || undefined : undefined;
-    },
-    onViewSession(tab, sessionId) {
-      tab.liveSessionId = sessionId || null;
     },
     /**
      * 关窗＝关掉这个窗口里的全部页签，问法和主窗口的批量关闭一模一样：

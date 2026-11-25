@@ -1,6 +1,6 @@
 <template>
   <div ref="wrapEl" class="ssh-term-wrap">
-    <div class="ssh-toolbar">
+    <div v-show="solePanel" class="ssh-toolbar">
       <span class="pill" :class="methodId === 'telnet' ? 'telnet' : 'ssh'">{{ shortLabel }}</span>
       <span class="ssh-status" :class="status">{{ statusText }}</span>
       <span class="ssh-meta">{{ title }}</span>
@@ -56,7 +56,7 @@
     <div class="ssh-body">
       <div class="ssh-term-main">
         <button
-          v-if="methodId === 'ssh'"
+          v-if="solePanel && methodId === 'ssh'"
           type="button"
           class="monitor-toggle"
           :class="{ active: monitorOpen }"
@@ -66,7 +66,7 @@
           <svg-icon name="monitor-pulse" :size="15" />
         </button>
         <button
-          v-if="aiEnabled && methodId === 'ssh'"
+          v-if="solePanel && aiEnabled && methodId === 'ssh'"
           type="button"
           class="monitor-toggle ai-toggle"
           :class="{ active: aiOpen, busy: aiRunning }"
@@ -101,7 +101,7 @@
           <button type="button" class="find-btn" :title="$t('term.findCloseTip')" @click="closeFind"><el-icon aria-hidden="true"><Close /></el-icon></button>
         </div>
       </div>
-      <div class="ssh-monitor-host" :class="{ open: sideOpen, dragging: monitorDragging || sideDragging }" :style="monitorHostStyle">
+      <div v-show="solePanel" class="ssh-monitor-host" :class="{ open: sideOpen, dragging: monitorDragging || sideDragging }" :style="monitorHostStyle">
         <div
           v-show="sideOpen"
           ref="monitorSplitter"
@@ -243,6 +243,11 @@ export default {
     };
   },
   computed: {
+    /** 页签独占整个面板（布局是单一区域、未分屏）才展示按钮栏/状态与监控、AI；分屏阵列里隐藏为纯终端。 */
+    solePanel() {
+      const layout = store.layout;
+      return !layout || layout.type === 'group';
+    },
     /** 设置里关掉助手就收起半圆按钮；未定义按开启处理，避免旧配置没有 ai 段时按钮消失。 */
     aiEnabled() {
       const ai = (store.snapshot.settings || {}).ai;
